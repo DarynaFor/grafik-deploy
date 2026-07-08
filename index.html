@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Табель — вход</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- вход -->
+<div class="login-stage" id="loginStage">
+  <div class="login-card">
+    <div class="logo"><span class="mark">M</span> Табель <small>спринт 1</small></div>
+    <h1>Вход в программу</h1>
+    <p class="sub" id="loginSub">Учёт сотрудников: карточки, ставки, журнал изменений.</p>
+    <div id="loginBody"><!-- демо-кнопки или email+пароль --></div>
+    <p class="small muted" id="loginFoot" style="margin-top:16px"></p>
+  </div>
+</div>
+
+<!-- приложение -->
+<div class="app" id="app">
+  <div class="topbar">
+    <div class="logo"><span class="mark">M</span> Табель <small id="modeTag">спринт 1</small></div>
+    <div class="top-spacer"></div>
+    <div class="whoami"><span id="whoName"></span><span class="rolepill" id="whoRole"></span></div>
+    <button class="iconbtn" id="logoutBtn" title="Выйти" aria-label="Выйти"></button>
+  </div>
+  <nav class="side" id="sideNav"></nav>
+  <main class="main">
+    <section class="screen" id="s-employees">
+      <div class="page-head">
+        <div><h1>Сотрудники</h1><p id="empSubtitle">Карточки со строками начисления</p></div>
+        <div class="right">
+          <div class="search"><span data-ic="search"></span><input id="empSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+          <button class="btn btn-primary btn-sm" id="addEmpBtn"><span data-ic="plus"></span>Карточка</button>
+        </div>
+      </div>
+      <div id="roNote"></div>
+      <div id="empList"></div>
+    </section>
+
+    <section class="screen" id="s-card">
+      <button class="back" id="backBtn"><span data-ic="chevL"></span>Все сотрудники</button>
+      <div id="cardBody"></div>
+    </section>
+
+    <section class="screen" id="s-specialties">
+      <div class="page-head">
+        <div><h1>Специальности</h1><p>Справочник с категориями для группировки</p></div>
+        <div class="right"><button class="btn btn-primary btn-sm" id="addSpecBtn"><span data-ic="plus"></span>Добавить</button></div>
+      </div>
+      <div class="card cardpad" id="specList" style="max-width:560px"></div>
+    </section>
+
+    <section class="screen" id="s-journal">
+      <div class="page-head">
+        <div><h1>Журнал</h1><p>Кто, когда и что изменил. Записи не удаляются и не правятся.</p></div>
+      </div>
+      <div class="card" id="journalList"></div>
+    </section>
+
+    <section class="screen" id="s-soon">
+      <div class="card cardpad" style="max-width:560px;text-align:center;padding:48px 28px">
+        <div id="soonIc" style="display:grid;place-items:center;margin-bottom:14px;color:var(--green)"></div>
+        <h1 id="soonTitle" style="font-size:22px">Ваш раздел скоро появится</h1>
+        <p class="muted" id="soonText" style="color:var(--ink-2);margin-top:10px;font-size:14px"></p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="mobile-nav" id="mobileNav"></div>
+<div class="modal-ov" id="modalOv"><div class="modal" id="modalBox"></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="config.js"></script>
+<script type="module" src="app.js?v=2"></script>
+</body>
+</html>
