@@ -58,6 +58,16 @@
       <div class="card cardpad" id="specList" style="max-width:560px"></div>
     </section>
 
+    <section class="screen" id="s-schedule">
+      <div class="page-head">
+        <div><h1>График</h1><p>Смена = тип + время начала. Клик по клетке — задать или сменить.</p></div>
+        <div class="right">
+          <div class="month-nav"><button class="mn-btn" id="mPrev" aria-label="Пред. месяц">‹</button><span id="mLabel"></span><button class="mn-btn" id="mNext" aria-label="След. месяц">›</button></div>
+        </div>
+      </div>
+      <div class="gridwrap"><div id="scheduleGrid"></div></div>
+    </section>
+
     <section class="screen" id="s-rates">
       <div class="page-head">
         <div><h1>Ставки</h1><p>Массовый ввод: тип оплаты и сумма для каждого. Заводит владелец.</p></div>
@@ -91,6 +101,6 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=3"></script>
+<script type="module" src="app.js?v=4"></script>
 </body>
 </html>

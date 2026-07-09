@@ -23,6 +23,7 @@ const ICONS = {
   chevR: I('<path d="m9 18 6-6-6-6"/>', 16),
   minus: I('<path d="M5 12h14"/>', 15),
   coin: I('<circle cx="12" cy="12" r="9"/><path d="M9.5 16.5V7.5h3a2.6 2.6 0 0 1 0 5.2H9.5M8.5 14h4.5"/>', 20),
+  cal: I('<rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>', 20),
 };
 function applyIcons(root) { (root || document).querySelectorAll('[data-ic]').forEach(e => { e.innerHTML = ICONS[e.dataset.ic] || ''; }); }
 
@@ -79,6 +80,7 @@ function renderLogin() {
 /* ── каркас после входа ── */
 const NAV = [
   { s: 'employees', i: 'users', l: 'Сотрудники', staffOnly: true },
+  { s: 'schedule', i: 'cal', l: 'График', staffOnly: true },
   { s: 'rates', i: 'coin', l: 'Ставки', ownerOnly: true },
   { s: 'specialties', i: 'tag', l: 'Специальности', staffOnly: true },
   { s: 'journal', i: 'journal', l: 'Журнал', ownerOnly: true },
@@ -128,6 +130,7 @@ async function refresh() {
   [specialties, employees] = await Promise.all([store.listSpecialties(), store.listEmployees()]);
   renderEmployees($('empSearch').value || '');
   renderSpecs();
+  renderSchedule();
   if (isOwner()) { renderRates($('rateSearch')?.value || ''); renderJournal(); }
 }
 
@@ -308,6 +311,63 @@ function specForm() {
   };
 }
 
+/* ── график: сетка месяц × сотрудники (operator + owner) ── */
+const MONTHS_RU = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+let curPeriod = null, scheduleRows = [], shiftKinds = [];
+const nowPeriod = () => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0'); };
+const periodLabel = p => { const [y, m] = p.split('-').map(Number); return MONTHS_RU[m] + ' ' + y; };
+const daysInMonth = p => { const [y, m] = p.split('-').map(Number); return new Date(y, m, 0).getDate(); };
+const cellDate = day => curPeriod + '-' + String(day).padStart(2, '0');
+const cellOf = (empId, day) => scheduleRows.find(s => s.employee_id === empId && s.work_date === cellDate(day));
+function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = y + '-' + String(m).padStart(2, '0'); renderSchedule(); }
+function cellText(c) {
+  if (!c || !c.plan_kind) return '';
+  const k = shiftKinds.find(x => x.code === c.plan_kind), short = k ? (k.short || k.label) : c.plan_kind;
+  if (c.plan_kind === 'off' || c.plan_kind === 'absent') return short;
+  return c.plan_start ? String(c.plan_start).slice(0, 5) : short;
+}
+async function renderSchedule() {
+  if (!isStaff() || !$('scheduleGrid')) return;
+  if (!curPeriod) curPeriod = nowPeriod();
+  [scheduleRows, shiftKinds] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds()]);
+  if ($('mLabel')) $('mLabel').textContent = periodLabel(curPeriod);
+  const nd = daysInMonth(curPeriod);
+  const active = employees.filter(e => e.status !== 'archived');
+  const todayD = (nowPeriod() === curPeriod) ? new Date().getDate() : 0;
+  let head = '<div class="gr-corner">Сотрудник</div>';
+  for (let d = 1; d <= nd; d++) head += `<div class="gr-day${d === todayD ? ' today' : ''}">${d}</div>`;
+  let rows = '';
+  for (const e of active) {
+    rows += `<div class="gr-name" title="${esc(e.fio)}">${esc(e.fio)}</div>`;
+    for (let d = 1; d <= nd; d++) {
+      const c = cellOf(e.id, d);
+      rows += `<div class="gr-cell${c && c.plan_kind ? ' filled k-' + esc(c.plan_kind) : ''}${d === todayD ? ' today' : ''}" data-emp="${e.id}" data-day="${d}">${esc(cellText(c))}</div>`;
+    }
+  }
+  const grid = $('scheduleGrid');
+  grid.style.gridTemplateColumns = `150px repeat(${nd}, minmax(44px, 1fr))`;
+  grid.innerHTML = active.length ? head + rows : '<div class="empty" style="padding:40px">Нет сотрудников</div>';
+  grid.querySelectorAll('.gr-cell').forEach(cell => cell.onclick = () => scheduleCellPopup(+cell.dataset.emp, +cell.dataset.day));
+}
+function scheduleCellPopup(empId, day) {
+  const e = employees.find(x => x.id === empId); if (!e) return;
+  const date = cellDate(day), c = cellOf(empId, day);
+  const opts = shiftKinds.map(k => `<option value="${k.code}" ${c && c.plan_kind === k.code ? 'selected' : ''}>${esc(k.label)}</option>`).join('');
+  showModal(`<h3>${esc(e.fio.split(' ').slice(0, 2).join(' '))}</h3><div class="msub">${day} ${esc(periodLabel(curPeriod))} · смена = тип + время начала</div>
+    <label class="flbl">Тип смены</label><select class="input" id="scKind"><option value="">— пусто —</option>${opts}</select>
+    <label class="flbl">Время начала</label><input class="input" id="scStart" type="time" value="${c && c.plan_start ? esc(String(c.plan_start).slice(0, 5)) : ''}">
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="scClear">Очистить</button><button class="btn btn-primary btn-sm" id="scSave">${ICONS.check}Сохранить</button></div>`);
+  $('scSave').onclick = async () => {
+    const btn = $('scSave'); if (btn.disabled) return; btn.disabled = true;
+    try { await store.setScheduleCell(empId, date, { plan_kind: $('scKind').value || null, plan_start: $('scStart').value || null, fact: null }); closeModal(); await renderSchedule(); toast(ICONS.check + 'Сохранено'); }
+    catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
+  $('scClear').onclick = async () => {
+    try { await store.setScheduleCell(empId, date, { plan_kind: null, plan_start: null, fact: null }); closeModal(); await renderSchedule(); toast('Очищено'); }
+    catch (err) { toast(err.message || err, true); }
+  };
+}
+
 /* ── ставки: массовый ввод (владелец) ── */
 const RT_KINDS = [['оклад', 'Оклад'], ['сутки', 'Сутки'], ['почасово', 'Почасово'], ['12ч', '12ч'], ['процент', 'Процент']];
 const primaryLine = e => activeLines(e).find(l => l.line_type === 'основной');
@@ -422,6 +482,7 @@ $('modalOv').onclick = e => { if (e.target.id === 'modalOv' && !$('modalBox').da
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('modalBox').dataset.guard) closeModal(); });
 $('empSearch').oninput = e => renderEmployees(e.target.value);
 { const rs = $('rateSearch'); if (rs) rs.oninput = e => renderRates(e.target.value); }
+{ const mp = $('mPrev'), mn = $('mNext'); if (mp) mp.onclick = () => shiftMonth(-1); if (mn) mn.onclick = () => shiftMonth(1); }
 $('addEmpBtn').onclick = () => employeeForm(null);
 $('addSpecBtn').onclick = specForm;
 $('backBtn').onclick = () => go('employees');

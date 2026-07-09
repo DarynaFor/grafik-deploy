@@ -10,6 +10,18 @@ const DEMO_USERS = [
   { id: 'u-alena',  name: 'Алёна',  role: 'operator' },
 ];
 
+// Виды смен — соответствуют таблице shift_kind в прод-БД. Клетка графика = время начала + код.
+export const SHIFT_KINDS = [
+  { code: 'day',     label: 'День',      short: 'Д',  hours: 8 },
+  { code: 'day12',   label: '12ч день',  short: '12д', hours: 12 },
+  { code: 'night12', label: '12ч ночь',  short: '12н', hours: 12 },
+  { code: 'day24',   label: 'Сутки',     short: 'С',  hours: 24 },
+  { code: 'off',     label: 'Выходной',  short: 'В',  hours: 0 },
+  { code: 'absent',  label: 'Не вышел',  short: '—',  hours: 0 },
+  { code: 'custom',  label: 'Своё время', short: '·', hours: null },
+];
+export const shiftKind = code => SHIFT_KINDS.find(k => k.code === code) || null;
+
 const DEMO_SEED = {
   specialties: [
     { id: 1, name: 'Врач-терапевт', category: 'Врачи' },
@@ -19,7 +31,8 @@ const DEMO_SEED = {
   ],
   employees: [],   // реальные карточки вводит владелица — демо стартует пустым
   journal: [],
-  nextId: { specialty: 5, employee: 1, journal: 1, line: 1 },
+  schedule: [],
+  nextId: { specialty: 5, employee: 1, journal: 1, line: 1, schedule: 1 },
 };
 
 /* ── ДЕМО ─────────────────────────────────────────────────────────── */
@@ -122,6 +135,23 @@ export class MockStore {
     e.lines.push(nl);
     this._log('updated', 'rate_line', nl.id, 'ставка добавлена', null, lineLabel(nl));
     this._save(); return nl;
+  }
+  async listShiftKinds() { return SHIFT_KINDS; }
+  async listSchedule(period) {
+    const pre = period + '-';   // period = 'YYYY-MM'
+    return this.db.schedule.filter(s => String(s.work_date).startsWith(pre)).map(s => ({ ...s }));
+  }
+  async setScheduleCell(employeeId, work_date, cell) {
+    const empty = (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null && (cell.fact ?? null) === null;
+    const idx = this.db.schedule.findIndex(s => s.employee_id === employeeId && s.work_date === work_date);
+    if (empty) { if (idx >= 0) this.db.schedule.splice(idx, 1); this._save(); return null; }   // очистка = удаление строки
+    let row = idx >= 0 ? this.db.schedule[idx] : null;
+    if (!row) { row = { id: this.db.nextId.schedule++, employee_id: employeeId, work_date, plan_start: null, plan_kind: null, fact: null, source: 'manual' }; this.db.schedule.push(row); }
+    if ('plan_start' in cell) row.plan_start = cell.plan_start ?? null;
+    if ('plan_kind' in cell) row.plan_kind = cell.plan_kind ?? null;
+    if ('fact' in cell) row.fact = cell.fact ?? null;
+    row.updated_at = new Date().toISOString();
+    this._save(); return { ...row };
   }
   async listJournal(limit = 100) { return this.db.journal.slice(0, limit); }
 }
@@ -255,6 +285,27 @@ export class SupabaseStore {
     const { data, error } = await this.sb.from('rate_line').insert({ employee_id: id, line_type: 'основной',
       pay_kind: line.pay_kind, amount: line.amount ?? null, amount_night: line.amount_night ?? null,
       percent: line.percent ?? null, valid_from: today, created_by: this.user.id }).select().single();
+    if (error) throw error; return data;
+  }
+  async listShiftKinds() { return SHIFT_KINDS; }
+  async listSchedule(period) {
+    const start = period + '-01';
+    const [y, m] = period.split('-').map(Number);
+    const next = (m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01');
+    const { data, error } = await this.sb.from('schedule').select('*').gte('work_date', start).lt('work_date', next);
+    if (error) throw error; return data;
+  }
+  async setScheduleCell(employeeId, work_date, cell) {
+    const empty = (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null && (cell.fact ?? null) === null;
+    if (empty) {   // очистка = удаление строки, чтобы таблица не копила пустышки
+      const { error } = await this.sb.from('schedule').delete().eq('employee_id', employeeId).eq('work_date', work_date);
+      if (error) throw error; return null;
+    }
+    const row = { employee_id: employeeId, work_date, source: 'manual', updated_by: this.user.id };
+    if ('plan_start' in cell) row.plan_start = cell.plan_start ?? null;
+    if ('plan_kind' in cell) row.plan_kind = cell.plan_kind ?? null;
+    if ('fact' in cell) row.fact = cell.fact ?? null;
+    const { data, error } = await this.sb.from('schedule').upsert(row, { onConflict: 'employee_id,work_date' }).select().single();
     if (error) throw error; return data;
   }
   async listJournal(limit = 100) {

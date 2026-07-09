@@ -148,6 +148,27 @@ body.authed .login-stage{display:none}
 .emp-row.incomplete{border-color:rgba(242,193,78,.26)}
 @media(max-width:560px){ .fill-stat{flex-direction:column;align-items:stretch;gap:9px} .fill-stat .rt-toggle{margin-left:0} .gap-chips{gap:5px} .gap-dot{display:block;margin:3px 0 0} }
 
+/* график: сетка */
+.month-nav{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14.5px}
+.mn-btn{width:34px;height:34px;border-radius:11px;background:rgba(255,255,255,.06);border:1px solid var(--glass-bd);color:var(--ink);font-size:18px;display:grid;place-items:center;transition:.12s}
+.mn-btn:hover{background:rgba(255,255,255,.1)}
+#mLabel{min-width:128px;text-align:center}
+.gridwrap{overflow-x:auto;border-radius:18px;border:1px solid var(--glass-bd);background:rgba(255,255,255,.025);box-shadow:var(--sh-sm)}
+#scheduleGrid{display:grid;min-width:max-content;font-size:12px}
+.gr-corner{position:sticky;left:0;z-index:3;background:#181a1e;padding:10px 12px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;font-size:10px;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
+.gr-day{padding:9px 4px;text-align:center;font-weight:700;color:var(--ink-3);border-bottom:1px solid var(--hair);border-right:1px solid var(--hair);font-variant-numeric:tabular-nums}
+.gr-day.today{color:#0e1a12;background:var(--green);border-radius:8px 8px 0 0}
+.gr-name{position:sticky;left:0;z-index:2;background:#141619;padding:9px 12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
+.gr-cell{padding:7px 3px;text-align:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--hair);cursor:pointer;min-height:38px;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;transition:.1s;font-weight:600;color:var(--ink-3)}
+.gr-cell:hover{background:rgba(255,255,255,.09);color:var(--ink)}
+.gr-cell.today{box-shadow:inset 0 0 0 1px rgba(52,201,124,.35)}
+.gr-cell.filled{color:var(--ink)}
+.gr-cell.k-day,.gr-cell.k-day12,.gr-cell.k-day24{background:rgba(52,201,124,.15);color:var(--green-d)}
+.gr-cell.k-night12{background:rgba(98,166,255,.16);color:#9cc2ff}
+.gr-cell.k-off{background:rgba(255,255,255,.05);color:var(--ink-3)}
+.gr-cell.k-absent{background:rgba(255,107,107,.15);color:#ffb3b3}
+.gr-cell.k-custom{background:rgba(183,155,255,.13);color:#c6b8ff}
+
 /* модалка / тост */
 .modal-ov{position:fixed;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(7px);display:none;place-items:center;z-index:100;padding:16px}
 .modal-ov.show{display:grid}
