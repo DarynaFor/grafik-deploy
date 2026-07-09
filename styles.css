@@ -118,6 +118,26 @@ body.authed .login-stage{display:none}
 .seg button.on{background:var(--green);color:#0e1a12;border-color:var(--green)}
 .linedel{position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.06);border:1px solid var(--glass-bd);color:var(--ink-2)}
 
+/* ставки: массовый ввод */
+.rates-stat{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px;font-size:14px}
+.rates-stat b{font-variant-numeric:tabular-nums}
+.rt-toggle{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2);font-weight:600;cursor:pointer;white-space:nowrap}
+.rt-toggle input{width:16px;height:16px;accent-color:var(--green);cursor:pointer}
+.rate-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 16px;border-radius:16px;background:rgba(255,255,255,.042);border:1px solid var(--glass-bd);box-shadow:var(--sh-sm);margin-bottom:8px}
+.rate-name{flex:1;min-width:160px;font-weight:700;font-size:14.5px}
+.rate-name .sub{font-weight:500;color:var(--ink-3);font-size:12px;margin-top:3px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.rate-edit{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rate-edit .input{width:auto}
+.rate-edit .rt-kind{min-width:118px}
+.rate-edit .rt-a,.rate-edit .rt-b{max-width:118px}
+.rt-save{padding:9px 13px;flex-shrink:0}
+@media(max-width:560px){
+  .rate-row{flex-direction:column;align-items:stretch}
+  .rate-edit{width:100%}
+  .rate-edit .input{flex:1}
+  .rt-save{width:100%;justify-content:center}
+}
+
 /* модалка / тост */
 .modal-ov{position:fixed;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(7px);display:none;place-items:center;z-index:100;padding:16px}
 .modal-ov.show{display:grid}

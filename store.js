@@ -109,6 +109,19 @@ export class MockStore {
     }
     this._save(); return structuredClone(e);
   }
+  async setPrimaryRate(id, line) {
+    const e = this.db.employees.find(x => x.id === id);
+    if (!e) throw new Error('Карточка не найдена');
+    const today = new Date().toISOString().slice(0, 10);
+    const cur = e.lines.find(l => !l.valid_to && l.line_type === 'основной');
+    if (cur) { cur.valid_to = today; this._log('updated', 'rate_line', cur.id, 'ставка закрыта', lineLabel(cur), null); }
+    const nl = { id: this.db.nextId.line++, line_type: 'основной', pay_kind: line.pay_kind,
+      amount: line.amount ?? null, amount_night: line.amount_night ?? null, percent: line.percent ?? null,
+      valid_from: today, valid_to: null };
+    e.lines.push(nl);
+    this._log('updated', 'rate_line', nl.id, 'ставка добавлена', null, lineLabel(nl));
+    this._save(); return nl;
+  }
   async listJournal(limit = 100) { return this.db.journal.slice(0, limit); }
 }
 
@@ -218,6 +231,21 @@ export class SupabaseStore {
         valid_from: today, created_by: this.user.id }));
       if (fresh.length) { const { error: e2 } = await this.sb.from('rate_line').insert(fresh); if (e2) throw e2; }
     }
+  }
+  async setPrimaryRate(id, line) {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: cur, error: eSel } = await this.sb.from('rate_line')
+      .select('id').eq('employee_id', id).eq('line_type', 'основной').is('valid_to', null);
+    if (eSel) throw eSel;
+    for (const ol of cur || []) {
+      const { data: cl, error: eUpd } = await this.sb.from('rate_line').update({ valid_to: today }).eq('id', ol.id).select();
+      if (eUpd) throw eUpd;
+      if (!cl || !cl.length) throw new Error('Не удалось закрыть старую ставку (недостаточно прав)');
+    }
+    const { data, error } = await this.sb.from('rate_line').insert({ employee_id: id, line_type: 'основной',
+      pay_kind: line.pay_kind, amount: line.amount ?? null, amount_night: line.amount_night ?? null,
+      percent: line.percent ?? null, valid_from: today, created_by: this.user.id }).select().single();
+    if (error) throw error; return data;
   }
   async listJournal(limit = 100) {
     const { data, error } = await this.sb.from('journal')
