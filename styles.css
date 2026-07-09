@@ -18,48 +18,46 @@
   --sh:inset 0 1px 0 rgba(255,255,255,.07),0 18px 44px rgba(0,0,0,.55);
   --sh-sm:inset 0 1px 0 rgba(255,255,255,.05),0 6px 18px rgba(0,0,0,.45);
   --sh-pop:0 26px 70px rgba(0,0,0,.55);
+  --glow:radial-gradient(44% 40% at 12% 3%,rgba(52,201,124,.28),transparent 60%),radial-gradient(40% 38% at 93% 7%,rgba(70,214,188,.2),transparent 60%),radial-gradient(46% 44% at 4% 96%,rgba(98,166,255,.16),transparent 60%);
   --blur:saturate(1.7) blur(26px);
 }
 /* светлые токены (один набор, дублируется для авто-по-системе и явного выбора) */
 @media (prefers-color-scheme: light){ :root:not([data-theme]){
   color-scheme:light;
-  --bg:#F3F4F1; --ink:#1A1C1A; --ink-2:#5C615C; --ink-3:#8A8F8A;
+  --bg:#EBE6DD; --ink:#1C1B17; --ink-2:#6E6A60; --ink-3:#A6A196;
   --green:#12915A; --green-d:#0B7A44; --on-green:#ffffff;
-  --blue-d:#2C68CE; --violet-d:#6B4FC4; --red-d:#C43B3B; --amber-d:#AB6410;
-  --glass-bd:rgba(0,0,0,.11); --hair:rgba(0,0,0,.08);
-  --fill-1:rgba(0,0,0,.035); --fill-2:rgba(0,0,0,.05); --fill-hi:rgba(0,0,0,.08);
-  --card-grad:linear-gradient(180deg,#ffffff,#fbfbf9);
-  --surface:#ffffff; --surf-1:#ebede8; --surf-2:#e5e7e2;
-  --bar:rgba(250,250,247,.75); --modal-grad:linear-gradient(180deg,#ffffff,#fafaf7);
-  --toast-bg:rgba(28,30,28,.94); --toast-ink:#fff;
-  --glow-op:.35;
-  --sh:0 1px 2px rgba(20,28,22,.04),0 16px 40px rgba(20,28,22,.1);
-  --sh-sm:0 4px 14px rgba(20,28,22,.07);
-  --sh-pop:0 24px 60px rgba(20,28,22,.2);
+  --blue-d:#2C68CE; --violet-d:#6B4FC4; --red-d:#C43B3B; --amber-d:#9E5A0E;
+  --glass-bd:rgba(28,27,23,.13); --hair:rgba(28,27,23,.09);
+  --fill-1:rgba(28,27,23,.032); --fill-2:rgba(28,27,23,.05); --fill-hi:rgba(28,27,23,.08);
+  --card-grad:linear-gradient(180deg,rgba(255,255,255,.96),rgba(255,255,255,.88));
+  --surface:#FAF7F1; --surf-1:#F1ECE2; --surf-2:#ECE6DB;
+  --bar:rgba(250,247,241,.78); --modal-grad:linear-gradient(180deg,#FEFCF9,#FAF7F1);
+  --toast-bg:rgba(28,27,23,.94); --toast-ink:#fff;
+  --glow:radial-gradient(44% 40% at 11% 3%,rgba(63,184,160,.5),transparent 60%),radial-gradient(40% 38% at 93% 7%,rgba(120,198,140,.42),transparent 60%),radial-gradient(50% 46% at 91% 99%,rgba(244,176,118,.44),transparent 62%);
+  --sh:0 1px 2px rgba(60,50,30,.05),0 16px 40px rgba(60,50,30,.12);
+  --sh-sm:0 4px 14px rgba(60,50,30,.08);
+  --sh-pop:0 24px 60px rgba(50,42,28,.2);
 } }
 :root[data-theme="light"]{
   color-scheme:light;
-  --bg:#F3F4F1; --ink:#1A1C1A; --ink-2:#5C615C; --ink-3:#8A8F8A;
+  --bg:#EBE6DD; --ink:#1C1B17; --ink-2:#6E6A60; --ink-3:#A6A196;
   --green:#12915A; --green-d:#0B7A44; --on-green:#ffffff;
-  --blue-d:#2C68CE; --violet-d:#6B4FC4; --red-d:#C43B3B; --amber-d:#AB6410;
-  --glass-bd:rgba(0,0,0,.11); --hair:rgba(0,0,0,.08);
-  --fill-1:rgba(0,0,0,.035); --fill-2:rgba(0,0,0,.05); --fill-hi:rgba(0,0,0,.08);
-  --card-grad:linear-gradient(180deg,#ffffff,#fbfbf9);
-  --surface:#ffffff; --surf-1:#ebede8; --surf-2:#e5e7e2;
-  --bar:rgba(250,250,247,.75); --modal-grad:linear-gradient(180deg,#ffffff,#fafaf7);
-  --toast-bg:rgba(28,30,28,.94); --toast-ink:#fff;
-  --glow-op:.35;
-  --sh:0 1px 2px rgba(20,28,22,.04),0 16px 40px rgba(20,28,22,.1);
-  --sh-sm:0 4px 14px rgba(20,28,22,.07);
-  --sh-pop:0 24px 60px rgba(20,28,22,.2);
+  --blue-d:#2C68CE; --violet-d:#6B4FC4; --red-d:#C43B3B; --amber-d:#9E5A0E;
+  --glass-bd:rgba(28,27,23,.13); --hair:rgba(28,27,23,.09);
+  --fill-1:rgba(28,27,23,.032); --fill-2:rgba(28,27,23,.05); --fill-hi:rgba(28,27,23,.08);
+  --card-grad:linear-gradient(180deg,rgba(255,255,255,.96),rgba(255,255,255,.88));
+  --surface:#FAF7F1; --surf-1:#F1ECE2; --surf-2:#ECE6DB;
+  --bar:rgba(250,247,241,.78); --modal-grad:linear-gradient(180deg,#FEFCF9,#FAF7F1);
+  --toast-bg:rgba(28,27,23,.94); --toast-ink:#fff;
+  --glow:radial-gradient(44% 40% at 11% 3%,rgba(63,184,160,.5),transparent 60%),radial-gradient(40% 38% at 93% 7%,rgba(120,198,140,.42),transparent 60%),radial-gradient(50% 46% at 91% 99%,rgba(244,176,118,.44),transparent 62%);
+  --sh:0 1px 2px rgba(60,50,30,.05),0 16px 40px rgba(60,50,30,.12);
+  --sh-sm:0 4px 14px rgba(60,50,30,.08);
+  --sh-pop:0 24px 60px rgba(50,42,28,.2);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow-x:hidden;max-width:100%}
 body{font-family:var(--sans);color:var(--ink);background:var(--bg);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
-body::before{content:"";position:fixed;inset:-10%;z-index:0;pointer-events:none;opacity:var(--glow-op);background:
-  radial-gradient(44% 40% at 12% 3%, rgba(52,201,124,.28), transparent 60%),
-  radial-gradient(40% 38% at 93% 7%, rgba(70,214,188,.2), transparent 60%),
-  radial-gradient(46% 44% at 4% 96%, rgba(98,166,255,.16), transparent 60%)}
+body::before{content:"";position:fixed;inset:-10%;z-index:0;pointer-events:none;background:var(--glow)}
 button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
 svg{display:block}
 .caps{text-transform:uppercase;letter-spacing:.13em;font-size:10.5px;font-weight:700;color:var(--ink-3)}
@@ -219,6 +217,11 @@ body.authed .login-stage{display:none}
 /* панель инструментов графика: поиск + отделение + счётчик покрытия */
 .sched-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
 .sched-stat{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+/* мини-полоска покрытия месяца: сколько сотрудников с графиком */
+.cov-bar{width:82px;height:7px;border-radius:var(--r-pill);background:var(--fill-2);overflow:hidden;flex-shrink:0}
+.cov-fill{display:block;height:100%;border-radius:var(--r-pill);background:linear-gradient(90deg,var(--teal),var(--green));transition:width .35s ease}
+/* цветная точка отделения (у каждого свой оттенок, как аватарки) */
+.cat-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle;flex-shrink:0}
 
 /* кастомный дропдаун «Отделение» — в стиле приложения (нативный select не стилизуется) */
 .cselect{position:relative;display:inline-block;flex-shrink:0}

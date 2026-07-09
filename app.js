@@ -38,6 +38,10 @@ function paintThemeBtn() { const b = $('themeBtn'); if (b) { b.innerHTML = curTh
 function toggleTheme() { const next = curTheme() === 'light' ? 'dark' : 'light'; document.documentElement.setAttribute('data-theme', next); try { localStorage.setItem(THEME_KEY, next); } catch (e) {} paintThemeBtn(); }
 
 const palette = ['#CDE9D6', '#D3E2F7', '#F6DAC9', '#E6DEF9', '#FBEAC6', '#CFEBE6', '#F7D6DA', '#E3E9D0'];
+// цвет отделения (категория специальности) — свой оттенок для точки-маркера, стабильно по позиции
+const DEPT_COLORS = ['#5AB0E6', '#5FC08A', '#E0A24F', '#C77FD8', '#EA7B7B', '#5FC4B4', '#B9A24A', '#8A93E0'];
+const deptCats = () => [...new Set([...specialties.map(s => s.category), 'Прочие'])];
+const catColor = cat => DEPT_COLORS[Math.max(0, deptCats().indexOf(cat)) % DEPT_COLORS.length];
 const initials = f => String(f || '?').split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase();
 const PAY_KINDS = [['оклад', 'Оклад'], ['сутки', 'Сутки'], ['12ч', '12ч день / ночь'], ['почасово', 'Почасово'], ['процент', 'Процент']];
 const fmtDT = iso => { const d = new Date(iso); return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
@@ -223,7 +227,7 @@ function renderEmployees(filter = '') {
     let list = all.filter(e => specCat(e.specialty_id) === cat && e.fio.toLowerCase().includes(f));
     if (onlyInc) list = list.filter(isIncomplete);
     if (!list.length) continue;
-    html += `<div class="group-label"><span class="caps">${esc(cat)} · ${list.length}</span><span class="line"></span></div>`;
+    html += `<div class="group-label"><span class="caps"><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${list.length}</span><span class="line"></span></div>`;
     for (const e of list) {
       const pays = activeLines(e).map(l => `<span class="pill ${l.line_type === 'основной' ? 'o' : 's'}">${esc(lineLabel(l))}</span>`).join(' ') || '<span class="pill k">строк начисления нет</span>';
       const g = cardGaps(e);
@@ -403,7 +407,10 @@ function drawSchedule() {
   // покрытие месяца: у скольких проставлен хоть один плановый день + всего смен
   const withShift = new Set(scheduleRows.filter(s => s.plan_kind).map(s => s.employee_id));
   const shifts = scheduleRows.filter(s => s.plan_kind).length;
-  if ($('schedStat')) $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="gap-chips"><span class="gap-chip">${shifts} смен</span></span>`;
+  if ($('schedStat')) {
+    const pct = active.length ? Math.round(withShift.size / active.length * 100) : 0;
+    $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="cov-bar" title="${pct}% заполнено"><span class="cov-fill" style="width:${pct}%"></span></span><span class="gap-chips"><span class="gap-chip">${shifts} смен</span></span>`;
+  }
 
   let head = '<div class="gr-corner">Сотрудник</div>';
   for (let d = 1; d <= nd; d++) head += `<div class="gr-day${d === todayD ? ' today' : ''}">${d}</div>`;
@@ -412,7 +419,7 @@ function drawSchedule() {
     if (catF && cat !== catF) continue;
     const list = active.filter(e => specCat(e.specialty_id) === cat && e.fio.toLowerCase().includes(f));
     if (!list.length) continue;
-    rows += `<div class="gr-group"><span>${esc(cat)} · ${list.length}</span></div>`;
+    rows += `<div class="gr-group"><span><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${list.length}</span></div>`;
     for (const e of list) {
       shown++;
       rows += `<div class="gr-name" title="${esc(e.fio)}">${esc(e.fio)}</div>`;
