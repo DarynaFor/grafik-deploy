@@ -6,7 +6,7 @@ set -uo pipefail
 DOMAIN=grafik.one
 WWW=/var/www/$DOMAIN
 REPO=/opt/grafik-deploy
-EMAIL=info.lumaflow@gmail.com
+EMAIL=daryna.fornalska@gmail.com
 PUBKEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC8xdRZiDwCqgxPZeGVFL1G2VKNTQFacGpFmQ+7nr8EQ grafik-deploy'
 
 echo ">>> [1/8] Ставлю nginx + certbot + git..."

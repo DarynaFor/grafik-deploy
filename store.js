@@ -137,10 +137,14 @@ export class SupabaseStore {
     });
   }
   async init() {
+    console.log('[store] загрузка библиотеки Supabase…');
     const { createClient } = await this._loadLib();
+    console.log('[store] создание клиента…');
     this.sb = createClient(this.url, this.key);
-    const { data } = await this.sb.auth.getUser();
-    if (data?.user) await this._loadProfile(data.user);
+    // Проверку существующей сессии (getUser) на старте НЕ делаем намеренно: она использует
+    // navigatorLock, который в некоторых браузерах/условиях зависает и блокирует весь вход.
+    // Сессия проверится при login(). Жертвуем автовходом ради надёжного показа формы.
+    console.log('[store] клиент готов — вход по почте и паролю доступен');
   }
   async _loadProfile(authUser) {
     const { data, error } = await this.sb.from('app_user').select('*').eq('id', authUser.id).single();

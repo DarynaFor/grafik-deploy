@@ -292,11 +292,18 @@ $('logoutBtn').onclick = async () => { await store.logout(); document.body.class
 applyIcons();
 
 (async () => {
+  // Форму показываем сразу — не ждём полной инициализации базы. Иначе, если getUser
+  // (проверка сессии) зависает, карточка остаётся пустой. Клиент Supabase создаётся
+  // быстро (до getUser), поэтому вход по паролю работает даже при зависшем getUser.
+  renderLogin();
   try {
-    await store.init();
-    if (store.me()) await enter(); else renderLogin();
+    await Promise.race([
+      store.init(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('база не ответила за 8 сек')), 8000)),
+    ]);
+    if (store.me()) await enter();  // если уже была сессия — входим; иначе форма уже показана
   } catch (e) {
-    renderLogin();
-    toast('Ошибка подключения: ' + String(e.message || e), true);
+    console.error('[init]', e);
+    toast('База отвечает медленно (' + String(e.message || e) + '). Вход по паролю должен работать.', true);
   }
 })();
