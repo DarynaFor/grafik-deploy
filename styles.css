@@ -177,7 +177,22 @@ body.authed .login-stage{display:none}
 /* панель инструментов графика: поиск + отделение + счётчик покрытия */
 .sched-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
 .sched-stat{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.sel-sm{height:40px;padding:0 12px;font-size:13.5px;font-weight:600;max-width:210px;cursor:pointer}
+
+/* кастомный дропдаун «Отделение» — в стиле приложения (нативный select не стилизуется) */
+.cselect{position:relative;display:inline-block;flex-shrink:0}
+.cselect-trigger{display:flex;align-items:center;justify-content:space-between;gap:8px;height:40px;padding:0 12px 0 14px;min-width:172px;max-width:230px;border-radius:12px;background:rgba(255,255,255,.06);border:1px solid var(--glass-bd);color:var(--ink);font-size:13.5px;font-weight:600;cursor:pointer;transition:.12s;font-family:inherit}
+.cselect-trigger:hover{background:rgba(255,255,255,.1)}
+.cselect.open .cselect-trigger{border-color:var(--green);background:rgba(255,255,255,.09)}
+.cselect-trigger svg{width:16px;height:16px;opacity:.5;flex-shrink:0;transition:transform .16s}
+.cselect.open .cselect-trigger svg{transform:rotate(180deg);opacity:.85}
+.cselect-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cselect-panel{position:absolute;top:calc(100% + 6px);left:0;min-width:100%;width:max-content;max-width:280px;z-index:60;background:#1d2025;border:1px solid var(--glass-bd);border-radius:14px;padding:6px;box-shadow:0 18px 46px rgba(0,0,0,.55);display:none;max-height:min(360px,60vh);overflow-y:auto}
+.cselect.open .cselect-panel{display:block;animation:cselIn .14s ease}
+@keyframes cselIn{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+.cselect-opt{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:9px 12px;border-radius:9px;font-size:13.5px;font-weight:600;color:var(--ink-2);cursor:pointer;white-space:nowrap;transition:.1s}
+.cselect-opt:hover{background:rgba(255,255,255,.07);color:var(--ink)}
+.cselect-opt.sel{color:var(--green);background:rgba(52,201,124,.1)}
+.cselect-opt.sel::after{content:'✓';font-size:12px;font-weight:800}
 
 /* модалка / тост */
 .modal-ov{position:fixed;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(7px);display:none;place-items:center;z-index:100;padding:16px}

@@ -21,6 +21,7 @@ const ICONS = {
   out: I('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>', 17),
   chevL: I('<path d="m15 18-6-6 6-6"/>', 16),
   chevR: I('<path d="m9 18 6-6-6-6"/>', 16),
+  chevD: I('<path d="m6 9 6 6 6-6"/>', 16),
   minus: I('<path d="M5 12h14"/>', 15),
   coin: I('<circle cx="12" cy="12" r="9"/><path d="M9.5 16.5V7.5h3a2.6 2.6 0 0 1 0 5.2H9.5M8.5 14h4.5"/>', 20),
   cal: I('<rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>', 20),
@@ -129,15 +130,38 @@ async function enter() {
   await refresh();
   go('employees');
 }
-// Заполняем селекты «Отделение» один раз при загрузке данных (не в рендерах — иначе
-// дропдаун перестраивается на каждый ввод и сбивается открытый список / гонки при частых рендерах).
+// Кастомный дропдаун «в нашем стиле»: нативный <select> нельзя стилизовать — попап с
+// опциями рисует ОС (белый, чужой теме). host — div.cselect; opts — [{v,label}]; onPick(v).
+function makeDropdown(host, opts, cur, onPick) {
+  const curLabel = (opts.find(o => o.v === cur) || opts[0]).label;
+  host.classList.add('cselect');
+  host.dataset.value = cur;
+  host.innerHTML = `<button class="cselect-trigger" type="button"><span class="cselect-label">${esc(curLabel)}</span>${ICONS.chevD}</button>
+    <div class="cselect-panel" role="listbox">${opts.map(o => `<div class="cselect-opt${o.v === cur ? ' sel' : ''}" role="option" data-v="${esc(o.v)}">${esc(o.label)}</div>`).join('')}</div>`;
+  host.querySelector('.cselect-trigger').onclick = e => {
+    e.stopPropagation();
+    const willOpen = !host.classList.contains('open');
+    document.querySelectorAll('.cselect.open').forEach(d => d.classList.remove('open'));
+    host.classList.toggle('open', willOpen);
+  };
+  host.querySelectorAll('.cselect-opt').forEach(o => o.onclick = () => {
+    host.dataset.value = o.dataset.v;
+    host.querySelector('.cselect-label').textContent = o.textContent;
+    host.querySelectorAll('.cselect-opt').forEach(x => x.classList.toggle('sel', x === o));
+    host.classList.remove('open');
+    onPick(o.dataset.v);
+  });
+}
+document.addEventListener('click', () => document.querySelectorAll('.cselect.open').forEach(d => d.classList.remove('open')));
+
+// Наполняем дропдауны «Отделение» при загрузке данных (не в рендерах — чтобы не пересобирать
+// на каждый ввод). Выбор сразу перерисовывает через onPick (drawSchedule/renderEmployees).
 function fillCatSelects() {
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
-  for (const id of ['empCat', 'schedCat']) {
-    const sel = $(id); if (!sel) continue;
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">Все отделения</option>' + cats.map(c => `<option value="${esc(c)}"${c === cur ? ' selected' : ''}>${esc(c)}</option>`).join('');
-  }
+  const opts = [{ v: '', label: 'Все отделения' }, ...cats.map(c => ({ v: c, label: c }))];
+  const wire = (id, onPick) => { const el = $(id); if (el) makeDropdown(el, opts, el.dataset.value || '', onPick); };
+  wire('empCat', () => renderEmployees($('empSearch').value || ''));
+  wire('schedCat', () => drawSchedule());
 }
 async function refresh() {
   [specialties, employees] = await Promise.all([store.listSpecialties(), store.listEmployees()]);
@@ -183,7 +207,7 @@ function renderEmployees(filter = '') {
   }
   const onlyInc = isOwner() && $('empList').dataset.onlyInc === '1';
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
-  const catF = $('empCat')?.value || '';   // селект заполняет fillCatSelects при загрузке
+  const catF = $('empCat')?.dataset.value || '';   // дропдаун заполняет fillCatSelects при загрузке
   let html = '', idx = 0;
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
@@ -361,7 +385,7 @@ function drawSchedule() {
 
   // фильтры (селекты заполняет fillCatSelects при загрузке данных — здесь только читаем)
   const f = ($('schedSearch')?.value || '').toLowerCase().trim();
-  const catF = $('schedCat')?.value || '';
+  const catF = $('schedCat')?.dataset.value || '';
 
   // режим: оператор правит, владелец смотрит
   if ($('schedSub')) $('schedSub').textContent = editable ? 'Клик по клетке — тип смены + время начала. Ночные через полночь = фикс за смену.' : 'Просмотр: график ведёт оператор с листов голов отделений.';
@@ -526,11 +550,10 @@ function toast(msg, isErr) {
 $('modalOv').onclick = e => { if (e.target.id === 'modalOv' && !$('modalBox').dataset.guard) closeModal(); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('modalBox').dataset.guard) closeModal(); });
 $('empSearch').oninput = e => renderEmployees(e.target.value);
-{ const ec = $('empCat'); if (ec) ec.onchange = () => renderEmployees($('empSearch').value || ''); }
 { const rs = $('rateSearch'); if (rs) rs.oninput = e => renderRates(e.target.value); }
 { const mp = $('mPrev'), mn = $('mNext'); if (mp) mp.onclick = () => shiftMonth(-1); if (mn) mn.onclick = () => shiftMonth(1); }
 { const ss = $('schedSearch'); if (ss) ss.oninput = () => drawSchedule(); }
-{ const sc = $('schedCat'); if (sc) sc.onchange = () => drawSchedule(); }
+// выбор отделения (empCat/schedCat) обрабатывает makeDropdown → onPick, отдельное onchange не нужно
 $('addEmpBtn').onclick = () => employeeForm(null);
 $('addSpecBtn').onclick = specForm;
 $('backBtn').onclick = () => go('employees');
