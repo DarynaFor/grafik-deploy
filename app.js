@@ -101,6 +101,9 @@ function go(screen) {
 }
 const ROLE_LABELS = { owner: 'владелец', operator: 'оператор', cashier1: 'касса · Бух 1', cashier2: 'карта / 1С · Бух 2' };
 const isStaff = () => ['owner', 'operator'].includes(store.me()?.role);   // кто работает с карточками
+// График ведёт оператор (Алёна) с переданных головами отделений листов. Владелец (Милена) — только просмотр.
+// Позже добавим роли голов отделений — они будут вносить свой отдел; тогда сюда добавится их роль.
+const canEditSchedule = () => store.me()?.role === 'operator';
 async function enter() {
   const me = store.me(); if (!me) return;
   document.body.classList.add('authed');
@@ -126,8 +129,19 @@ async function enter() {
   await refresh();
   go('employees');
 }
+// Заполняем селекты «Отделение» один раз при загрузке данных (не в рендерах — иначе
+// дропдаун перестраивается на каждый ввод и сбивается открытый список / гонки при частых рендерах).
+function fillCatSelects() {
+  const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
+  for (const id of ['empCat', 'schedCat']) {
+    const sel = $(id); if (!sel) continue;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Все отделения</option>' + cats.map(c => `<option value="${esc(c)}"${c === cur ? ' selected' : ''}>${esc(c)}</option>`).join('');
+  }
+}
 async function refresh() {
   [specialties, employees] = await Promise.all([store.listSpecialties(), store.listEmployees()]);
+  fillCatSelects();
   renderEmployees($('empSearch').value || '');
   renderSpecs();
   renderSchedule();
@@ -169,8 +183,10 @@ function renderEmployees(filter = '') {
   }
   const onlyInc = isOwner() && $('empList').dataset.onlyInc === '1';
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
+  const catF = $('empCat')?.value || '';   // селект заполняет fillCatSelects при загрузке
   let html = '', idx = 0;
   for (const cat of cats) {
+    if (catF && cat !== catF) continue;
     let list = all.filter(e => specCat(e.specialty_id) === cat && e.fio.toLowerCase().includes(f));
     if (onlyInc) list = list.filter(isIncomplete);
     if (!list.length) continue;
@@ -326,28 +342,57 @@ function cellText(c) {
   if (c.plan_kind === 'off' || c.plan_kind === 'absent') return short;
   return c.plan_start ? String(c.plan_start).slice(0, 5) : short;
 }
+// renderSchedule — грузит данные месяца из сети, затем рисует. drawSchedule — только рисует
+// из уже загруженных scheduleRows + текущих фильтров (мгновенно, без сети → без гонок/мерцания).
 async function renderSchedule() {
   if (!isStaff() || !$('scheduleGrid')) return;
   if (!curPeriod) curPeriod = nowPeriod();
   [scheduleRows, shiftKinds] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds()]);
+  drawSchedule();
+}
+function drawSchedule() {
+  if (!isStaff() || !$('scheduleGrid')) return;
   if ($('mLabel')) $('mLabel').textContent = periodLabel(curPeriod);
   const nd = daysInMonth(curPeriod);
-  const active = employees.filter(e => e.status !== 'archived');
+  const editable = canEditSchedule();
   const todayD = (nowPeriod() === curPeriod) ? new Date().getDate() : 0;
+  const active = employees.filter(e => e.status !== 'archived');
+  const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
+
+  // фильтры (селекты заполняет fillCatSelects при загрузке данных — здесь только читаем)
+  const f = ($('schedSearch')?.value || '').toLowerCase().trim();
+  const catF = $('schedCat')?.value || '';
+
+  // режим: оператор правит, владелец смотрит
+  if ($('schedSub')) $('schedSub').textContent = editable ? 'Клик по клетке — тип смены + время начала. Ночные через полночь = фикс за смену.' : 'Просмотр: график ведёт оператор с листов голов отделений.';
+  if ($('schedNote')) $('schedNote').innerHTML = editable ? '' : `<div class="readonly-note">${ICONS.lock} График заполняет оператор (Алёна) по листам, которые головы отделений согласовали со своими сотрудниками. У вас — просмотр отмеченного.</div>`;
+
+  // покрытие месяца: у скольких проставлен хоть один плановый день + всего смен
+  const withShift = new Set(scheduleRows.filter(s => s.plan_kind).map(s => s.employee_id));
+  const shifts = scheduleRows.filter(s => s.plan_kind).length;
+  if ($('schedStat')) $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="gap-chips"><span class="gap-chip">${shifts} смен</span></span>`;
+
   let head = '<div class="gr-corner">Сотрудник</div>';
   for (let d = 1; d <= nd; d++) head += `<div class="gr-day${d === todayD ? ' today' : ''}">${d}</div>`;
-  let rows = '';
-  for (const e of active) {
-    rows += `<div class="gr-name" title="${esc(e.fio)}">${esc(e.fio)}</div>`;
-    for (let d = 1; d <= nd; d++) {
-      const c = cellOf(e.id, d);
-      rows += `<div class="gr-cell${c && c.plan_kind ? ' filled k-' + esc(c.plan_kind) : ''}${d === todayD ? ' today' : ''}" data-emp="${e.id}" data-day="${d}">${esc(cellText(c))}</div>`;
+  let rows = '', shown = 0;
+  for (const cat of cats) {
+    if (catF && cat !== catF) continue;
+    const list = active.filter(e => specCat(e.specialty_id) === cat && e.fio.toLowerCase().includes(f));
+    if (!list.length) continue;
+    rows += `<div class="gr-group"><span>${esc(cat)} · ${list.length}</span></div>`;
+    for (const e of list) {
+      shown++;
+      rows += `<div class="gr-name" title="${esc(e.fio)}">${esc(e.fio)}</div>`;
+      for (let d = 1; d <= nd; d++) {
+        const c = cellOf(e.id, d);
+        rows += `<div class="gr-cell${c && c.plan_kind ? ' filled k-' + esc(c.plan_kind) : ''}${d === todayD ? ' today' : ''}${editable ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${esc(cellText(c))}</div>`;
+      }
     }
   }
   const grid = $('scheduleGrid');
   grid.style.gridTemplateColumns = `150px repeat(${nd}, minmax(44px, 1fr))`;
-  grid.innerHTML = active.length ? head + rows : '<div class="empty" style="padding:40px">Нет сотрудников</div>';
-  grid.querySelectorAll('.gr-cell').forEach(cell => cell.onclick = () => scheduleCellPopup(+cell.dataset.emp, +cell.dataset.day));
+  grid.innerHTML = shown ? head + rows : `<div class="empty" style="padding:40px">${active.length ? 'Никого не найдено' : 'Нет сотрудников'}</div>`;
+  if (editable) grid.querySelectorAll('.gr-cell').forEach(cell => cell.onclick = () => scheduleCellPopup(+cell.dataset.emp, +cell.dataset.day));
 }
 function scheduleCellPopup(empId, day) {
   const e = employees.find(x => x.id === empId); if (!e) return;
@@ -481,8 +526,11 @@ function toast(msg, isErr) {
 $('modalOv').onclick = e => { if (e.target.id === 'modalOv' && !$('modalBox').dataset.guard) closeModal(); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('modalBox').dataset.guard) closeModal(); });
 $('empSearch').oninput = e => renderEmployees(e.target.value);
+{ const ec = $('empCat'); if (ec) ec.onchange = () => renderEmployees($('empSearch').value || ''); }
 { const rs = $('rateSearch'); if (rs) rs.oninput = e => renderRates(e.target.value); }
 { const mp = $('mPrev'), mn = $('mNext'); if (mp) mp.onclick = () => shiftMonth(-1); if (mn) mn.onclick = () => shiftMonth(1); }
+{ const ss = $('schedSearch'); if (ss) ss.oninput = () => drawSchedule(); }
+{ const sc = $('schedCat'); if (sc) sc.onchange = () => drawSchedule(); }
 $('addEmpBtn').onclick = () => employeeForm(null);
 $('addSpecBtn').onclick = specForm;
 $('backBtn').onclick = () => go('employees');

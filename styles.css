@@ -168,6 +168,16 @@ body.authed .login-stage{display:none}
 .gr-cell.k-off{background:rgba(255,255,255,.05);color:var(--ink-3)}
 .gr-cell.k-absent{background:rgba(255,107,107,.15);color:#ffb3b3}
 .gr-cell.k-custom{background:rgba(183,155,255,.13);color:#c6b8ff}
+.gr-cell.ro{cursor:default}
+.gr-cell.ro:hover{background:none;color:var(--ink-3)}
+.gr-cell.ro.filled:hover{color:var(--ink)}
+/* группа-отделение внутри сетки (полоса на всю ширину, метка липнет слева при прокрутке) */
+.gr-group{grid-column:1/-1;background:rgba(255,255,255,.045);border-bottom:1px solid var(--hair)}
+.gr-group span{position:sticky;left:0;display:inline-block;padding:7px 12px;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
+/* панель инструментов графика: поиск + отделение + счётчик покрытия */
+.sched-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.sched-stat{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.sel-sm{height:40px;padding:0 12px;font-size:13.5px;font-weight:600;max-width:210px;cursor:pointer}
 
 /* модалка / тост */
 .modal-ov{position:fixed;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(7px);display:none;place-items:center;z-index:100;padding:16px}

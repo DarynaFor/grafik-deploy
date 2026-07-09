@@ -37,6 +37,7 @@
       <div class="page-head">
         <div><h1>Сотрудники</h1><p id="empSubtitle">Карточки со строками начисления</p></div>
         <div class="right">
+          <select id="empCat" class="input sel-sm"><option value="">Все отделения</option></select>
           <div class="search"><span data-ic="search"></span><input id="empSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
           <button class="btn btn-primary btn-sm" id="addEmpBtn"><span data-ic="plus"></span>Карточка</button>
         </div>
@@ -60,11 +61,17 @@
 
     <section class="screen" id="s-schedule">
       <div class="page-head">
-        <div><h1>График</h1><p>Смена = тип + время начала. Клик по клетке — задать или сменить.</p></div>
+        <div><h1>График</h1><p id="schedSub">Смена = тип + время начала. Клик по клетке — задать или сменить.</p></div>
         <div class="right">
           <div class="month-nav"><button class="mn-btn" id="mPrev" aria-label="Пред. месяц">‹</button><span id="mLabel"></span><button class="mn-btn" id="mNext" aria-label="След. месяц">›</button></div>
         </div>
       </div>
+      <div class="sched-tools">
+        <div class="search"><span data-ic="search"></span><input id="schedSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+        <select id="schedCat" class="input sel-sm"><option value="">Все отделения</option></select>
+        <div id="schedStat" class="sched-stat"></div>
+      </div>
+      <div id="schedNote"></div>
       <div class="gridwrap"><div id="scheduleGrid"></div></div>
     </section>
 
@@ -101,6 +108,6 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=4"></script>
+<script type="module" src="app.js?v=5"></script>
 </body>
 </html>
