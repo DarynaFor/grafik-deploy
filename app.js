@@ -118,20 +118,48 @@ async function refresh() {
 const specName = id => specialties.find(s => s.id === id)?.name || '—';
 const specCat = id => specialties.find(s => s.id === id)?.category || 'Прочие';
 function activeLines(e) { return (e.lines || []).filter(l => !l.valid_to).sort((a, b) => (a.line_type === 'основной' ? 0 : 1) - (b.line_type === 'основной' ? 0 : 1)); }
+// Пробелы карточки: чего не хватает, чтобы человек был готов к расчёту/выдаче.
+function cardGaps(e) {
+  return {
+    fio: e.position === '⚠ уточнить фамилию' || !e.fio || !e.fio.trim(),
+    rate: !(e.lines || []).some(l => !l.valid_to && l.line_type === 'основной'),
+    phone: !e.phone || !e.phone.trim(),
+    spec: !e.specialty_id,
+  };
+}
+const isIncomplete = e => { const g = cardGaps(e); return g.fio || g.rate || g.phone || g.spec; };
 function renderEmployees(filter = '') {
   const f = filter.toLowerCase();
+  const all = employees.filter(e => e.status !== 'archived');
+  // Панель заполненности + фильтр «только неполные» — владельцу (он заполняет).
+  if (isOwner()) {
+    const cnt = { rate: 0, phone: 0, spec: 0, fio: 0 };
+    all.forEach(e => { const g = cardGaps(e); if (g.rate) cnt.rate++; if (g.phone) cnt.phone++; if (g.spec) cnt.spec++; if (g.fio) cnt.fio++; });
+    const done = all.filter(e => !isIncomplete(e)).length;
+    const onlyInc = $('empList').dataset.onlyInc === '1';
+    const chip = (n, label) => n ? `<span class="gap-chip">${n} ${label}</span>` : '';
+    $('roNote').innerHTML = `<div class="fill-stat"><span class="fs-count"><b>${done}</b> из <b>${all.length}</b> заполнены</span>
+      <span class="gap-chips">${chip(cnt.rate, 'без ставки')}${chip(cnt.phone, 'без телефона')}${chip(cnt.spec, 'без спец.')}${chip(cnt.fio, 'без фамилии')}</span>
+      <label class="rt-toggle"><input type="checkbox" id="empOnlyInc" ${onlyInc ? 'checked' : ''}> только неполные</label></div>`;
+    $('empOnlyInc').onchange = ev => { $('empList').dataset.onlyInc = ev.target.checked ? '1' : ''; renderEmployees($('empSearch').value || ''); };
+  }
+  const onlyInc = isOwner() && $('empList').dataset.onlyInc === '1';
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
   let html = '', idx = 0;
   for (const cat of cats) {
-    const list = employees.filter(e => e.status !== 'archived' && specCat(e.specialty_id) === cat && e.fio.toLowerCase().includes(f));
+    let list = all.filter(e => specCat(e.specialty_id) === cat && e.fio.toLowerCase().includes(f));
+    if (onlyInc) list = list.filter(isIncomplete);
     if (!list.length) continue;
     html += `<div class="group-label"><span class="caps">${esc(cat)} · ${list.length}</span><span class="line"></span></div>`;
     for (const e of list) {
       const pays = activeLines(e).map(l => `<span class="pill ${l.line_type === 'основной' ? 'o' : 's'}">${esc(lineLabel(l))}</span>`).join(' ') || '<span class="pill k">строк начисления нет</span>';
-      html += `<div class="emp-row" data-id="${e.id}"><div class="emp-ava" style="background:${palette[idx++ % palette.length]}">${esc(initials(e.fio))}</div><div class="emp-name">${esc(e.fio)}<div class="sub">${esc(specName(e.specialty_id))}</div></div><div class="emp-pay">${pays}</div><div class="chev">${ICONS.chevR}</div></div>`;
+      const g = cardGaps(e);
+      const gap = isOwner() && isIncomplete(e) ? `<span class="gap-dot" title="Не хватает">⚠ ${[g.rate && 'ставка', g.phone && 'телефон', g.spec && 'спец.', g.fio && 'фамилия'].filter(Boolean).join(', ')}</span>` : '';
+      html += `<div class="emp-row${isOwner() && isIncomplete(e) ? ' incomplete' : ''}" data-id="${e.id}"><div class="emp-ava" style="background:${palette[idx++ % palette.length]}">${esc(initials(e.fio))}</div><div class="emp-name">${esc(e.fio)}${gap}<div class="sub">${esc(specName(e.specialty_id))}</div></div><div class="emp-pay">${pays}</div><div class="chev">${ICONS.chevR}</div></div>`;
     }
   }
-  $('empList').innerHTML = html || `<div class="empty">${filter ? 'Никого не найдено' : 'Пока нет сотрудников.' + (isOwner() ? '<br><span class="small">Нажмите «Карточка», чтобы создать первую.</span>' : '')}</div>`;
+  $('empList').innerHTML = html || `<div class="empty">${filter || onlyInc ? 'Никого не найдено' : 'Пока нет сотрудников.' + (isOwner() ? '<br><span class="small">Нажмите «Карточка», чтобы создать первую.</span>' : '')}</div>`;
+  applyIcons($('empList'));
   $('empList').querySelectorAll('.emp-row').forEach(r => r.onclick = () => openCard(+r.dataset.id));
 }
 function openCard(id) {
