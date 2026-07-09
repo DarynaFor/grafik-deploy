@@ -112,9 +112,10 @@ export class MockStore {
   async setPrimaryRate(id, line) {
     const e = this.db.employees.find(x => x.id === id);
     if (!e) throw new Error('Карточка не найдена');
+    const active = e.lines.filter(l => !l.valid_to && l.line_type === 'основной');
+    if (active.length === 1 && sameRate(active[0], line)) return active[0];   // no-op: та же ставка — не смётываем журнал
     const today = new Date().toISOString().slice(0, 10);
-    const cur = e.lines.find(l => !l.valid_to && l.line_type === 'основной');
-    if (cur) { cur.valid_to = today; this._log('updated', 'rate_line', cur.id, 'ставка закрыта', lineLabel(cur), null); }
+    active.forEach(c => { c.valid_to = today; this._log('updated', 'rate_line', c.id, 'ставка закрыта', lineLabel(c), null); });   // закрываем ВСЕ активные основные
     const nl = { id: this.db.nextId.line++, line_type: 'основной', pay_kind: line.pay_kind,
       amount: line.amount ?? null, amount_night: line.amount_night ?? null, percent: line.percent ?? null,
       valid_from: today, valid_to: null };
@@ -131,6 +132,13 @@ export function lineLabel(l) {
   if (kind === '12ч') return `${l.line_type} · 12ч день ${l.amount ?? '?'} / ночь ${l.amount_night ?? '?'} ₽`;
   const unit = { 'оклад': '₽/мес', 'сутки': '₽/смена', 'почасово': '₽/час' }[kind] || '₽';
   return `${l.line_type} · ${kind} ${l.amount ?? '?'} ${unit}`;
+}
+
+// Одинаковая ли ставка (чтобы не смётывать журнал повторным сохранением того же).
+// parseFloat с обеих сторон — numeric из Supabase приходит строкой ("50000.00").
+export function sameRate(a, b) {
+  const n = v => v == null || v === '' ? null : parseFloat(v);
+  return a.pay_kind === b.pay_kind && n(a.amount) === n(b.amount) && n(a.amount_night) === n(b.amount_night) && n(a.percent) === n(b.percent);
 }
 
 /* ── SUPABASE (прод) ──────────────────────────────────────────────── */
@@ -167,12 +175,13 @@ export class SupabaseStore {
   demoUsers() { return []; }
   async loginDemo() { throw new Error('Демо-вход недоступен: подключена настоящая база'); }
   async login(email, password) {
+    if (!this.sb) throw new Error('База не загрузилась — обновите страницу (Cmd/Ctrl+R)');
     const { data, error } = await this.sb.auth.signInWithPassword({ email, password });
     if (error) throw new Error(error.message);
     await this._loadProfile(data.user);
     return this.user;
   }
-  async logout() { await this.sb.auth.signOut(); this.user = null; }
+  async logout() { if (this.sb) await this.sb.auth.signOut(); this.user = null; }
   me() { return this.user; }
 
   async listSpecialties() {
@@ -233,10 +242,11 @@ export class SupabaseStore {
     }
   }
   async setPrimaryRate(id, line) {
-    const today = new Date().toISOString().slice(0, 10);
     const { data: cur, error: eSel } = await this.sb.from('rate_line')
-      .select('id').eq('employee_id', id).eq('line_type', 'основной').is('valid_to', null);
+      .select('id,pay_kind,amount,amount_night,percent').eq('employee_id', id).eq('line_type', 'основной').is('valid_to', null);
     if (eSel) throw eSel;
+    if ((cur || []).length === 1 && sameRate(cur[0], line)) return cur[0];   // no-op: та же ставка — не смётываем анти-фрод журнал
+    const today = new Date().toISOString().slice(0, 10);
     for (const ol of cur || []) {
       const { data: cl, error: eUpd } = await this.sb.from('rate_line').update({ valid_to: today }).eq('id', ol.id).select();
       if (eUpd) throw eUpd;

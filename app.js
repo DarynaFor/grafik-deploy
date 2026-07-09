@@ -31,6 +31,23 @@ const initials = f => String(f || '?').split(' ').slice(0, 2).map(w => w[0] || '
 const PAY_KINDS = [['оклад', 'Оклад'], ['сутки', 'Сутки'], ['12ч', '12ч день / ночь'], ['почасово', 'Почасово'], ['процент', 'Процент']];
 const fmtDT = iso => { const d = new Date(iso); return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
 
+/* Надёжный разбор денежной суммы. Пробелы = разделитель тысяч. «50.000»/«50,000»
+   (ровно 3 цифры после точки/запятой) = тысячи → 50000. Одна запятая = десятичный.
+   Требует ПОЛНОГО совпадения формата — иначе кидает, а не обрезает молча (это payroll).
+   Пусто → null (вызывающий сам решает, обязательно ли поле). Потолок под numeric(12,2). */
+function parseNum(raw, opts) {
+  const field = (opts && opts.field) || 'значение', thousands = !!(opts && opts.thousands);
+  let s = String(raw ?? '').trim();
+  if (!s) return null;
+  s = s.replace(/\s/g, '');
+  if (thousands && /^\d{1,3}[.,]\d{3}$/.test(s)) s = s.replace(/[.,]/, '');
+  else s = s.replace(',', '.');
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) throw new Error('Проверьте ' + field + ': только цифры (напр. 50000 или 50000.50)');
+  const v = parseFloat(s);
+  if (v > 9999999.99) throw new Error('Слишком большая сумма (' + field + ')');
+  return v;
+}
+
 let specialties = [], employees = [], curScreen = 'employees';
 
 /* ── вход ── */
@@ -119,11 +136,15 @@ const specName = id => specialties.find(s => s.id === id)?.name || '—';
 const specCat = id => specialties.find(s => s.id === id)?.category || 'Прочие';
 function activeLines(e) { return (e.lines || []).filter(l => !l.valid_to).sort((a, b) => (a.line_type === 'основной' ? 0 : 1) - (b.line_type === 'основной' ? 0 : 1)); }
 // Пробелы карточки: чего не хватает, чтобы человек был готов к расчёту/выдаче.
+const FIO_SENTINEL = '⚠ уточнить фамилию';   // маркер неполного ФИО, лежит в position импортированных карточек
 function cardGaps(e) {
+  const fio = String(e.fio || '').trim();
+  const digits = String(e.phone || '').replace(/\D/g, '');
   return {
-    fio: e.position === '⚠ уточнить фамилию' || !e.fio || !e.fio.trim(),
+    // пробел по СОДЕРЖИМОМУ: нужна фамилия+имя (>=2 слова). sentinel — доп. сигнал по импортированным.
+    fio: e.position === FIO_SENTINEL || fio.split(/\s+/).filter(Boolean).length < 2,
     rate: !(e.lines || []).some(l => !l.valid_to && l.line_type === 'основной'),
-    phone: !e.phone || !e.phone.trim(),
+    phone: digits.length < 11,   // +7XXXXXXXXXX — заодно отсекает буквы/мусор
     spec: !e.specialty_id,
   };
 }
@@ -175,7 +196,7 @@ function openCard(id) {
     <div class="grid2">
       <div class="card cardpad"><div class="caps" style="margin-bottom:12px">Строки начисления</div>${lines}${oldLines ? `<div class="caps" style="margin:16px 0 6px">История ставок</div>${oldLines}` : ''}</div>
       <div class="card cardpad">
-        <div class="field"><span class="caps">Должность</span><span class="val">${esc(e.position || '—')}</span></div>
+        <div class="field"><span class="caps">Должность</span><span class="val">${esc(e.position === FIO_SENTINEL ? '—' : (e.position || '—'))}</span></div>
         <div class="field"><span class="caps">Телефон (для СМС)</span><span class="val num">${esc(e.phone || '—')}</span></div>
         <div class="field"><span class="caps">Статус</span><span class="val">${e.status === 'active' ? 'активен' : 'архив'}</span></div>
         <div class="field" style="margin:0"><span class="caps">Карточка создана</span><span class="val small">${esc(fmtDT(e.created_at))}</span></div>
@@ -221,8 +242,8 @@ function collectLines(box) {
     if (keep) { out.push({ _keep: +keep }); continue; }
     const line_type = blk.querySelector('.lb-type button.on').textContent.trim() === 'Основной' ? 'основной' : 'совместитель';
     const pay_kind = blk.querySelector('.lb-pay').value;
-    const num = sel => { const el = blk.querySelector(sel); if (!el) return null; const v = parseFloat(String(el.value).replace(/\s/g, '').replace(',', '.')); return isNaN(v) ? null : v; };
-    const l = { line_type, pay_kind, amount: num('.lb-amount'), amount_night: num('.lb-night'), percent: num('.lb-percent') };
+    const val = (sel, o) => { const el = blk.querySelector(sel); return el ? parseNum(el.value, o) : null; };
+    const l = { line_type, pay_kind, amount: val('.lb-amount', { thousands: true, field: 'ставку' }), amount_night: val('.lb-night', { thousands: true, field: 'ночную ставку' }), percent: val('.lb-percent', { field: 'процент' }) };
     if (pay_kind === 'процент') {
       if (l.percent == null) throw new Error('Укажите процент в строке начисления');
       if (l.percent < 0 || l.percent > 100) throw new Error('Процент должен быть от 0 до 100');
@@ -235,6 +256,7 @@ function collectLines(box) {
     out.push(l);
   }
   if (!out.length) throw new Error('Нужна хотя бы одна строка начисления');
+  if (out.filter(l => !l._keep && l.line_type === 'основной').length > 1) throw new Error('Основная строка может быть только одна — лишние сделайте «Совместитель»');
   return out;
 }
 function employeeForm(e) {
@@ -242,11 +264,12 @@ function employeeForm(e) {
   showModal(`<h3>${e ? 'Редактировать карточку' : 'Новая карточка'}</h3><div class="msub">${ICONS.lock} ФИО, телефон и ставки заводит владелец — изменения попадут в журнал</div>
     <label class="flbl">ФИО</label><input class="input" id="mFio" value="${esc(e?.fio || '')}" placeholder="Фамилия Имя Отчество">
     <div class="frow"><div><label class="flbl">Специальность</label><select class="input" id="mSpec">${so}</select></div>
-    <div><label class="flbl">Должность</label><input class="input" id="mPos" value="${esc(e?.position || '')}" placeholder="напр. Заведующий"></div></div>
+    <div><label class="flbl">Должность</label><input class="input" id="mPos" value="${esc(e?.position === FIO_SENTINEL ? '' : (e?.position || ''))}" placeholder="напр. Заведующий"></div></div>
     <label class="flbl">Телефон (для СМС)</label><input class="input" id="mPhone" type="tel" inputmode="tel" value="${esc(e?.phone || '')}" placeholder="+7 …">
     <label class="flbl">Строки начисления</label><div id="mLines"></div>
     <button class="btn btn-ghost btn-sm" id="mAddLine">${ICONS.plus}Ещё строка</button>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button><button class="btn btn-primary btn-sm" id="mSave">${ICONS.check}${e ? 'Сохранить' : 'Создать карточку'}</button></div>`);
+  $('modalBox').dataset.guard = '1';   // карточку не закрывать случайным кликом по фону / Escape — потеря ввода
   const box = $('mLines');
   const init = e ? activeLines(e) : [null];
   (init.length ? init : [null]).forEach(l => { box.insertAdjacentHTML('beforeend', lineBlockHtml(l)); wireLineBlock(box.lastElementChild, l); });
@@ -305,17 +328,21 @@ function rtRow(e) {
 }
 function rtCollect(row) {
   const kind = row.querySelector('.rt-kind').value;
-  const num = sel => { const el = row.querySelector(sel); if (!el) return null; const v = parseFloat(String(el.value).replace(/\s/g, '').replace(',', '.')); return isNaN(v) ? null : v; };
+  const val = (sel, o) => { const el = row.querySelector(sel); return el ? parseNum(el.value, o) : null; };
   const line = { pay_kind: kind, amount: null, amount_night: null, percent: null };
   if (kind === 'процент') {
-    line.percent = num('.rt-a');
+    line.percent = val('.rt-a', { field: 'процент' });
     if (line.percent == null) throw new Error('Укажите процент');
     if (line.percent < 0 || line.percent > 100) throw new Error('Процент должен быть 0–100');
   } else {
-    line.amount = num('.rt-a');
+    line.amount = val('.rt-a', { thousands: true, field: 'сумму' });
     if (line.amount == null) throw new Error('Укажите сумму');
-    if (line.amount < 0) throw new Error('Сумма не может быть отрицательной');
-    if (kind === '12ч') { line.amount_night = num('.rt-b'); if (line.amount_night == null) throw new Error('Для «12ч» укажите и день, и ночь'); }
+    if (line.amount <= 0) throw new Error('Ставка должна быть больше 0');
+    if (kind === '12ч') {
+      line.amount_night = val('.rt-b', { thousands: true, field: 'ночную ставку' });
+      if (line.amount_night == null) throw new Error('Для «12ч» укажите и день, и ночь');
+      if (line.amount_night <= 0) throw new Error('Ночная ставка должна быть больше 0');
+    }
   }
   return line;
 }
@@ -342,8 +369,25 @@ function renderRates(filter = '') {
     row.querySelector('.rt-kind').onchange = () => { row.querySelector('.rt-fields').innerHTML = rtFields(row.querySelector('.rt-kind').value, null); };
     row.querySelector('.rt-save').onclick = async () => {
       const btn = row.querySelector('.rt-save'); if (btn.disabled) return; btn.disabled = true;
-      try { await store.setPrimaryRate(+row.dataset.id, rtCollect(row)); await refresh(); toast(ICONS.check + 'Ставка сохранена'); }
-      catch (err) { btn.disabled = false; toast(err.message || err, true); }
+      try {
+        const line = rtCollect(row);
+        // Сохраняем незавершённый ввод в ДРУГИХ строках, чтобы refresh их не стёр.
+        const drafts = {};
+        $('ratesList').querySelectorAll('.rate-row').forEach(r => {
+          if (+r.dataset.id === +row.dataset.id) return;
+          const a = r.querySelector('.rt-a'), b = r.querySelector('.rt-b'), k = r.querySelector('.rt-kind');
+          if ((a && a.value) || (b && b.value)) drafts[r.dataset.id] = { kind: k.value, a: a ? a.value : '', b: b ? b.value : '' };
+        });
+        await store.setPrimaryRate(+row.dataset.id, line);
+        await refresh();
+        for (const id in drafts) {
+          const r = $('ratesList').querySelector('.rate-row[data-id="' + id + '"]'); if (!r) continue;
+          const k = r.querySelector('.rt-kind'); if (k) { k.value = drafts[id].kind; k.dispatchEvent(new Event('change')); }
+          const a = r.querySelector('.rt-a'), b = r.querySelector('.rt-b');
+          if (a) a.value = drafts[id].a; if (b) b.value = drafts[id].b;
+        }
+        toast(ICONS.check + 'Ставка сохранена');
+      } catch (err) { btn.disabled = false; toast(err.message || err, true); }
     };
   });
 }
@@ -363,7 +407,7 @@ async function renderJournal() {
 
 /* ── модалка / тост ── */
 function showModal(html) { $('modalBox').innerHTML = html; $('modalOv').classList.add('show'); applyIcons($('modalBox')); const f = $('modalBox').querySelector('input'); if (f) setTimeout(() => f.focus(), 60); }
-function closeModal() { $('modalOv').classList.remove('show'); }
+function closeModal() { $('modalOv').classList.remove('show'); delete $('modalBox').dataset.guard; }
 /* Ошибки выводим как текст (без innerHTML) — в них попадают сообщения БД/сети;
    успех может содержать доверенную иконку из ICONS. */
 function toast(msg, isErr) {
@@ -374,8 +418,8 @@ function toast(msg, isErr) {
 }
 
 /* ── init ── */
-$('modalOv').onclick = e => { if (e.target.id === 'modalOv') closeModal(); };
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+$('modalOv').onclick = e => { if (e.target.id === 'modalOv' && !$('modalBox').dataset.guard) closeModal(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('modalBox').dataset.guard) closeModal(); });
 $('empSearch').oninput = e => renderEmployees(e.target.value);
 { const rs = $('rateSearch'); if (rs) rs.oninput = e => renderRates(e.target.value); }
 $('addEmpBtn').onclick = () => employeeForm(null);
@@ -398,6 +442,7 @@ applyIcons();
     if (store.me()) await enter();  // если уже была сессия — входим; иначе форма уже показана
   } catch (e) {
     console.error('[init]', e);
-    toast('База отвечает медленно (' + String(e.message || e) + '). Вход по паролю должен работать.', true);
+    const libFail = /библиотек|supabase\.js|is not defined|undefined/i.test(String(e.message || e));
+    toast(libFail ? 'Не удалось подключиться к базе — обновите страницу (Cmd/Ctrl+R).' : 'База отвечает медленно (' + String(e.message || e) + '). Вход по паролю должен работать.', true);
   }
 })();
