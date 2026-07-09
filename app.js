@@ -39,13 +39,16 @@ function toggleTheme() { const next = curTheme() === 'light' ? 'dark' : 'light';
 
 const palette = ['#CDE9D6', '#D3E2F7', '#F6DAC9', '#E6DEF9', '#FBEAC6', '#CFEBE6', '#F7D6DA', '#E3E9D0'];
 // цвет отделения (категория специальности) — свой оттенок для точки-маркера, стабильно по позиции
-const DEPT_COLORS = ['#5AB0E6', '#5FC08A', '#E0A24F', '#C77FD8', '#EA7B7B', '#5FC4B4', '#B9A24A', '#8A93E0'];
-// пастельные версии — для фона аватарок (тёмный текст поверх), отделение считывается по цвету
-const DEPT_TINTS = ['#CFE7F6', '#D2EDDD', '#F5E2C6', '#EDD7F2', '#F8D9D9', '#CFEDE7', '#E8E2C3', '#DADEF5'];
-const deptCats = () => [...new Set([...specialties.map(s => s.category), 'Прочие'])];
-const catIdx = cat => Math.max(0, deptCats().indexOf(cat));
-const catColor = cat => DEPT_COLORS[catIdx(cat) % DEPT_COLORS.length];
-const catTint = cat => DEPT_TINTS[catIdx(cat) % DEPT_TINTS.length];
+// Цвет отделения выводится из ЕГО НАЗВАНИЯ (хэш → оттенок HSL). Поэтому любое новое отделение
+// само получает стабильный цвет, добавление/переименование не меняет цвета остальных, число
+// отделений не ограничено. Точка/полоска — насыщенный тон (читается на обеих темах),
+// аватарка — та же гамма пастелью (тёмный текст поверх).
+const hashStr = s => { s = String(s); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
+const catHue = cat => hashStr(cat) % 360;
+// вторичный хэш разводит близкие оттенки по светлоте, чтобы два соседних отделения не сливались
+const catShift = cat => hashStr('~' + cat) % 12;
+const catColor = cat => `hsl(${catHue(cat)}, 56%, ${50 + catShift(cat)}%)`;   // точка/полоска: 50–61%
+const catTint = cat => `hsl(${catHue(cat)}, 58%, ${85 + (catShift(cat) >> 1)}%)`;   // аватарка (пастель): 85–90%
 const initials = f => String(f || '?').split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase();
 const PAY_KINDS = [['оклад', 'Оклад'], ['сутки', 'Сутки'], ['12ч', '12ч день / ночь'], ['почасово', 'Почасово'], ['процент', 'Процент']];
 const fmtDT = iso => { const d = new Date(iso); return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
