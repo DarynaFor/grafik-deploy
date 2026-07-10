@@ -38,7 +38,6 @@ function paintThemeBtn() { const b = $('themeBtn'); if (b) { b.innerHTML = curTh
 function toggleTheme() { const next = curTheme() === 'light' ? 'dark' : 'light'; document.documentElement.setAttribute('data-theme', next); try { localStorage.setItem(THEME_KEY, next); } catch (e) {} paintThemeBtn(); }
 
 const palette = ['#CDE9D6', '#D3E2F7', '#F6DAC9', '#E6DEF9', '#FBEAC6', '#CFEBE6', '#F7D6DA', '#E3E9D0'];
-// цвет отделения (категория специальности) — свой оттенок для точки-маркера, стабильно по позиции
 // Цвет отделения выводится из ЕГО НАЗВАНИЯ (хэш → оттенок HSL). Поэтому любое новое отделение
 // само получает стабильный цвет, добавление/переименование не меняет цвета остальных, число
 // отделений не ограничено. Точка/полоска — насыщенный тон (читается на обеих темах),
@@ -86,7 +85,7 @@ function renderLogin() {
     body.innerHTML = `<label class="flbl">Почта</label><input class="input" id="lgEmail" type="email" autocomplete="username">
       <label class="flbl">Пароль</label><input class="input" id="lgPass" type="password" autocomplete="current-password">
       <div style="height:16px"></div><button class="btn btn-primary" id="lgGo" style="width:100%;justify-content:center">Войти</button>
-      <div class="small" id="lgErr" style="color:var(--red);margin-top:10px"></div>`;
+      <div class="small" id="lgErr" style="color:var(--red-d);margin-top:10px"></div>`;
     const go = async () => {
       $('lgErr').textContent = '';
       try { await store.login($('lgEmail').value.trim(), $('lgPass').value); await enter(); }
@@ -153,9 +152,10 @@ async function enter() {
 // Кастомный дропдаун «в нашем стиле»: нативный <select> нельзя стилизовать — попап с
 // опциями рисует ОС (белый, чужой теме). host — div.cselect; opts — [{v,label}]; onPick(v).
 function makeDropdown(host, opts, cur, onPick) {
-  const curLabel = (opts.find(o => o.v === cur) || opts[0]).label;
+  const curOpt = opts.find(o => o.v === cur) || opts[0];   // если сохранённого значения нет в опциях — дефолт (метка и value не разойдутся)
+  const curLabel = curOpt.label;
   host.classList.add('cselect');
-  host.dataset.value = cur;
+  host.dataset.value = curOpt.v;
   host.innerHTML = `<button class="cselect-trigger" type="button"><span class="cselect-label">${esc(curLabel)}</span>${ICONS.chevD}</button>
     <div class="cselect-panel" role="listbox">${opts.map(o => `<div class="cselect-opt${o.v === cur ? ' sel' : ''}" role="option" data-v="${esc(o.v)}">${esc(o.label)}</div>`).join('')}</div>`;
   host.querySelector('.cselect-trigger').onclick = e => {
@@ -219,6 +219,7 @@ function renderEmployees(filter = '') {
     all.forEach(e => { const g = cardGaps(e); if (g.rate) cnt.rate++; if (g.phone) cnt.phone++; if (g.spec) cnt.spec++; if (g.fio) cnt.fio++; });
     const done = all.filter(e => !isIncomplete(e)).length;
     const onlyInc = $('empList').dataset.onlyInc === '1';
+    if ($('empList').dataset.gap && !cnt[$('empList').dataset.gap]) $('empList').dataset.gap = '';   // активный фильтр опустел → снять (иначе чип исчезнет и не отключить)
     const gapF = $('empList').dataset.gap || '';
     // чипы — фильтры: клик показывает только тех, у кого этот пробел; повторный клик снимает
     const chip = (n, key, label) => n ? `<button class="gap-chip${gapF === key ? ' on' : ''}" data-gap="${key}">${n} ${label}</button>` : '';
@@ -236,10 +237,10 @@ function renderEmployees(filter = '') {
   const gapF = isOwner() ? ($('empList').dataset.gap || '') : '';
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
   const catF = $('empCat')?.dataset.value || '';   // дропдаун заполняет fillCatSelects при загрузке
-  let html = '', idx = 0;
+  let html = '';
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
-    let list = all.filter(e => specCat(e.specialty_id) === cat && e.fio.toLowerCase().includes(f));
+    let list = all.filter(e => specCat(e.specialty_id) === cat && String(e.fio || "").toLowerCase().includes(f));
     if (gapF) list = list.filter(e => cardGaps(e)[gapF]);
     else if (onlyInc) list = list.filter(isIncomplete);
     if (!list.length) continue;
@@ -251,7 +252,7 @@ function renderEmployees(filter = '') {
       html += `<div class="emp-row${isOwner() && isIncomplete(e) ? ' incomplete' : ''}" data-id="${e.id}"><div class="emp-ava" style="background:${catTint(cat)}">${esc(initials(e.fio))}</div><div class="emp-name">${esc(e.fio)}${gap}<div class="sub">${esc(specName(e.specialty_id))}</div></div><div class="emp-pay">${pays}</div><div class="chev">${ICONS.chevR}</div></div>`;
     }
   }
-  $('empList').innerHTML = html || `<div class="empty">${filter || onlyInc || gapF ? 'Никого не найдено' : 'Пока нет сотрудников.' + (isOwner() ? '<br><span class="small">Нажмите «Карточка», чтобы создать первую.</span>' : '')}</div>`;
+  $('empList').innerHTML = html || `<div class="empty">${all.length ? 'Никого не найдено' : 'Пока нет сотрудников.' + (isOwner() ? '<br><span class="small">Нажмите «Карточка», чтобы создать первую.</span>' : '')}</div>`;
   applyIcons($('empList'));
   $('empList').querySelectorAll('.emp-row').forEach(r => r.onclick = () => openCard(+r.dataset.id));
 }
@@ -382,7 +383,7 @@ function specForm() {
 
 /* ── график: сетка месяц × сотрудники (operator + owner) ── */
 const MONTHS_RU = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-let curPeriod = null, scheduleRows = [], shiftKinds = [];
+let curPeriod = null, scheduleRows = [], shiftKinds = [], schedSeq = 0;
 const nowPeriod = () => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0'); };
 const periodLabel = p => { const [y, m] = p.split('-').map(Number); return MONTHS_RU[m] + ' ' + y; };
 const daysInMonth = p => { const [y, m] = p.split('-').map(Number); return new Date(y, m, 0).getDate(); };
@@ -400,8 +401,13 @@ function cellText(c) {
 async function renderSchedule() {
   if (!isStaff() || !$('scheduleGrid')) return;
   if (!curPeriod) curPeriod = nowPeriod();
-  [scheduleRows, shiftKinds] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds()]);
-  drawSchedule();
+  const seq = ++schedSeq;                 // защита от гонки: быстрое переключение месяцев даёт несколько запросов
+  try {
+    const [rows, kinds] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds()]);
+    if (seq !== schedSeq) return;         // ответ пришёл не для текущего запроса — отбрасываем (иначе чужой месяц перетрёт)
+    scheduleRows = rows; shiftKinds = kinds;
+    drawSchedule();
+  } catch (e) { toast('Не удалось загрузить график: ' + (e.message || e), true); }
 }
 function drawSchedule() {
   if (!isStaff() || !$('scheduleGrid')) return;
@@ -420,9 +426,10 @@ function drawSchedule() {
   if ($('schedSub')) $('schedSub').textContent = editable ? 'Клик по клетке — тип смены + время начала. Ночные через полночь = фикс за смену.' : 'Просмотр: график ведёт оператор с листов голов отделений.';
   if ($('schedNote')) $('schedNote').innerHTML = editable ? '' : `<div class="readonly-note">${ICONS.lock} График заполняет оператор (Алёна) по листам, которые головы отделений согласовали со своими сотрудниками. У вас — просмотр отмеченного.</div>`;
 
-  // покрытие месяца: у скольких проставлен хоть один плановый день + всего смен
-  const withShift = new Set(scheduleRows.filter(s => s.plan_kind).map(s => s.employee_id));
-  const shifts = scheduleRows.filter(s => s.plan_kind).length;
+  // покрытие месяца: считаем только РАБОЧИЕ смены (Выходной/Не вышел — не смена)
+  const worked = s => s.plan_kind && s.plan_kind !== 'off' && s.plan_kind !== 'absent';
+  const withShift = new Set(scheduleRows.filter(worked).map(s => s.employee_id));
+  const shifts = scheduleRows.filter(worked).length;
   if ($('schedStat')) {
     const pct = active.length ? Math.round(withShift.size / active.length * 100) : 0;
     $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="cov-bar" title="${pct}% заполнено"><span class="cov-fill" style="width:${pct}%"></span></span><span class="gap-chips"><span class="mini-chip">${shifts} смен</span></span>`;
@@ -433,7 +440,7 @@ function drawSchedule() {
   let rows = '', shown = 0;
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
-    const list = active.filter(e => specCat(e.specialty_id) === cat && e.fio.toLowerCase().includes(f));
+    const list = active.filter(e => specCat(e.specialty_id) === cat && String(e.fio || "").toLowerCase().includes(f));
     if (!list.length) continue;
     rows += `<div class="gr-group"><span><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${list.length}</span></div>`;
     for (const e of list) {
@@ -460,7 +467,8 @@ function scheduleCellPopup(empId, day) {
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="scClear">Очистить</button><button class="btn btn-primary btn-sm" id="scSave">${ICONS.check}Сохранить</button></div>`);
   $('scSave').onclick = async () => {
     const btn = $('scSave'); if (btn.disabled) return; btn.disabled = true;
-    try { await store.setScheduleCell(empId, date, { plan_kind: $('scKind').value || null, plan_start: $('scStart').value || null, fact: null }); closeModal(); await renderSchedule(); toast(ICONS.check + 'Сохранено'); }
+    const kind = $('scKind').value || null;   // время без типа смены не сохраняем (иначе невидимая строка-пустышка)
+    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, fact: null }); closeModal(); await renderSchedule(); toast(ICONS.check + 'Сохранено'); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
   $('scClear').onclick = async () => {
@@ -513,13 +521,13 @@ function renderRates(filter = '') {
   const active = employees.filter(e => e.status !== 'archived');
   const withRate = active.filter(primaryLine).length, without = active.length - withRate;
   const onlyEmpty = $('ratesTools').dataset.onlyEmpty === '1';
-  $('ratesTools').innerHTML = `<div class="rates-stat card cardpad"><span><b>${withRate}</b> из <b>${active.length}</b> со ставкой · <b style="color:${without ? 'var(--red)' : 'var(--green)'}">${without}</b> без ставки</span>
+  $('ratesTools').innerHTML = `<div class="rates-stat card cardpad"><span><b>${withRate}</b> из <b>${active.length}</b> со ставкой · <b style="color:${without ? 'var(--red-d)' : 'var(--green)'}">${without}</b> без ставки</span>
     <label class="rt-toggle"><input type="checkbox" id="rtOnlyEmpty" ${onlyEmpty ? 'checked' : ''}> только без ставки</label></div>`;
   $('rtOnlyEmpty').onchange = ev => { $('ratesTools').dataset.onlyEmpty = ev.target.checked ? '1' : ''; renderRates($('rateSearch').value || ''); };
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
   let html = '';
   for (const cat of cats) {
-    let list = active.filter(e => specCat(e.specialty_id) === cat && e.fio.toLowerCase().includes(f));
+    let list = active.filter(e => specCat(e.specialty_id) === cat && String(e.fio || "").toLowerCase().includes(f));
     if (onlyEmpty) list = list.filter(e => !primaryLine(e));
     if (!list.length) continue;
     html += `<div class="group-label"><span class="caps">${esc(cat)} · ${list.length}</span><span class="line"></span></div>` + list.map(rtRow).join('');
@@ -587,6 +595,7 @@ $('empSearch').oninput = e => renderEmployees(e.target.value);
 { const ss = $('schedSearch'); if (ss) ss.oninput = () => drawSchedule(); }
 // выбор отделения (empCat/schedCat) обрабатывает makeDropdown → onPick, отдельное onchange не нужно
 { const tb = $('themeBtn'); if (tb) tb.onclick = toggleTheme; paintThemeBtn(); }
+try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (!localStorage.getItem(THEME_KEY)) paintThemeBtn(); }); } catch (e) {}
 $('addEmpBtn').onclick = () => employeeForm(null);
 $('addSpecBtn').onclick = specForm;
 $('backBtn').onclick = () => go('employees');
