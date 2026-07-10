@@ -219,20 +219,29 @@ function renderEmployees(filter = '') {
     all.forEach(e => { const g = cardGaps(e); if (g.rate) cnt.rate++; if (g.phone) cnt.phone++; if (g.spec) cnt.spec++; if (g.fio) cnt.fio++; });
     const done = all.filter(e => !isIncomplete(e)).length;
     const onlyInc = $('empList').dataset.onlyInc === '1';
-    const chip = (n, label) => n ? `<span class="gap-chip">${n} ${label}</span>` : '';
+    const gapF = $('empList').dataset.gap || '';
+    // чипы — фильтры: клик показывает только тех, у кого этот пробел; повторный клик снимает
+    const chip = (n, key, label) => n ? `<button class="gap-chip${gapF === key ? ' on' : ''}" data-gap="${key}">${n} ${label}</button>` : '';
     $('roNote').innerHTML = `<div class="fill-stat"><span class="fs-count"><b>${done}</b> из <b>${all.length}</b> заполнены</span>
-      <span class="gap-chips">${chip(cnt.rate, 'без ставки')}${chip(cnt.phone, 'без телефона')}${chip(cnt.spec, 'без спец.')}${chip(cnt.fio, 'без фамилии')}</span>
+      <span class="gap-chips">${chip(cnt.rate, 'rate', 'без ставки')}${chip(cnt.phone, 'phone', 'без телефона')}${chip(cnt.spec, 'spec', 'без спец.')}${chip(cnt.fio, 'fio', 'без фамилии')}</span>
       <label class="rt-toggle"><input type="checkbox" id="empOnlyInc" ${onlyInc ? 'checked' : ''}> только неполные</label></div>`;
-    $('empOnlyInc').onchange = ev => { $('empList').dataset.onlyInc = ev.target.checked ? '1' : ''; renderEmployees($('empSearch').value || ''); };
+    $('empOnlyInc').onchange = ev => { $('empList').dataset.onlyInc = ev.target.checked ? '1' : ''; if (ev.target.checked) $('empList').dataset.gap = ''; renderEmployees($('empSearch').value || ''); };
+    $('roNote').querySelectorAll('.gap-chip').forEach(b => b.onclick = () => {
+      $('empList').dataset.gap = ($('empList').dataset.gap === b.dataset.gap) ? '' : b.dataset.gap;
+      $('empList').dataset.onlyInc = '';   // фильтр по конкретному пробелу заменяет «только неполные»
+      renderEmployees($('empSearch').value || '');
+    });
   }
   const onlyInc = isOwner() && $('empList').dataset.onlyInc === '1';
+  const gapF = isOwner() ? ($('empList').dataset.gap || '') : '';
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
   const catF = $('empCat')?.dataset.value || '';   // дропдаун заполняет fillCatSelects при загрузке
   let html = '', idx = 0;
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
     let list = all.filter(e => specCat(e.specialty_id) === cat && e.fio.toLowerCase().includes(f));
-    if (onlyInc) list = list.filter(isIncomplete);
+    if (gapF) list = list.filter(e => cardGaps(e)[gapF]);
+    else if (onlyInc) list = list.filter(isIncomplete);
     if (!list.length) continue;
     html += `<div class="group-label"><span class="caps"><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${list.length}</span><span class="line"></span></div>`;
     for (const e of list) {
@@ -242,7 +251,7 @@ function renderEmployees(filter = '') {
       html += `<div class="emp-row${isOwner() && isIncomplete(e) ? ' incomplete' : ''}" data-id="${e.id}"><div class="emp-ava" style="background:${catTint(cat)}">${esc(initials(e.fio))}</div><div class="emp-name">${esc(e.fio)}${gap}<div class="sub">${esc(specName(e.specialty_id))}</div></div><div class="emp-pay">${pays}</div><div class="chev">${ICONS.chevR}</div></div>`;
     }
   }
-  $('empList').innerHTML = html || `<div class="empty">${filter || onlyInc ? 'Никого не найдено' : 'Пока нет сотрудников.' + (isOwner() ? '<br><span class="small">Нажмите «Карточка», чтобы создать первую.</span>' : '')}</div>`;
+  $('empList').innerHTML = html || `<div class="empty">${filter || onlyInc || gapF ? 'Никого не найдено' : 'Пока нет сотрудников.' + (isOwner() ? '<br><span class="small">Нажмите «Карточка», чтобы создать первую.</span>' : '')}</div>`;
   applyIcons($('empList'));
   $('empList').querySelectorAll('.emp-row').forEach(r => r.onclick = () => openCard(+r.dataset.id));
 }
@@ -416,7 +425,7 @@ function drawSchedule() {
   const shifts = scheduleRows.filter(s => s.plan_kind).length;
   if ($('schedStat')) {
     const pct = active.length ? Math.round(withShift.size / active.length * 100) : 0;
-    $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="cov-bar" title="${pct}% заполнено"><span class="cov-fill" style="width:${pct}%"></span></span><span class="gap-chips"><span class="gap-chip">${shifts} смен</span></span>`;
+    $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="cov-bar" title="${pct}% заполнено"><span class="cov-fill" style="width:${pct}%"></span></span><span class="gap-chips"><span class="mini-chip">${shifts} смен</span></span>`;
   }
 
   let head = '<div class="gr-corner">Сотрудник</div>';
