@@ -101,6 +101,8 @@ body.authed .login-stage{display:none}
 .screen{display:none;padding:30px 34px 80px;max-width:1080px}
 .screen.show{display:block;animation:fade .28s ease-out}
 @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.btn-spin{display:inline-block;width:15px;height:15px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .6s linear infinite;margin-right:8px;vertical-align:-3px}
+@keyframes spin{to{transform:rotate(360deg)}}
 .page-head{display:flex;align-items:flex-end;gap:16px;margin-bottom:24px;flex-wrap:wrap}
 .page-head h1{font-size:27px;font-weight:700;letter-spacing:-.025em}
 .page-head p{color:var(--ink-2);font-size:13.5px;margin-top:6px}

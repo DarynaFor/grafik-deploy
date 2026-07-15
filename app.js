@@ -1,7 +1,7 @@
 /* Milena · Спринт 1 — вход, карточки сотрудников, специальности, журнал.
    Данные — через store.js (демо: localStorage · прод: Supabase).
    Все пользовательские строки при выводе проходят esc() — без исключений. */
-import { makeStore, lineLabel } from './store.js?v=20';
+import { makeStore, lineLabel } from './store.js?v=21';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -87,9 +87,12 @@ function renderLogin() {
       <div style="height:16px"></div><button class="btn btn-primary" id="lgGo" style="width:100%;justify-content:center">Войти</button>
       <div class="small" id="lgErr" style="color:var(--red-d);margin-top:10px"></div>`;
     const go = async () => {
+      const btn = $('lgGo');
+      if (btn.disabled) return;                                       // защита от повторных кликов (первый коннект медленный)
+      btn.disabled = true; btn.innerHTML = '<span class="btn-spin"></span>Входим…';
       $('lgErr').textContent = '';
-      try { await store.login($('lgEmail').value.trim(), $('lgPass').value); await enter(); }
-      catch (e) { $('lgErr').textContent = 'Не получилось войти: ' + e.message; }
+      try { await store.login($('lgEmail').value.trim(), $('lgPass').value); await enter(); }   // успех → enter() прячет экран входа
+      catch (e) { $('lgErr').textContent = 'Не получилось войти: ' + e.message; btn.disabled = false; btn.innerHTML = 'Войти'; }
     };
     $('lgGo').onclick = go;
     $('lgPass').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
