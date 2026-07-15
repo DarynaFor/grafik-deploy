@@ -1,7 +1,7 @@
 /* Milena · Спринт 1 — вход, карточки сотрудников, специальности, журнал.
    Данные — через store.js (демо: localStorage · прод: Supabase).
    Все пользовательские строки при выводе проходят esc() — без исключений. */
-import { makeStore, lineLabel } from './store.js?v=21';
+import { makeStore, lineLabel } from './store.js?v=22';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);

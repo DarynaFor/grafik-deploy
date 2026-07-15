@@ -4,6 +4,8 @@
    см. docs/sprint1-schema.sql). Выбор — по наличию ключей в config.js. */
 
 const LS_KEY = 'milena-app-demo-v1';
+const LOGIN_DAY_KEY = 'milena-login-day';                                        // день последнего входа (МСК)
+const mskDay = () => new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);   // календарная дата в МСК (UTC+3) — для ежедневного сброса доступа
 
 const DEMO_USERS = [
   { id: 'u-milena', name: 'Милена', role: 'owner' },
@@ -281,7 +283,10 @@ export class SupabaseStore {
       auth: { persistSession: true, autoRefreshToken: true, lock: (_n, _t, fn) => fn() },
     });
     const { data } = await this.sb.auth.getSession();
-    if (data?.session?.user) await this._loadProfile(data.session.user);
+    if (data?.session?.user) {
+      if (localStorage.getItem(LOGIN_DAY_KEY) === mskDay()) await this._loadProfile(data.session.user);   // тот же день — остаёмся в системе
+      else { try { await this.sb.auth.signOut(); } catch (e) {} this.user = null; }                       // вход был вчера/раньше → сбрасываем, нужен свежий вход
+    }
   }
   async _loadProfile(authUser) {
     const { data, error } = await this.sb.from('app_user').select('*').eq('id', authUser.id).single();
@@ -294,6 +299,7 @@ export class SupabaseStore {
     if (!this.sb) throw new Error('База не загрузилась — обновите страницу (Cmd/Ctrl+R)');
     const { data, error } = await this.sb.auth.signInWithPassword({ email, password });
     if (error) throw new Error(error.message);
+    localStorage.setItem(LOGIN_DAY_KEY, mskDay());   // запоминаем день входа — назавтра доступ сбросится
     await this._loadProfile(data.user);
     return this.user;
   }
