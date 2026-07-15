@@ -32,7 +32,9 @@ const DEMO_SEED = {
   employees: [],   // реальные карточки вводит владелица — демо стартует пустым
   journal: [],
   schedule: [],
-  nextId: { specialty: 5, employee: 1, journal: 1, line: 1, schedule: 1 },
+  closed: [],      // закрытые дни табеля: [{work_date, closed_by, closed_at}]
+  retro: [],       // заявки на ретро-правку закрытого дня (СМС-код): [{id,work_date,employee_id,target,new_fact,code,attempts,status,expires}]
+  nextId: { specialty: 5, employee: 1, journal: 1, line: 1, schedule: 1, retro: 1 },
 };
 
 /* ── ДЕМО ─────────────────────────────────────────────────────────── */
@@ -142,17 +144,101 @@ export class MockStore {
     return this.db.schedule.filter(s => String(s.work_date).startsWith(pre)).map(s => ({ ...s }));
   }
   async setScheduleCell(employeeId, work_date, cell) {
+    if (this.user?.role === 'operator' && this._dayClosed(work_date)) throw new Error('День закрыт — правку вносит владелец (или Алёна по СМС, этап 5б)');
     const empty = (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null && (cell.fact ?? null) === null;
     const idx = this.db.schedule.findIndex(s => s.employee_id === employeeId && s.work_date === work_date);
     if (empty) { if (idx >= 0) this.db.schedule.splice(idx, 1); this._save(); return null; }   // очистка = удаление строки
     let row = idx >= 0 ? this.db.schedule[idx] : null;
-    if (!row) { row = { id: this.db.nextId.schedule++, employee_id: employeeId, work_date, plan_start: null, plan_kind: null, fact: null, source: 'manual' }; this.db.schedule.push(row); }
+    if (!row) { row = { id: this.db.nextId.schedule++, employee_id: employeeId, work_date, plan_start: null, plan_end: null, plan_kind: null, fact: null, source: 'manual' }; this.db.schedule.push(row); }
     if ('plan_start' in cell) row.plan_start = cell.plan_start ?? null;
+    if ('plan_end' in cell) row.plan_end = cell.plan_end ?? null;   // ручная правка = старт+код, диапазон импорта сбрасываем
     if ('plan_kind' in cell) row.plan_kind = cell.plan_kind ?? null;
     if ('fact' in cell) row.fact = cell.fact ?? null;
     row.updated_at = new Date().toISOString();
     this._save(); return { ...row };
   }
+  async setScheduleBulk(cells) {   // массовое заполнение (шаблон): cells=[{employee_id,work_date,plan_kind,plan_start,fact?}]
+    const op = this.user?.role === 'operator';
+    for (const c of cells) {
+      if (op && this._dayClosed(c.work_date)) continue;   // закрытый день оператор шаблоном не переписывает (зеркалит RLS)
+      const idx = this.db.schedule.findIndex(s => s.employee_id === c.employee_id && s.work_date === c.work_date);
+      let row = idx >= 0 ? this.db.schedule[idx] : null;
+      if (!row) { row = { id: this.db.nextId.schedule++, employee_id: c.employee_id, work_date: c.work_date, plan_start: null, plan_kind: null, plan_end: null, fact: null, source: c.source || 'template' }; this.db.schedule.push(row); }
+      row.plan_kind = c.plan_kind ?? null;
+      row.plan_start = c.plan_start ?? null;
+      row.plan_end = c.plan_end ?? null;
+      if ('fact' in c) row.fact = c.fact ?? null;
+      row.updated_at = new Date().toISOString();
+    }
+    this._save(); return cells.length;
+  }
+  async clearScheduleMonth(employeeId, period) {   // удалить весь месяц у сотрудника (закрытые дни у оператора не трогаем)
+    const pre = period + '-', before = this.db.schedule.length, op = this.user?.role === 'operator';
+    this.db.schedule = this.db.schedule.filter(s => !(s.employee_id === employeeId && String(s.work_date).startsWith(pre) && !(op && this._dayClosed(s.work_date))));
+    this._save(); return before - this.db.schedule.length;
+  }
+  async setScheduleFact(employeeId, work_date, fact) {   // табель: null=по плану · 'x'=не вышел · число=факт.часы
+    if (this.user?.role === 'operator' && this._dayClosed(work_date)) throw new Error('День закрыт — правку вносит владелец (или Алёна по СМС, этап 5б)');
+    const idx = this.db.schedule.findIndex(s => s.employee_id === employeeId && s.work_date === work_date);
+    let row = idx >= 0 ? this.db.schedule[idx] : null;
+    const old = row ? (row.fact ?? null) : null;
+    if (!row) {
+      if (fact == null) return null;                     // нет ни плана, ни факта — нечего отмечать
+      row = { id: this.db.nextId.schedule++, employee_id: employeeId, work_date, plan_start: null, plan_kind: null, plan_end: null, fact: null, source: 'manual' };
+      this.db.schedule.push(row);
+    }
+    row.fact = fact ?? null;
+    row.updated_at = new Date().toISOString();
+    this._log('updated', 'schedule', row.id, 'факт', String(old ?? ''), String(fact ?? ''));   // анти-фрод след: кто/когда
+    if (!row.plan_kind && (row.fact == null)) {          // клетка без плана и без факта — удаляем строку-пустышку
+      this.db.schedule.splice(this.db.schedule.indexOf(row), 1); this._save(); return null;
+    }
+    this._save(); return { ...row };
+  }
+  _dayClosed(wd) { return (this.db.closed || []).some(d => d.work_date === wd); }
+  async listClosedDays(period) {                         // множество закрытых дат месяца 'YYYY-MM'
+    const pre = period + '-';
+    return (this.db.closed || []).filter(d => String(d.work_date).startsWith(pre)).map(d => d.work_date);
+  }
+  async closeDay(work_date) {                            // закрыть день (operator/owner)
+    this.db.closed = this.db.closed || [];
+    if (!this.db.closed.some(d => d.work_date === work_date))
+      this.db.closed.push({ work_date, closed_by: this.user?.id || null, closed_at: new Date().toISOString() });
+    this._save(); return work_date;
+  }
+  async reopenDay(work_date) {                           // открыть день — ТОЛЬКО владелец
+    if (this.user?.role !== 'owner') throw new Error('Открыть день может только владелец');
+    this.db.closed = (this.db.closed || []).filter(d => d.work_date !== work_date);
+    this._save(); return true;
+  }
+  async requestRetroEdit(work_date, employee_id, target, payload) {   // ретро-правка закрытого дня: заявка + код
+    if (!(this.db.closed || []).some(d => d.work_date === work_date)) throw new Error('день не закрыт');
+    this.db.retro = this.db.retro || [];
+    this.db.nextId.retro = this.db.nextId.retro || 1;   // существующий localStorage мог не иметь поля (иначе NaN-id)
+    if (this.db.retro.some(r => r.employee_id === employee_id && r.work_date === work_date && r.status === 'pending' && Date.now() < r.expires))
+      throw new Error('уже есть активный запрос на эту клетку');
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const id = this.db.nextId.retro++;
+    this.db.retro.push({ id, work_date, employee_id, target, new_fact: payload.new_fact ?? null, code, attempts: 0, status: 'pending', expires: Date.now() + 600000 });
+    this._save();
+    return { id, demoCode: code };   // demoCode — ТОЛЬКО демо (в проде код уходит по СМС и не возвращается)
+  }
+  async confirmRetroEdit(request_id, code) {             // -> 'ok' | 'wrong_code' | 'expired' | 'locked' | 'already_done' | 'not_found'
+    const r = (this.db.retro || []).find(x => x.id === request_id);
+    if (!r) return 'not_found';
+    if (r.status !== 'pending') return 'already_done';
+    if (Date.now() > r.expires) { r.status = 'expired'; this._save(); return 'expired'; }
+    if (r.attempts >= 5) { r.status = 'expired'; this._save(); return 'locked'; }
+    if (String(r.code) !== String(code).trim()) { r.attempts++; this._save(); return 'wrong_code'; }
+    const idx = this.db.schedule.findIndex(s => s.employee_id === r.employee_id && s.work_date === r.work_date);
+    let row = idx >= 0 ? this.db.schedule[idx] : null;
+    if (!row) { row = { id: this.db.nextId.schedule++, employee_id: r.employee_id, work_date: r.work_date, plan_start: null, plan_end: null, plan_kind: null, fact: null, source: 'manual' }; this.db.schedule.push(row); }
+    const old = row.fact ?? null;
+    row.fact = r.new_fact ?? null; row.updated_at = new Date().toISOString();
+    this.db.journal.unshift({ id: this.db.nextId.journal++, actor: this.user?.name || '?', action: 'retro', entity: 'schedule', entity_id: row.id, field: 'ретро-правка ' + r.work_date, old_value: String(old ?? '—'), new_value: String(r.new_fact ?? '—'), at: new Date().toISOString(), red: true });
+    r.status = 'confirmed'; this._save(); return 'ok';
+  }
+  async listRedRemarks(limit = 50) { return (this.db.journal || []).filter(j => j.red).slice(0, limit); }
   async listJournal(limit = 100) { return this.db.journal.slice(0, limit); }
 }
 
@@ -303,10 +389,73 @@ export class SupabaseStore {
     }
     const row = { employee_id: employeeId, work_date, source: 'manual', updated_by: this.user.id };
     if ('plan_start' in cell) row.plan_start = cell.plan_start ?? null;
+    if ('plan_end' in cell) row.plan_end = cell.plan_end ?? null;   // ручная правка = старт+код, диапазон импорта сбрасываем
     if ('plan_kind' in cell) row.plan_kind = cell.plan_kind ?? null;
     if ('fact' in cell) row.fact = cell.fact ?? null;
     const { data, error } = await this.sb.from('schedule').upsert(row, { onConflict: 'employee_id,work_date' }).select().single();
     if (error) throw error; return data;
+  }
+  async setScheduleBulk(cells) {   // массовое заполнение (шаблон/импорт). fact не трогаем — это план
+    const rows = cells.map(c => ({ employee_id: c.employee_id, work_date: c.work_date, plan_kind: c.plan_kind ?? null, plan_start: c.plan_start ?? null, plan_end: c.plan_end ?? null, source: c.source || 'template', updated_by: this.user.id }));
+    const { error } = await this.sb.from('schedule').upsert(rows, { onConflict: 'employee_id,work_date' });
+    if (error) throw error; return rows.length;
+  }
+  async clearScheduleMonth(employeeId, period) {
+    const start = period + '-01';
+    const [y, m] = period.split('-').map(Number);
+    const next = (m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01');
+    const { error } = await this.sb.from('schedule').delete().eq('employee_id', employeeId).gte('work_date', start).lt('work_date', next);
+    if (error) throw error; return true;
+  }
+  async setScheduleFact(employeeId, work_date, fact) {   // табель: пишем ТОЛЬКО факт (source/план не трогаем — сохраняем 'import')
+    // TODO(этап 5): append-only журнал правок факта через триггер БД — сейчас след только в updated_by
+    //   (перезаписывается при след. правке). Для анти-фрода нужна неизменяемая история кто/когда отметил.
+    const { data: upd, error } = await this.sb.from('schedule')
+      .update({ fact: fact ?? null, updated_by: this.user.id }).eq('employee_id', employeeId).eq('work_date', work_date).select();
+    if (error) throw error;
+    if (upd && upd.length) {
+      const r = upd[0];
+      if (!r.plan_kind && (r.fact ?? null) === null) {   // ни плана, ни факта — не держим пустышку (как setScheduleCell)
+        const { error: dErr } = await this.sb.from('schedule').delete().eq('employee_id', employeeId).eq('work_date', work_date);
+        if (dErr) throw dErr; return null;
+      }
+      return r;
+    }
+    if (fact == null) return null;                       // строки нет и писать нечего
+    const { data: ins, error: e2 } = await this.sb.from('schedule')   // вышел без плана — новая строка
+      .insert({ employee_id: employeeId, work_date, fact, source: 'manual', updated_by: this.user.id }).select().single();
+    if (e2) throw e2; return ins;
+  }
+  async listClosedDays(period) {                         // множество закрытых дат месяца 'YYYY-MM'
+    const start = period + '-01';
+    const [y, m] = period.split('-').map(Number);
+    const next = (m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01');
+    const { data, error } = await this.sb.from('closed_day').select('work_date').gte('work_date', start).lt('work_date', next);
+    if (error) throw error; return (data || []).map(d => d.work_date);
+  }
+  async closeDay(work_date) {                            // закрыть день (operator/owner). closed_by = default auth.uid() (RLS)
+    const { error } = await this.sb.from('closed_day').upsert({ work_date }, { onConflict: 'work_date', ignoreDuplicates: true });
+    if (error) throw error; return work_date;
+  }
+  async reopenDay(work_date) {                           // открыть день — RLS пускает только владельца
+    const { data, error } = await this.sb.from('closed_day').delete().eq('work_date', work_date).select();
+    if (error) throw error;
+    if (!data || !data.length) throw new Error('Открыть день может только владелец');
+    return true;
+  }
+  async requestRetroEdit(work_date, employee_id, target, payload) {   // RPC: заявка + СМС-код (код не возвращается)
+    const { data, error } = await this.sb.rpc('request_retro_edit', {
+      p_work_date: work_date, p_employee_id: employee_id, p_target: target,
+      p_new_fact: payload.new_fact ?? null, p_new_plan_kind: payload.new_plan_kind ?? null, p_new_plan_start: payload.new_plan_start ?? null });
+    if (error) throw error; return { id: data };
+  }
+  async confirmRetroEdit(request_id, code) {             // RPC: -> статус-строка ('ok'/'wrong_code'/'expired'/'locked'/…)
+    const { data, error } = await this.sb.rpc('confirm_retro_edit', { p_request_id: request_id, p_code: code });
+    if (error) throw error; return data;
+  }
+  async listRedRemarks(limit = 50) {                     // «красные замечания» владельцу: ретро-правки
+    const { data, error } = await this.sb.from('journal').select('*, actor_user:app_user(display_name)').eq('red', true).order('at', { ascending: false }).limit(limit);
+    if (error) throw error; return (data || []).map(j => ({ ...j, actor: j.actor_user?.display_name || j.actor }));
   }
   async listJournal(limit = 100) {
     const { data, error } = await this.sb.from('journal')

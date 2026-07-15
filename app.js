@@ -1,7 +1,7 @@
 /* Milena · Спринт 1 — вход, карточки сотрудников, специальности, журнал.
    Данные — через store.js (демо: localStorage · прод: Supabase).
    Все пользовательские строки при выводе проходят esc() — без исключений. */
-import { makeStore, lineLabel } from './store.js';
+import { makeStore, lineLabel } from './store.js?v=19';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -394,8 +394,58 @@ function cellText(c) {
   if (!c || !c.plan_kind) return '';
   const k = shiftKinds.find(x => x.code === c.plan_kind), short = k ? (k.short || k.label) : c.plan_kind;
   if (c.plan_kind === 'off' || c.plan_kind === 'absent') return short;
-  return c.plan_start ? String(c.plan_start).slice(0, 5) : short;
+  const hh = t => t ? String(t).slice(0, 5).replace(/:00$/, '').replace(/^0(\d)/, '$1') : '';
+  const s = hh(c.plan_start), e = hh(c.plan_end);
+  if (s && e) return s + '–' + e;   // импортированный график: «9–17»
+  return s || short;
 }
+// ── Табель (Вариант 2): план сверху серым + факт снизу цветом; прошлое=факт, будущее=план ──
+const fmtH = n => (Math.round(n * 10) / 10) + 'ч';                 // 8 → «8ч», 7.5 → «7.5ч»
+function planHoursOf(c) {                                           // плановые часы клетки (0 для выходного/пусто)
+  if (!c || !c.plan_kind || c.plan_kind === 'off' || c.plan_kind === 'absent') return 0;
+  if (c.plan_start && c.plan_end) {
+    const t = x => { const [h, m] = String(x).split(':').map(Number); return h + (m || 0) / 60; };
+    let d = t(c.plan_end) - t(c.plan_start); if (d <= 0) d += 24; return d;   // через полночь
+  }
+  const k = shiftKinds.find(x => x.code === c.plan_kind); return k && k.hours ? +k.hours : 0;
+}
+function factHoursOf(c) {                                           // фактические часы (для прошедших дней)
+  if (!c) return 0;
+  const fx = c.fact ?? null;
+  if (fx === 'x') return 0;                                         // не вышел
+  if (fx !== null && fx !== '' && !isNaN(parseFloat(fx))) return parseFloat(fx);   // свои часы
+  return planHoursOf(c);                                            // null = отработано по плану
+}
+function pastDay(day) {                                             // прошедший ли день (для факта)
+  const np = nowPeriod();
+  if (curPeriod < np) return true;
+  if (curPeriod > np) return false;
+  return day < new Date().getDate();                               // сегодня — ещё план (как в прототипе)
+}
+function factClass(c) {                                             // класс фона клетки по факту
+  const p = c && c.plan_kind, fx = c ? (c.fact ?? null) : null;
+  if (fx === 'x') return ' f-miss';
+  if (fx !== null && fx !== '' && !isNaN(parseFloat(fx)))
+    return Math.abs(parseFloat(fx) - planHoursOf(c)) > 0.05 ? ' f-dev' : ' f-ok';   // часы = плановым → «по плану», не расхождение
+  return (p && p !== 'off' && p !== 'absent') ? ' f-ok' : ' f-rest';
+}
+function schedCellInner(c, past) {                                  // содержимое клетки: план (мини) + факт (цвет)
+  const p = c && c.plan_kind, fx = c ? (c.fact ?? null) : null;
+  if (!p && fx === null) return '';
+  const planTxt = cellText(c);                                     // «9–17» / «В» / «С» / «—»
+  if (!past) return `<span class="iv mini">${esc(planTxt)}</span>`;               // будущее — только план
+  const isWork = p && p !== 'off' && p !== 'absent';
+  const chip = esc(p ? planTxt : 'вне гр.');                       // вышел без плана (в свой выходной)
+  if (fx === 'x') return `<span class="iv mini">${chip}</span><span class="fh miss">—</span>`;
+  if (fx !== null && fx !== '' && !isNaN(parseFloat(fx))) {
+    const n = parseFloat(fx), dev = Math.abs(n - planHoursOf(c)) > 0.05;   // ровно плановые часы = «по плану» (зелёным), иначе отклонение (янтарь)
+    return `<span class="iv mini">${chip}</span><span class="fh ${dev ? 'dev' : 'ok'}">${fmtH(n)}</span>`;
+  }
+  if (isWork) return `<span class="iv mini">${esc(planTxt)}</span><span class="fh ok">${fmtH(planHoursOf(c))}</span>`;
+  return `<span class="iv mini faint">${esc(planTxt)}</span>`;      // выходной/отпуск по плану — просто план тускло
+}
+let closedDays = new Set();               // закрытые даты текущего месяца (лок табеля)
+let redRemarks = [];                      // «красные замечания» владельцу: ретро-правки после закрытия
 // renderSchedule — грузит данные месяца из сети, затем рисует. drawSchedule — только рисует
 // из уже загруженных scheduleRows + текущих фильтров (мгновенно, без сети → без гонок/мерцания).
 async function renderSchedule() {
@@ -403,9 +453,11 @@ async function renderSchedule() {
   if (!curPeriod) curPeriod = nowPeriod();
   const seq = ++schedSeq;                 // защита от гонки: быстрое переключение месяцев даёт несколько запросов
   try {
-    const [rows, kinds] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds()]);
+    const [rows, kinds, closed] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds(), store.listClosedDays(curPeriod)]);
     if (seq !== schedSeq) return;         // ответ пришёл не для текущего запроса — отбрасываем (иначе чужой месяц перетрёт)
-    scheduleRows = rows; shiftKinds = kinds;
+    scheduleRows = rows; shiftKinds = kinds; closedDays = new Set(closed);
+    redRemarks = isOwner() ? await store.listRedRemarks().catch(e => { console.warn('listRedRemarks:', e); return []; }) : [];   // ретро-правки — видит только владелец
+    if (seq !== schedSeq) return;
     drawSchedule();
   } catch (e) { toast('Не удалось загрузить график: ' + (e.message || e), true); }
 }
@@ -413,7 +465,12 @@ function drawSchedule() {
   if (!isStaff() || !$('scheduleGrid')) return;
   if ($('mLabel')) $('mLabel').textContent = periodLabel(curPeriod);
   const nd = daysInMonth(curPeriod);
-  const editable = canEditSchedule();
+  const editable = canEditSchedule();     // оператор ведёт график (для tap по имени / шаблонов)
+  const meRole = store.me()?.role;
+  const isClosed = d => closedDays.has(cellDate(d));
+  const anyEdit = meRole === 'operator' || meRole === 'owner';   // есть ли право что-то править (для навешивания обработчиков)
+  // клетку дня d правит: оператор — если день ОТКРЫТ; владелец — если ЗАКРЫТ (override, в журнал)
+  const canEditDay = d => (meRole === 'operator' && !isClosed(d)) || (meRole === 'owner' && isClosed(d));
   const todayD = (nowPeriod() === curPeriod) ? new Date().getDate() : 0;
   const active = employees.filter(e => e.status !== 'archived');
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
@@ -423,20 +480,33 @@ function drawSchedule() {
   const catF = $('schedCat')?.dataset.value || '';
 
   // режим: оператор правит, владелец смотрит
-  if ($('schedSub')) $('schedSub').textContent = editable ? 'Клик по клетке — тип смены + время начала. Ночные через полночь = фикс за смену.' : 'Просмотр: график ведёт оператор с листов голов отделений.';
-  if ($('schedNote')) $('schedNote').innerHTML = editable ? '' : `<div class="readonly-note">${ICONS.lock} График заполняет оператор (Алёна) по листам, которые головы отделений согласовали со своими сотрудниками. У вас — просмотр отмеченного.</div>`;
+  if ($('schedSub')) $('schedSub').textContent = editable ? 'Прошедшие дни — клик по клетке отмечает факт (часы / не вышел). Будущие — задать смену. Клик по имени — шаблон на месяц.' : 'Просмотр: план (серым) и факт (цветом). Расхождения факта с планом — справа и в шапке.';
+  if ($('schedNote')) {
+    const rb = (isOwner() && redRemarks.length)   // красный баннер: ретро-правки после закрытия (кто/когда/было→стало)
+      ? `<div class="red-banner"><div class="rb-head">${ICONS.lock}<b>Правки после закрытия: ${redRemarks.length}</b></div>${redRemarks.slice(0, 8).map(j => `<div class="rb-row"><span class="rb-what">${esc(j.field || 'ретро-правка')}</span><span class="rb-val">${esc(String(j.old_value ?? '—'))} → ${esc(String(j.new_value ?? '—'))}</span><span class="rb-who">${esc(j.actor || '?')} · ${esc(String(j.at).slice(0, 16).replace('T', ' '))}</span></div>`).join('')}</div>`
+      : '';
+    $('schedNote').innerHTML = rb + (editable ? '' : `<div class="readonly-note">${ICONS.lock} График ведёт оператор (Алёна). У вас — просмотр; закрытые дни можно править напрямую.</div>`);
+  }
 
   // покрытие месяца: считаем только РАБОЧИЕ смены (Выходной/Не вышел — не смена)
   const worked = s => s.plan_kind && s.plan_kind !== 'off' && s.plan_kind !== 'absent';
   const withShift = new Set(scheduleRows.filter(worked).map(s => s.employee_id));
   const shifts = scheduleRows.filter(worked).length;
+  // расхождения факта с планом (анти-фрод сигнал владельцу): 'x' на рабочий день / часы ≠ плановых / выход без плана
+  const isDev = s => { const fx = s.fact ?? null; if (fx === null) return false; if (fx === 'x') return planHoursOf(s) > 0; const n = parseFloat(fx); return !isNaN(n) && Math.abs(n - planHoursOf(s)) > 0.05; };   // порог как в factClass/schedCellInner
+  const devs = scheduleRows.filter(isDev).length;
   if ($('schedStat')) {
     const pct = active.length ? Math.round(withShift.size / active.length * 100) : 0;
-    $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="cov-bar" title="${pct}% заполнено"><span class="cov-fill" style="width:${pct}%"></span></span><span class="gap-chips"><span class="mini-chip">${shifts} смен</span></span>`;
+    $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="cov-bar" title="${pct}% заполнено"><span class="cov-fill" style="width:${pct}%"></span></span><span class="gap-chips"><span class="mini-chip">${shifts} смен</span>${devs ? `<span class="mini-chip chip-dev" title="факт отличается от плана">⚠ расхождений: ${devs}</span>` : ''}</span>`;
   }
 
+  // индекс клетки для O(1) (иначе find по всем строкам на каждую из ~3700 клеток)
+  const byKey = new Map(scheduleRows.map(s => [s.employee_id + '|' + s.work_date, s]));
+  const cget = (id, d) => byKey.get(id + '|' + cellDate(d)) || null;
+
   let head = '<div class="gr-corner">Сотрудник</div>';
-  for (let d = 1; d <= nd; d++) head += `<div class="gr-day${d === todayD ? ' today' : ''}">${d}</div>`;
+  for (let d = 1; d <= nd; d++) head += `<div class="gr-day${d === todayD ? ' today' : ''}${isClosed(d) ? ' dlock' : ''}${anyEdit ? ' tapday' : ''}" data-day="${d}" title="${isClosed(d) ? 'День закрыт — клик' : anyEdit ? 'Закрыть день' : ''}">${d}${isClosed(d) ? `<i class="dlockmark">${ICONS.lock}</i>` : ''}</div>`;
+  head += '<div class="gr-day sum">Смен</div><div class="gr-day sum">План</div><div class="gr-day sum">Факт</div><div class="gr-day sum" title="факт − план за прошедшие дни">Δ</div>';
   let rows = '', shown = 0;
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
@@ -445,22 +515,56 @@ function drawSchedule() {
     rows += `<div class="gr-group"><span><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${list.length}</span></div>`;
     for (const e of list) {
       shown++;
-      rows += `<div class="gr-name" title="${esc(e.fio)}" style="box-shadow:inset 3px 0 0 ${catColor(cat)}">${esc(e.fio)}</div>`;
+      rows += `<div class="gr-name${editable ? ' tap' : ''}" data-emp="${e.id}" title="${editable ? 'Шаблон на месяц: ' : ''}${esc(e.fio)}" style="box-shadow:inset 3px 0 0 ${catColor(cat)}">${esc(e.fio)}</div>`;
+      let planM = 0, planPast = 0, factPast = 0, cnt = 0;
       for (let d = 1; d <= nd; d++) {
-        const c = cellOf(e.id, d);
-        rows += `<div class="gr-cell${c && c.plan_kind ? ' filled k-' + esc(c.plan_kind) : ''}${d === todayD ? ' today' : ''}${editable ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${esc(cellText(c))}</div>`;
+        const c = cget(e.id, d), pst = pastDay(d);
+        const empty = !(c && (c.plan_kind || (c.fact ?? null) !== null));
+        planM += planHoursOf(c);
+        if (pst) { planPast += planHoursOf(c); const fh = factHoursOf(c); factPast += fh; if (fh > 0) cnt++; }
+        const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
+        rows += `<div class="gr-cell sc2${bg}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
       }
+      const delta = factPast - planPast, ds = Math.abs(delta) < 0.05 ? '0' : (delta > 0 ? '+' : '−') + fmtH(Math.abs(delta));
+      rows += `<div class="gr-sum">${cnt}</div><div class="gr-sum">${fmtH(planM)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}">${ds}</div>`;
     }
   }
   const grid = $('scheduleGrid');
-  grid.style.gridTemplateColumns = `150px repeat(${nd}, minmax(44px, 1fr))`;
+  grid.style.gridTemplateColumns = `150px repeat(${nd}, minmax(44px, 1fr)) repeat(4, minmax(46px, auto))`;
   grid.innerHTML = shown ? head + rows : `<div class="empty" style="padding:40px">${active.length ? 'Никого не найдено' : 'Нет сотрудников'}</div>`;
-  if (editable) grid.querySelectorAll('.gr-cell').forEach(cell => cell.onclick = () => scheduleCellPopup(+cell.dataset.emp, +cell.dataset.day));
+  if (anyEdit) {
+    grid.querySelectorAll('.gr-cell').forEach(cell => cell.onclick = () => {
+      const emp = +cell.dataset.emp, d = +cell.dataset.day;
+      if (isClosed(d) && meRole === 'operator') { scheduleRetroDialog(emp, d); return; }   // закрытый день → правка по СМС
+      if (!canEditDay(d)) return;                 // владелец на открытом дне — только просмотр
+      pastDay(d) ? scheduleFactPopup(emp, d) : scheduleCellPopup(emp, d);   // прошлое → факт, будущее → план
+    });
+    grid.querySelectorAll('.gr-day.tapday').forEach(h => h.onclick = () => scheduleDayDialog(+h.dataset.day));
+  }
+  if (editable) grid.querySelectorAll('.gr-name.tap').forEach(n => n.onclick = () => scheduleTemplateDialog(+n.dataset.emp));
+}
+// Закрытие/открытие дня табеля. Закрытый день лочит клетки от оператора (правит владелец / Алёна по СМС в 5б).
+function scheduleDayDialog(day) {
+  const date = cellDate(day), closed = closedDays.has(date), meRole = store.me()?.role;
+  const label = day + ' ' + periodLabel(curPeriod);
+  if (!closed) {
+    showModal(`<h3>Закрыть день ${esc(label)}?</h3>
+      <div class="msub">После закрытия клетки этого дня блокируются от правок. Изменить закрытый день сможет владелец напрямую (а Алёна — по СМС-подтверждению, этап 5б). Всё пишется в журнал.</div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="dCancel">Отмена</button><button class="btn btn-primary btn-sm" id="dClose">${ICONS.lock}Закрыть день</button></div>`);
+    $('dClose').onclick = async () => { const b = $('dClose'); if (b.disabled) return; b.disabled = true; try { await store.closeDay(date); closeModal(); await renderSchedule(); toast(ICONS.check + 'День ' + day + ' закрыт'); } catch (e) { b.disabled = false; toast(e.message || e, true); } };
+    $('dCancel').onclick = closeModal;
+  } else {
+    showModal(`<h3>${ICONS.lock} День ${esc(label)} закрыт</h3>
+      <div class="msub">Клетки заблокированы от правок. ${meRole === 'owner' ? 'Как владелец — вы можете открыть день или править клетки напрямую (запишется в журнал).' : 'Исправить может владелец, либо вы по СМС-подтверждению (этап 5б) — с уведомлением владельца.'}</div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="dCancel">Закрыть</button>${meRole === 'owner' ? `<button class="btn btn-primary btn-sm" id="dOpen">Открыть день</button>` : ''}</div>`);
+    if ($('dOpen')) $('dOpen').onclick = async () => { const b = $('dOpen'); if (b.disabled) return; b.disabled = true; try { await store.reopenDay(date); closeModal(); await renderSchedule(); toast('День ' + day + ' открыт'); } catch (e) { b.disabled = false; toast(e.message || e, true); } };
+    $('dCancel').onclick = closeModal;
+  }
 }
 function scheduleCellPopup(empId, day) {
   const e = employees.find(x => x.id === empId); if (!e) return;
   const date = cellDate(day), c = cellOf(empId, day);
-  const opts = shiftKinds.map(k => `<option value="${k.code}" ${c && c.plan_kind === k.code ? 'selected' : ''}>${esc(k.label)}</option>`).join('');
+  const opts = shiftKinds.filter(k => k.code !== 'custom').map(k => `<option value="${k.code}" ${c && c.plan_kind === k.code ? 'selected' : ''}>${esc(k.label)}</option>`).join('');   // custom без конца смены = 0ч → исключаем (как в шаблоне)
   showModal(`<h3>${esc(e.fio.split(' ').slice(0, 2).join(' '))}</h3><div class="msub">${day} ${esc(periodLabel(curPeriod))} · смена = тип + время начала</div>
     <label class="flbl">Тип смены</label><select class="input" id="scKind"><option value="">— пусто —</option>${opts}</select>
     <label class="flbl">Время начала</label><input class="input" id="scStart" type="time" value="${c && c.plan_start ? esc(String(c.plan_start).slice(0, 5)) : ''}">
@@ -468,12 +572,131 @@ function scheduleCellPopup(empId, day) {
   $('scSave').onclick = async () => {
     const btn = $('scSave'); if (btn.disabled) return; btn.disabled = true;
     const kind = $('scKind').value || null;   // время без типа смены не сохраняем (иначе невидимая строка-пустышка)
-    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, fact: null }); closeModal(); await renderSchedule(); toast(ICONS.check + 'Сохранено'); }
+    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, plan_end: null, fact: null }); closeModal(); await renderSchedule(); toast(ICONS.check + 'Сохранено'); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
   $('scClear').onclick = async () => {
-    try { await store.setScheduleCell(empId, date, { plan_kind: null, plan_start: null, fact: null }); closeModal(); await renderSchedule(); toast('Очищено'); }
+    try { await store.setScheduleCell(empId, date, { plan_kind: null, plan_start: null, plan_end: null, fact: null }); closeModal(); await renderSchedule(); toast('Очищено'); }
     catch (err) { toast(err.message || err, true); }
+  };
+}
+// Табель: отметка факта за прошедший день. Вышел по плану = сброс (null); прочерк = 'x'; свои часы = число.
+function scheduleFactPopup(empId, day) {
+  const e = employees.find(x => x.id === empId); if (!e) return;
+  const date = cellDate(day), c = cellOf(empId, day);
+  const p = c && c.plan_kind, isWork = p && p !== 'off' && p !== 'absent';
+  const cur = c ? (c.fact ?? null) : null;
+  const planLine = p ? `план: <b>${esc(cellText(c))}</b>${isWork ? ' · ' + fmtH(planHoursOf(c)) : ''}` : 'плана нет';
+  const now = cur === 'x' ? 'не вышел' : (cur != null && cur !== '' ? fmtH(parseFloat(cur)) : (isWork ? 'по плану' : '—'));
+  const hVal = (cur != null && cur !== '' && cur !== 'x') ? esc(String(cur)) : '';
+  showModal(`<h3>${esc(e.fio.split(' ').slice(0, 2).join(' '))}</h3>
+    <div class="msub">${day} ${esc(periodLabel(curPeriod))} · факт · ${planLine}</div>
+    <div class="fact-opts">
+      ${isWork ? `<button class="btn btn-ghost fact-btn" data-f="plan">${ICONS.check}Вышел по плану · ${fmtH(planHoursOf(c))}</button>` : ''}
+      ${isWork ? `<button class="btn btn-ghost fact-btn fact-miss" data-f="x">— Не вышел</button>` : ''}
+      <div class="frow" style="align-items:flex-end">
+        <div style="flex:1"><label class="flbl">Свои часы${isWork ? '' : ' (вышел вне графика)'}</label>
+          <input class="input" id="fH" type="number" min="0" max="24" step="0.5" placeholder="напр. 6" value="${hVal}"></div>
+        <button class="btn btn-primary btn-sm" id="fSave">${ICONS.check}ОК</button>
+      </div>
+    </div>
+    <div class="modal-foot"><span class="msub">сейчас: <b>${now}</b></span><button class="btn btn-ghost btn-sm" id="fClear">Сбросить</button></div>`);
+  const apply = async fact => {
+    try { await store.setScheduleFact(empId, date, fact); closeModal(); await renderSchedule(); toast(ICONS.check + 'Факт отмечен'); }
+    catch (err) { toast(err.message || err, true); }
+  };
+  $('modalBox').querySelectorAll('.fact-btn').forEach(b => b.onclick = () => apply(b.dataset.f === 'plan' ? null : b.dataset.f));
+  $('fSave').onclick = () => { let v = parseFloat($('fH').value); if (isNaN(v) || v < 0 || v > 24) return toast('Часы 0–24', true); v = Math.round(v * 2) / 2; apply(String(v)); };   // до получаса (шаг поля 0.5) → проходит CHECK
+  $('fClear').onclick = () => apply(null);
+}
+
+// Ретро-правка закрытого дня (оператор): выбрать новый факт → код по СМС → подтвердить. Уходит владельцу в «красные замечания».
+function scheduleRetroDialog(empId, day) {
+  const e = employees.find(x => x.id === empId); if (!e) return;
+  const date = cellDate(day), c = cellOf(empId, day);
+  const p = c && c.plan_kind, isWork = p && p !== 'off' && p !== 'absent';
+  showModal(`<h3>${esc(e.fio.split(' ').slice(0, 2).join(' '))}</h3>
+    <div class="msub">${day} ${esc(periodLabel(curPeriod))} · день закрыт</div>
+    <div class="lockmsg">${ICONS.lock} Исправление закрытого дня — по коду из СМС на ваш телефон. Правка уйдёт владельцу в «замечания».</div>
+    <label class="flbl">Новый факт</label>
+    <div class="fact-opts">
+      ${isWork ? `<button class="btn btn-ghost fact-btn" data-f="null">${ICONS.check}Вышел по плану · ${fmtH(planHoursOf(c))}</button>` : ''}
+      ${isWork ? `<button class="btn btn-ghost fact-btn fact-miss" data-f="x">— Не вышел</button>` : ''}
+      <div class="frow" style="align-items:flex-end"><div style="flex:1"><label class="flbl">Свои часы</label><input class="input" id="rH" type="number" min="0" max="24" step="0.5" placeholder="напр. 6"></div><button class="btn btn-ghost btn-sm" id="rHpick">Выбрать</button></div>
+    </div>
+    <div class="msub" id="rPick" style="min-height:18px"></div>
+    <div class="modal-foot"><button class="btn btn-primary btn-sm" id="rReq" disabled>${ICONS.check}Получить код по СМС</button></div>`);
+  let chosen, chosenLabel;
+  const pick = (v, label) => { chosen = v; chosenLabel = label; $('rPick').textContent = 'выбрано: ' + label; $('rReq').disabled = false; };
+  $('modalBox').querySelectorAll('.fact-btn').forEach(b => b.onclick = () => pick(b.dataset.f === 'null' ? null : 'x', b.textContent.trim()));
+  $('rHpick').onclick = () => { let v = parseFloat($('rH').value); if (isNaN(v) || v < 0 || v > 24) return toast('Часы 0–24', true); v = Math.round(v * 2) / 2; pick(String(v), v + 'ч'); };
+  $('rReq').onclick = async () => {
+    const btn = $('rReq'); if (btn.disabled) return; btn.disabled = true;
+    try { const res = await store.requestRetroEdit(date, empId, 'fact', { new_fact: chosen }); retroConfirmPhase(res.id, res.demoCode, chosenLabel); }
+    catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
+}
+function retroConfirmPhase(requestId, demoCode, label) {
+  const RUS = { wrong_code: 'Неверный код', expired: 'Код истёк — запросите заново', locked: 'Слишком много попыток — запросите новый код', already_done: 'Уже обработано', forbidden: 'Нет прав', not_found: 'Заявка не найдена' };
+  showModal(`<h3>Код подтверждения</h3>
+    <div class="msub">${demoCode ? `<b>ДЕМО:</b> код <b>${esc(demoCode)}</b> (в проде придёт по СМС)` : 'Код отправлен на ваш телефон по СМС.'} · правка: ${esc(label || '')}</div>
+    <label class="flbl">Код из СМС</label><input class="input" id="rCode" inputmode="numeric" maxlength="6" placeholder="6 цифр" autocomplete="off">
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="rCancel">Отмена</button><button class="btn btn-primary btn-sm" id="rConf">${ICONS.check}Подтвердить</button></div>`);
+  $('rCancel').onclick = () => closeModal();
+  $('rConf').onclick = async () => {
+    const btn = $('rConf'); if (btn.disabled) return; btn.disabled = true;
+    try {
+      const st = await store.confirmRetroEdit(requestId, $('rCode').value.trim());
+      if (st === 'ok') { closeModal(); await renderSchedule(); toast(ICONS.check + 'Исправлено · владелец уведомлён'); }
+      else { btn.disabled = false; toast(RUS[st] || st, true); }
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
+}
+
+// Шаблоны графика: заполнить весь месяц по паттерну одним кликом (клик по имени сотрудника).
+// work=true → рабочая смена (выбранный тип+время), work=false → Выходной. Циклы считаются от «дня отсчёта».
+function templateDays(pattern, period, anchor) {
+  const nd = daysInMonth(period), [y, m] = period.split('-').map(Number);
+  const cycles = { '2/2': [1, 1, 0, 0], '3/3': [1, 1, 1, 0, 0, 0], 'sutki3': [1, 0, 0, 0] };
+  const out = [];
+  for (let d = 1; d <= nd; d++) {
+    let work;
+    if (pattern === '5/2') { const wd = new Date(y, m - 1, d).getDay(); work = wd >= 1 && wd <= 5; }   // Пн–Пт
+    else if (pattern === 'every') work = true;
+    else { const cyc = cycles[pattern] || [1]; work = cyc[((d - anchor) % cyc.length + cyc.length) % cyc.length] === 1; }
+    out.push({ day: d, work });
+  }
+  return out;
+}
+function scheduleTemplateDialog(empId) {
+  const e = employees.find(x => x.id === empId); if (!e) return;
+  const nd = daysInMonth(curPeriod);
+  const kinds = shiftKinds.filter(k => !['off', 'absent', 'custom'].includes(k.code));
+  const kopts = kinds.map(k => `<option value="${k.code}"${k.code === 'day' ? ' selected' : ''}>${esc(k.label)}</option>`).join('');
+  const pats = [['5/2', '5/2 — Пн-Пт работа, Сб-Вс выходные'], ['2/2', '2/2 — два через два'], ['3/3', '3/3 — три через три'], ['sutki3', 'Сутки/3 — сутки, потом 3 выходных'], ['every', 'Каждый день одинаково']];
+  showModal(`<h3>${esc(e.fio.split(' ').slice(0, 2).join(' '))}</h3>
+    <div class="msub">Заполнить весь ${esc(periodLabel(curPeriod))} по шаблону · потом можно поправить руками</div>
+    <label class="flbl">Шаблон</label><select class="input" id="tpPat">${pats.map(p => `<option value="${p[0]}">${esc(p[1])}</option>`).join('')}</select>
+    <div class="frow"><div><label class="flbl">Тип смены</label><select class="input" id="tpKind">${kopts}</select></div>
+      <div><label class="flbl">Время начала</label><input class="input" id="tpStart" type="time" value="08:00"></div></div>
+    <label class="flbl">С какого дня начать <span style="color:var(--ink-3)">(для 2/2, 3/3, сутки)</span></label>
+    <input class="input" id="tpAnchor" type="number" min="1" max="${nd}" value="1">
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="tpClear">Очистить месяц</button><button class="btn btn-primary btn-sm" id="tpFill">${ICONS.check}Заполнить</button></div>`);
+  $('tpFill').onclick = async () => {
+    const btn = $('tpFill'); if (btn.disabled) return; btn.disabled = true;
+    const pat = $('tpPat').value, kind = $('tpKind').value, start = $('tpStart').value || null;
+    const anchor = Math.min(nd, Math.max(1, +$('tpAnchor').value || 1));
+    const cells = templateDays(pat, curPeriod, anchor).map(x => ({
+      employee_id: empId, work_date: cellDate(x.day),
+      plan_kind: x.work ? kind : 'off', plan_start: x.work ? start : null,
+    })).filter(c => !closedDays.has(c.work_date));   // закрытые дни шаблоном не трогаем
+    try { await store.setScheduleBulk(cells); closeModal(); await renderSchedule(); toast(ICONS.check + 'Заполнено по шаблону'); }
+    catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
+  $('tpClear').onclick = async () => {
+    const btn = $('tpClear'); if (btn.disabled) return; btn.disabled = true;
+    try { await store.clearScheduleMonth(empId, curPeriod); closeModal(); await renderSchedule(); toast('Месяц очищен'); }
+    catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
 }
 
