@@ -1,7 +1,7 @@
 /* Milena · Спринт 1 — вход, карточки сотрудников, специальности, журнал.
    Данные — через store.js (демо: localStorage · прод: Supabase).
    Все пользовательские строки при выводе проходят esc() — без исключений. */
-import { makeStore, lineLabel } from './store.js?v=19';
+import { makeStore, lineLabel } from './store.js?v=20';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -834,7 +834,7 @@ applyIcons();
   try {
     await Promise.race([
       store.init(),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('база не ответила за 8 сек')), 8000)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('база не ответила за 20 сек')), 20000)),   // холодный первый коннект к supabase.co (за Cloudflare) бывает 7–11с; после прогрева — <300мс
     ]);
     if (store.me()) await enter();  // если уже была сессия — входим; иначе форма уже показана
   } catch (e) {
