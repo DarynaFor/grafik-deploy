@@ -152,6 +152,10 @@ body.authed .login-stage{display:none}
 .jrow .jt{font-size:11px;color:var(--ink-3);white-space:nowrap;margin-left:auto;font-variant-numeric:tabular-nums}
 .jrow .who{color:var(--ink-2);font-size:12px;margin-top:2px;font-weight:600}
 .jrow s{color:var(--ink-3)} .jrow b{color:var(--green-d)}
+/* красные записи журнала: премия (её не ловит сверка), сторно, деньги уволенному,
+   старый период, смена правила расчёта — то, на что владелец должен смотреть сам */
+.jrow.jred{background:rgba(255,107,107,.07);border-left:3px solid var(--red);padding-left:15px}
+.jrow .jact{color:var(--red-d);font-size:11px;font-weight:800;letter-spacing:.06em}
 .empty{text-align:center;padding:46px 20px;color:var(--ink-2)}
 .readonly-note{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-3);background:var(--fill-1);border:1px dashed var(--glass-bd);border-radius:12px;padding:9px 13px;margin-bottom:16px}
 
@@ -342,3 +346,69 @@ body.authed .login-stage{display:none}
 .mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:30;background:var(--bar);backdrop-filter:var(--blur);border-top:1px solid var(--glass-bd);padding:7px 10px calc(7px + env(safe-area-inset-bottom))}
 .mobile-nav button{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;font-weight:700;color:var(--ink-3);padding:6px}
 .mobile-nav button.active{color:var(--green-d)}
+/* смена ставки: было → станет, чтобы владелец видел последствие до подтверждения */
+.rc-diff{display:grid;gap:6px;background:var(--fill-1);border:1px solid var(--hair);border-radius:10px;padding:11px 13px;margin:10px 0 4px;font-size:13.5px}
+.rc-diff s{color:var(--ink-3)} .rc-diff b{color:var(--green-d)}
+/* смена ВИДА оплаты: явно пишем, что перестанет начисляться (иначе владелец,
+   добавляя процентнику сменную ставку, молча закрывал бы его процент) */
+.rc-warn{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.35);border-radius:10px;padding:10px 12px;margin:10px 0 4px;font-size:13px;line-height:1.5}
+.rc-warn b{color:var(--red-d)}
+
+/* ── Расчёт: СМЕШАННАЯ таблица ────────────────────────────────────────
+   Слева по строкам начисления (видно, из чего сложилась сумма), справа одно
+   на человека через rowspan (аванс/наличка/премия — деньги за месяц). */
+.pw{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:13.5px}
+.pw th{position:sticky;top:0;z-index:3;background:var(--surf-1);color:var(--ink-3);font-size:10.5px;
+  text-transform:uppercase;letter-spacing:.09em;font-weight:700;padding:9px 12px;text-align:left;
+  border-bottom:1px solid var(--hair);white-space:nowrap}
+.pw td{padding:9px 12px;border-bottom:1px solid var(--hair);vertical-align:middle;white-space:nowrap;background:var(--bg)}
+.pw .num{text-align:right;font-variant-numeric:tabular-nums}
+.pw .sep{border-left:1px solid var(--glass-bd)}
+/* примороженные слева «Сотрудник» и справа «К выдаче»: на телефоне при скролле
+   всегда видно, КТО и СКОЛЬКО кэшем на руки */
+.pw .pw-name{position:sticky;left:0;z-index:2;background:var(--surf-2);font-weight:600;
+  width:210px;max-width:210px;white-space:normal;border-right:1px solid var(--glass-bd)}
+.pw th.pw-name{z-index:4}
+/* «К выдаче» ВЫШЕ имени: при равном z-index правая колонка закрашивала имя и
+   резала чипы посреди слова */
+.pw .pw-pay{position:sticky;right:0;z-index:3;background:var(--surf-2);border-left:1px solid var(--glass-bd)}
+.pw th.pw-pay{z-index:5}
+/* Имя не должно распирать колонку: длинное ФИО обрезаем, чипы уходят на 2-ю
+   строку. Иначе у человека с 3–4 флагами имя занимало почти весь экран — чем
+   больше проблем, тем меньше видно его денег. */
+.pw-fio{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pw-flags{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
+.pw-row{cursor:pointer;transition:.1s}
+.pw-row:hover td{background:var(--fill-1)}
+.pw-row:hover .pw-name,.pw-row:hover .pw-pay{background:var(--fill-2)}
+.pw-sub td{color:var(--ink-2)}
+.pw-total td{background:var(--surf-1);font-weight:700;border-top:1px solid var(--glass-bd);border-bottom:none}
+.pw-total .pw-name,.pw-total .pw-pay{background:var(--surf-1)}
+.pw .money{color:var(--green-d)}
+.pw-flag{display:inline-block;padding:2px 7px;border-radius:var(--r-pill);
+  font-size:10px;font-weight:700;letter-spacing:.03em;vertical-align:middle}
+.pw-flag.red{background:rgba(255,107,107,.14);color:var(--red-d)}
+.pw-flag.amber{background:rgba(242,193,78,.14);color:var(--amber-d)}
+.mini-chip.warn{background:rgba(255,107,107,.12);color:var(--red-d)}
+/* модалка человека */
+.me-row{display:flex;justify-content:space-between;gap:14px;padding:3px 0;font-size:13.5px}
+.me-sum{border-top:1px solid var(--hair);margin-top:5px;padding-top:7px;font-weight:700}
+.me-add{display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center}
+.pm-hist{max-height:180px;overflow-y:auto;border:1px solid var(--hair);border-radius:10px;padding:8px 11px}
+.pm-ev{display:flex;flex-direction:column;gap:1px;padding:5px 0;border-bottom:1px solid var(--hair)}
+.pm-ev:last-child{border:none}
+/* Телефон владельца — главный сценарий: две примороженные колонки НЕ должны
+   съедать экран. 130+78 = 208 из ~350, середина остаётся достижимой скроллом. */
+@media (max-width:720px){
+  .me-add{grid-template-columns:1fr}
+  .pw{font-size:12.5px}
+  .pw td,.pw th{padding:7px 8px}
+  .pw .pw-name{width:130px;max-width:130px}
+  .pw .pw-pay{max-width:78px}
+  .pw-flag{font-size:9px;padding:1px 5px}
+}
+/* сторно: исходная запись гасится, встречная помечается — обе остаются видны */
+.pm-ev.pm-dead{opacity:.5}
+.pm-ev.pm-dead b{text-decoration:line-through}
+.pm-ev.pm-storno{background:rgba(255,107,107,.06);border-radius:8px;padding-left:8px;padding-right:8px}
+.pm-rev{margin-left:8px;padding:1px 8px;font-size:11px;color:var(--red-d)}

@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script>(function(){try{var t=localStorage.getItem('milena-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-<link rel="stylesheet" href="styles.css?v=22">
+<link rel="stylesheet" href="styles.css?v=29">
 </head>
 <body>
 
@@ -89,6 +89,22 @@
       <div id="ratesList"></div>
     </section>
 
+    <section class="screen" id="s-payroll">
+      <div class="page-head">
+        <div><h1>Расчёт</h1><p>Деньги из графика: зарплата, аванс, наличка, к выдаче. Клик по строке — разбивка и ввод.</p></div>
+        <div class="right">
+          <div class="month-nav"><button class="mn-btn" id="pPrev" aria-label="Пред. месяц">‹</button><span id="pLabel"></span><button class="mn-btn" id="pNext" aria-label="След. месяц">›</button></div>
+        </div>
+      </div>
+      <div class="sched-tools">
+        <div class="search"><span data-ic="search"></span><input id="payrollSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+        <div id="payrollCat" class="cselect"></div>
+        <div id="payrollStat" class="sched-stat"></div>
+      </div>
+      <div id="payrollNote"></div>
+      <div class="gridwrap"><div id="payrollTable"></div></div>
+    </section>
+
     <section class="screen" id="s-journal">
       <div class="page-head">
         <div><h1>Журнал</h1><p>Кто, когда и что изменил. Записи не удаляются и не правятся.</p></div>
@@ -108,9 +124,12 @@
 
 <div class="mobile-nav" id="mobileNav"></div>
 <div class="modal-ov" id="modalOv"><div class="modal" id="modalBox"></div></div>
+<!-- второй слой: диалог поверх открытой формы (подтверждение суммы и т.п.),
+     чтобы форма под ним не затиралась одним общим #modalBox -->
+<div class="modal-ov" id="modalOv2"><div class="modal" id="modalBox2"></div></div>
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=22"></script>
+<script type="module" src="app.js?v=29"></script>
 </body>
 </html>

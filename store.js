@@ -6,6 +6,15 @@
 const LS_KEY = 'milena-app-demo-v1';
 const LOGIN_DAY_KEY = 'milena-login-day';                                        // день последнего входа (МСК)
 const mskDay = () => new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);   // календарная дата в МСК (UTC+3) — для ежедневного сброса доступа
+// С какого числа действует ставка. НЕ «сегодня», а 1-е число текущего месяца.
+// Причина: ставка заводится один раз и живёт, пока её не поменяли (меняется ~раз
+// в год, и только владельцем). Заводя её, Милена не заключает новый договор —
+// она записывает то, что человек УЖЕ получает. С датой «сегодня» ставка,
+// внесённая 16-го, не действовала бы с 1-го по 15-е, и оклад за этот месяц
+// посчитался бы неверно. Тем же числом закрывается старая строка при смене:
+// месяц целиком достаётся новой ставке (вариант А, см. docs/meeting-milena.md A3).
+// МСК, а не UTC: toISOString() между 00:00 и 03:00 по Москве дал бы вчерашнюю дату.
+const rateFrom = () => mskDay().slice(0, 8) + '01';
 
 const DEMO_USERS = [
   { id: 'u-milena', name: 'Милена', role: 'owner' },
@@ -84,12 +93,12 @@ export class MockStore {
 
   async listEmployees() { return structuredClone(this.db.employees); }
   async createEmployee({ fio, position, phone, specialty_id, lines }) {
-    const today = new Date().toISOString().slice(0, 10);
+    const vfrom = rateFrom();
     const e = {
       id: this.db.nextId.employee++, fio, position: position || '', phone: phone || '',
       specialty_id: specialty_id || null, status: 'active',
       created_at: new Date().toISOString(),
-      lines: (lines || []).map(l => ({ ...l, id: this.db.nextId.line++, valid_from: today, valid_to: null })),
+      lines: (lines || []).map(l => ({ ...l, id: this.db.nextId.line++, valid_from: vfrom, valid_to: null })),
     };
     this.db.employees.unshift(e);
     this._log('created', 'employee', e.id, null, null, fio);
@@ -105,13 +114,13 @@ export class MockStore {
       }
     }
     if (newLines) {
-      const today = new Date().toISOString().slice(0, 10);
+      const vfrom = rateFrom();
       const active = e.lines.filter(l => !l.valid_to);
       // закрываем строки, которых больше нет / которые изменились; добавляем новые
       for (const ol of active) {
         const match = newLines.find(nl => nl._keep === ol.id);
         if (!match) {
-          ol.valid_to = today;
+          ol.valid_to = vfrom;
           this._log('updated', 'rate_line', ol.id, 'закрыта', lineLabel(ol), null);
         }
       }
@@ -119,26 +128,99 @@ export class MockStore {
         if (nl._keep) continue; // без изменений
         const line = { id: this.db.nextId.line++, line_type: nl.line_type, pay_kind: nl.pay_kind,
           amount: nl.amount ?? null, amount_night: nl.amount_night ?? null,
-          percent: nl.percent ?? null, valid_from: today, valid_to: null };
+          percent: nl.percent ?? null, valid_from: vfrom, valid_to: null };
         e.lines.push(line);
         this._log('updated', 'rate_line', line.id, 'новая строка', null, lineLabel(line));
       }
     }
     this._save(); return structuredClone(e);
   }
-  async setPrimaryRate(id, line) {
+  async setPrimaryRate(id, line, validFrom) {
     const e = this.db.employees.find(x => x.id === id);
     if (!e) throw new Error('Карточка не найдена');
     const active = e.lines.filter(l => !l.valid_to && l.line_type === 'основной');
     if (active.length === 1 && sameRate(active[0], line)) return active[0];   // no-op: та же ставка — не смётываем журнал
-    const today = new Date().toISOString().slice(0, 10);
-    active.forEach(c => { c.valid_to = today; this._log('updated', 'rate_line', c.id, 'ставка закрыта', lineLabel(c), null); });   // закрываем ВСЕ активные основные
+    const vfrom = validFrom || rateFrom();
+    active.forEach(c => { c.valid_to = vfrom; this._log('updated', 'rate_line', c.id, 'ставка закрыта', lineLabel(c), null); });   // закрываем ВСЕ активные основные
     const nl = { id: this.db.nextId.line++, line_type: 'основной', pay_kind: line.pay_kind,
       amount: line.amount ?? null, amount_night: line.amount_night ?? null, percent: line.percent ?? null,
-      valid_from: today, valid_to: null };
+      valid_from: vfrom, valid_to: null };
     e.lines.push(nl);
     this._log('updated', 'rate_line', nl.id, 'ставка добавлена', null, lineLabel(nl));
     this._save(); return nl;
+  }
+  /* Расчёт в ДЕМО. Внимание: демо считает в браузере, а прод — в базе (view).
+     Это упрощённое зеркало для показа экрана; расхождения с продом возможны,
+     потому что здесь нет ни RLS, ни CHECK, ни флагов. Проверять денежную
+     логику надо на проде в BEGIN…ROLLBACK, а не в демо. */
+  _demoPayrollLines(period) {
+    const out = [];
+    for (const e of this.db.employees) {
+      const cells = (this.db.schedule || []).filter(s => s.employee_id === e.id && String(s.work_date).startsWith(period));
+      const lines = (e.lines || []).filter(l => !l.valid_to);
+      for (const l of lines) {
+        if (l.pay_kind === 'процент') continue;
+        const want = { 'оклад': ['day'], 'сутки': ['day24'], '12ч': ['day12', 'night12'], 'почасово': ['custom'] }[l.pay_kind] || [];
+        const mine = cells.filter(c => want.includes(c.plan_kind));
+        const planned = mine.length;
+        const worked = mine.filter(c => c.fact !== 'x').length;
+        let money = 0;
+        if (l.pay_kind === 'оклад') money = planned ? Math.round((l.amount || 0) * 100 * worked / planned) : 0;
+        else if (l.pay_kind === 'сутки') money = Math.round((l.amount || 0) * 100 * worked);
+        else if (l.pay_kind === '12ч') money = mine.filter(c => c.fact !== 'x')
+          .reduce((s, c) => s + Math.round((c.plan_kind === 'night12' ? (l.amount_night || 0) : (l.amount || 0)) * 100), 0);
+        if (planned || worked) out.push({ employee_id: e.id, kind: l.pay_kind, planned, worked, hours: 0, money_kop: money });
+      }
+    }
+    return out;
+  }
+  async listPayrollLines(period) { return this._demoPayrollLines(period); }
+  async listPayroll(period) {
+    const lines = this._demoPayrollLines(period);
+    return this.db.employees.filter(e => e.status !== 'archived').map(e => {
+      const my = lines.filter(l => l.employee_id === e.id);
+      const salary = my.reduce((s, l) => s + l.money_kop, 0);
+      const mon = (this.db.money || []).filter(x => x.employee_id === e.id && x.period === period);
+      const sum = k => mon.filter(x => x.kind === k).reduce((s, x) => s + x.amount_kop, 0);
+      const cash = sum('cash'), premia = sum('premia'), otpusk = sum('otpusk');
+      return { employee_id: e.id, period: period + '-01', fio: e.fio, status: e.status,
+        oklad_kop: my.filter(l => l.kind === 'оклад').reduce((s, l) => s + l.money_kop, 0),
+        shift_kop: my.filter(l => l.kind !== 'оклад').reduce((s, l) => s + l.money_kop, 0),
+        percent_kop: 0, salary_kop: salary,
+        cash_kop: cash, cash_avans_kop: sum('cash_avans'), premia_kop: premia, otpusk_kop: otpusk,
+        card_avans_kop: sum('card_avans'), card_rasch_kop: sum('card_rasch'),
+        to_pay_kop: cash + premia + otpusk,
+        unchecked_kop: premia + otpusk,
+        delta_kop: salary - (sum('card_rasch') + sum('card_avans') + cash + sum('cash_avans')),
+        norm_days: my.reduce((s, l) => s + l.planned, 0), fact_days: my.reduce((s, l) => s + l.worked, 0),
+        flag_no_rate: !(e.lines || []).some(l => !l.valid_to), flag_partial_month: false,
+        flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false };
+    });
+  }
+  async addMoneyLine({ employee_id, period, kind, amount_kop, note }) {
+    if (!(amount_kop > 0)) throw new Error('Сумма должна быть больше 0');
+    this.db.money = this.db.money || [];
+    const row = { id: (this.db.nextId.money = (this.db.nextId.money || 1) + 1), employee_id, period, kind,
+      amount_kop, note: note || null, entered_by: this.user?.name || '?', created_at: new Date().toISOString(), source: 'manual' };
+    this.db.money.push(row);
+    this._log('деньги', 'money_line', row.id, kind, null, (amount_kop / 100) + ' ₽');
+    this._save(); return row;
+  }
+  async reverseMoneyLine(row) {
+    if ((this.db.money || []).some(x => x.reverses_id === row.id)) throw new Error('Эта запись уже сторнирована');
+    if (row.reverses_id) throw new Error('Нельзя сторнировать сторно');
+    this.db.money = this.db.money || [];
+    const r = { id: (this.db.nextId.money = (this.db.nextId.money || 1) + 1),
+      employee_id: row.employee_id, period: row.period, kind: row.kind,
+      amount_kop: -row.amount_kop, reverses_id: row.id, note: 'исправление',
+      entered_by: this.user?.name || '?', created_at: new Date().toISOString(), source: 'manual' };
+    this.db.money.push(r);
+    this._log('сторно', 'money_line', r.id, row.kind, (row.amount_kop / 100) + ' ₽', (r.amount_kop / 100) + ' ₽');
+    this._save(); return r;
+  }
+  async listMoneyEvents(employee_id, period) {
+    return (this.db.money || []).filter(x => x.employee_id === employee_id && x.period === period)
+      .map(x => ({ ...x, kind_label: MONEY_KIND_RU[x.kind] || x.kind, entered_by_name: x.entered_by, is_import: false }));
   }
   async listShiftKinds() { return SHIFT_KINDS; }
   async listSchedule(period) {
@@ -254,6 +336,44 @@ export function lineLabel(l) {
 
 // Одинаковая ли ставка (чтобы не смётывать журнал повторным сохранением того же).
 // parseFloat с обеих сторон — numeric из Supabase приходит строкой ("50000.00").
+/* Сырые ошибки Postgres → человеческий русский.
+   Форма уже проверяет всё это (checkRate в app.js), так что сюда долетает
+   только то, что форму обошло. Но если долетело — Милена не должна читать
+   «new row violates check constraint "rate_line_amount_sane_chk"» английским
+   в тосте, который гаснет через 2.8 секунды. */
+const RATE_ERRORS = [
+  ['rate_line_amount_sane_chk', 'Сумма вне разумных границ (больше 0 и не больше 100 000 000 ₽)'],
+  ['rate_line_kind_amount_chk', 'Для «12ч» нужны обе ставки — дневная и ночная; для процента — значение от 1 до 100'],
+  ['rate_line_range_chk',       'Новая ставка не может действовать раньше той, что уже стоит'],
+  ['rate_line_one_active_primary', 'У сотрудника уже есть основная строка начисления. Лишние сделайте «Совместитель»'],
+  ['Ставку нельзя править напрямую', 'Ставку нельзя править напрямую — заведите новую через смену ставки'],
+  ['violates row-level security', 'Недостаточно прав: ставки заводит и меняет только владелец'],
+];
+export function rateError(err) {
+  const raw = (err && (err.message || err.details || String(err))) || 'Неизвестная ошибка';
+  for (const [needle, human] of RATE_ERRORS) if (raw.includes(needle)) return human;
+  return raw;                                        // наши собственные raise из RPC уже по-русски
+}
+
+/* Ошибки денежных записей → человеческий русский (те же CHECK/RLS, что в
+   migrations/008–019). Сырое «violates check constraint» Милена читать не должна. */
+// Подписи видов выплат — те же, что ru_money_kind() в БД (migrations/010).
+const MONEY_KIND_RU = { cash: 'Наличные', cash_avans: 'Аванс наличными', premia: 'Премия',
+  otpusk: 'Отпускные', card_avans: 'Аванс на карту', card_rasch: 'Расчёт на карту' };
+const MONEY_ERRORS = [
+  ['money_line_sane_chk',   'Сумма вне разумных границ'],
+  ['money_line_sign_chk',   'Сумма должна быть больше 0. Чтобы отменить запись — сделайте сторно'],
+  ['money_line_period_chk', 'Период должен быть 1-м числом месяца'],
+  ['Денежные записи не правятся', 'Денежные записи не правятся и не удаляются — исправление вносится сторно'],
+  ['violates row-level security', 'Недостаточно прав для этого вида выплаты'],
+  ['без сессии запрещена',  'Сессия истекла — войдите заново'],
+];
+export function moneyError(err) {
+  const raw = (err && (err.message || err.details || String(err))) || 'Неизвестная ошибка';
+  for (const [needle, human] of MONEY_ERRORS) if (raw.includes(needle)) return human;
+  return raw;                                        // наши raise из БД уже по-русски
+}
+
 export function sameRate(a, b) {
   const n = v => v == null || v === '' ? null : parseFloat(v);
   return a.pay_kind === b.pay_kind && n(a.amount) === n(b.amount) && n(a.amount_night) === n(b.amount_night) && n(a.percent) === n(b.percent);
@@ -325,14 +445,14 @@ export class SupabaseStore {
       .insert({ fio, position, phone, specialty_id, created_by: this.user.id }).select().single();
     if (error) throw error;
     if (lines?.length) {
-      const today = new Date().toISOString().slice(0, 10);
+      const vfrom = rateFrom();
       const rows = lines.map(l => ({ employee_id: e.id, line_type: l.line_type, pay_kind: l.pay_kind,
         amount: l.amount ?? null, amount_night: l.amount_night ?? null, percent: l.percent ?? null,
-        valid_from: today, created_by: this.user.id }));
+        valid_from: vfrom, created_by: this.user.id }));
       const { error: e2 } = await this.sb.from('rate_line').insert(rows);
       if (e2) { // карточка без ставок — уводим в архив, чтобы не висела в активных; DELETE запрещён
         await this.sb.from('employee').update({ status: 'archived' }).eq('id', e.id);
-        throw new Error('Ставки не сохранились, карточка отменена: ' + e2.message);
+        throw new Error('Ставки не сохранились, карточка отменена: ' + rateError(e2));
       }
     }
     return e;
@@ -344,40 +464,45 @@ export class SupabaseStore {
     if (error) throw error;              // поля-диффы в журнал пишет триггер БД
     if (!upd || !upd.length) throw new Error('Изменение не сохранено (недостаточно прав)');
     if (newLines) {
-      const today = new Date().toISOString().slice(0, 10);
+      const vfrom = rateFrom();
       const { data: active, error: eSel } = await this.sb.from('rate_line')
         .select('*').eq('employee_id', id).is('valid_to', null);
-      if (eSel) throw eSel;
+      if (eSel) throw new Error(rateError(eSel));
       for (const ol of active || []) {
         if (!newLines.find(nl => nl._keep === ol.id)) {
           const { data: cl, error: eUpd } = await this.sb.from('rate_line')
-            .update({ valid_to: today }).eq('id', ol.id).select();
-          if (eUpd) throw eUpd;
+            .update({ valid_to: vfrom }).eq('id', ol.id).select();
+          if (eUpd) throw new Error(rateError(eUpd));
           if (!cl || !cl.length) throw new Error('Не удалось закрыть старую ставку (недостаточно прав)');
         }
       }
       const fresh = newLines.filter(nl => !nl._keep).map(l => ({ employee_id: id,
         line_type: l.line_type, pay_kind: l.pay_kind, amount: l.amount ?? null,
         amount_night: l.amount_night ?? null, percent: l.percent ?? null,
-        valid_from: today, created_by: this.user.id }));
-      if (fresh.length) { const { error: e2 } = await this.sb.from('rate_line').insert(fresh); if (e2) throw e2; }
+        valid_from: vfrom, created_by: this.user.id }));
+      if (fresh.length) { const { error: e2 } = await this.sb.from('rate_line').insert(fresh); if (e2) throw new Error(rateError(e2)); }
     }
   }
-  async setPrimaryRate(id, line) {
-    const { data: cur, error: eSel } = await this.sb.from('rate_line')
-      .select('id,pay_kind,amount,amount_night,percent').eq('employee_id', id).eq('line_type', 'основной').is('valid_to', null);
-    if (eSel) throw eSel;
-    if ((cur || []).length === 1 && sameRate(cur[0], line)) return cur[0];   // no-op: та же ставка — не смётываем анти-фрод журнал
-    const today = new Date().toISOString().slice(0, 10);
-    for (const ol of cur || []) {
-      const { data: cl, error: eUpd } = await this.sb.from('rate_line').update({ valid_to: today }).eq('id', ol.id).select();
-      if (eUpd) throw eUpd;
-      if (!cl || !cl.length) throw new Error('Не удалось закрыть старую ставку (недостаточно прав)');
-    }
-    const { data, error } = await this.sb.from('rate_line').insert({ employee_id: id, line_type: 'основной',
-      pay_kind: line.pay_kind, amount: line.amount ?? null, amount_night: line.amount_night ?? null,
-      percent: line.percent ?? null, valid_from: today, created_by: this.user.id }).select().single();
-    if (error) throw error; return data;
+  async setPrimaryRate(id, line, validFrom) {
+    // ОДИН вызов вместо «закрыть старую» + «вставить новую» двумя запросами.
+    // Раньше между ними не было транзакции: если вставку отклоняли (опечатка в
+    // сумме), старая оставалась ЗАКРЫТОЙ, а новой не появлялось — человек
+    // оставался без ставки, и оклад тихо проседал ~60%, пока экран выглядел
+    // нормально. Теперь оба шага внутри set_primary_rate (migrations/013):
+    // либо оба, либо ни одного. Проверки прав, no-op и «задним числом» —
+    // тоже там, на стороне базы, а не здесь.
+    // validFrom задаёт владелец при СМЕНЕ ставки (rateChangeDialog); пусто =
+    // первое заведение → 1-е число текущего месяца.
+    const { data, error } = await this.sb.rpc('set_primary_rate', {
+      p_employee_id:  id,
+      p_pay_kind:     line.pay_kind,
+      p_amount:       line.amount ?? null,
+      p_amount_night: line.amount_night ?? null,
+      p_percent:      line.percent ?? null,
+      p_valid_from:   validFrom || null,
+    });
+    if (error) throw new Error(rateError(error));
+    return Array.isArray(data) ? data[0] : data;
   }
   async listShiftKinds() { return SHIFT_KINDS; }
   async listSchedule(period) {
@@ -414,7 +539,7 @@ export class SupabaseStore {
     if (error) throw error; return true;
   }
   async setScheduleFact(employeeId, work_date, fact) {   // табель: пишем ТОЛЬКО факт (source/план не трогаем — сохраняем 'import')
-    // TODO(этап 5): append-only журнал правок факта через триггер БД — сейчас след только в updated_by
+    // Журнал правок факта пишет триггер schedule_journal (migrations/002) — здесь ничего не нужно
     //   (перезаписывается при след. правке). Для анти-фрода нужна неизменяемая история кто/когда отметил.
     const { data: upd, error } = await this.sb.from('schedule')
       .update({ fact: fact ?? null, updated_by: this.user.id }).eq('employee_id', employeeId).eq('work_date', work_date).select();
@@ -468,6 +593,52 @@ export class SupabaseStore {
       .select('*, actor_user:app_user(display_name)').order('at', { ascending: false }).limit(limit);
     if (error) throw error;
     return data.map(j => ({ ...j, actor: j.actor_user?.display_name || j.actor }));
+  }
+
+  /* ── Расчёт (деньги) ────────────────────────────────────────────────
+     Читаем ГОТОВЫЕ цифры из БД. Ничего денежного здесь не считаем: зарплата —
+     функция входов, её считает v_month_total (migrations/019). Браузер только
+     показывает и подписывает суммы. */
+  async listPayroll(period) {                            // строка ведомости на человека
+    const { data, error } = await this.sb.from('v_month_total')
+      .select('*').eq('period', period + '-01').order('fio');
+    if (error) throw error; return data || [];
+  }
+  async listPayrollLines(period) {                       // разбивка по строкам начисления
+    // Агрегат считает БАЗА (v_payroll_lines, migrations/020): ~47 строк вместо
+    // 1162 дневных. Тянуть дни в браузер было нельзя — PostgREST режет выдачу
+    // на 1000 строк МОЛЧА, и «Сумма» опустела бы у всех за отсечкой.
+    const { data, error } = await this.sb.from('v_payroll_lines')
+      .select('*').eq('period', period + '-01');
+    if (error) throw error;
+    return (data || []).map(l => ({ ...l, planned: Number(l.planned) || 0, worked: Number(l.worked) || 0,
+      hours: Number(l.hours) || 0, money_kop: Number(l.money_kop) || 0 }));
+  }
+  async addMoneyLine({ employee_id, period, kind, amount_kop, note }) {
+    const { data, error } = await this.sb.from('money_line')
+      .insert({ employee_id, period: period + '-01', kind, amount_kop, note: note || null, entered_by: this.user.id })
+      .select().single();
+    if (error) throw new Error(moneyError(error));
+    return data;
+  }
+  async reverseMoneyLine(row) {
+    // Сторно = НОВАЯ запись на минус исходную, а не правка старой. База требует
+    // ровно минус ту же сумму, тот же вид/период/человека и запрещает сторно
+    // сторно (migrations/010 §3). Обе записи остаются видны владельцу, и обе —
+    // в журнале, причём сторно красным.
+    const { data, error } = await this.sb.from('money_line').insert({
+      employee_id: row.employee_id, period: row.period, kind: row.kind,
+      amount_kop: -row.amount_kop, reverses_id: row.id,
+      note: 'исправление', entered_by: this.user.id,
+    }).select().single();
+    if (error) throw new Error(moneyError(error));
+    return data;
+  }
+  async listMoneyEvents(employee_id, period) {           // история «кто внёс и когда» — клик по числу
+    const { data, error } = await this.sb.from('v_money_events')
+      .select('*').eq('employee_id', employee_id).eq('period', period + '-01')
+      .order('created_at', { ascending: false });
+    if (error) throw error; return data || [];
   }
 }
 
