@@ -175,6 +175,9 @@ export class MockStore {
     return out;
   }
   async listPayrollLines(period) { return this._demoPayrollLines(period); }
+  async getPayrollRow(employee_id, period) {
+    return (await this.listPayroll(period)).find(r => r.employee_id === employee_id) || null;
+  }
   async listPayroll(period) {
     const lines = this._demoPayrollLines(period);
     return this.db.employees.filter(e => e.status !== 'archived').map(e => {
@@ -603,6 +606,11 @@ export class SupabaseStore {
     const { data, error } = await this.sb.from('v_month_total')
       .select('*').eq('period', period + '-01').order('fio');
     if (error) throw error; return data || [];
+  }
+  async getPayrollRow(employee_id, period) {             // одна строка — для карточки сотрудника
+    const { data, error } = await this.sb.from('v_month_total')
+      .select('*').eq('employee_id', employee_id).eq('period', period + '-01').maybeSingle();
+    if (error) throw error; return data || null;
   }
   async listPayrollLines(period) {                       // разбивка по строкам начисления
     // Агрегат считает БАЗА (v_payroll_lines, migrations/020): ~47 строк вместо

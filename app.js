@@ -278,6 +278,7 @@ function openCard(id) {
     <div class="card cardpad" style="margin-bottom:16px"><div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
       <div class="emp-ava" style="width:64px;height:64px;border-radius:20px;font-size:20px;background:${palette[id % palette.length]}">${esc(initials(e.fio))}</div>
       <div style="flex:1;min-width:200px"><h1 style="font-size:23px;font-weight:700">${esc(e.fio)}</h1><p class="muted" style="margin-top:2px">${esc(specName(e.specialty_id))}</p></div>
+      <div id="cardMoney" class="card-money"></div>
       ${isOwner() ? `<button class="btn btn-ghost btn-sm" id="editEmpBtn">${ICONS.edit}Редактировать</button>` : `<span class="tag">${ICONS.lock} правит владелец</span>`}
     </div></div>
     <div class="grid2">
@@ -289,9 +290,32 @@ function openCard(id) {
         <div class="field" style="margin:0"><span class="caps">Карточка создана</span><span class="val small">${esc(fmtDT(e.created_at))}</span></div>
       </div>
     </div>`;
-  applyIcons($('cardBody'));
+  $('cardBody').dataset.emp = id;      // чья карточка сейчас открыта — чтобы
+  applyIcons($('cardBody'));           // поздний ответ по деньгам не лёг в чужую
   const eb = $('editEmpBtn'); if (eb) eb.onclick = () => employeeForm(e);
   go('card');
+  loadCardMoney(id);
+}
+
+/* «К выдаче» в карточке (требование §1/§13). Цифры берём из того же
+   v_month_total, что и экран «Расчёт» — чтобы карточка и ведомость никогда не
+   показывали разное. Ошибку не выводим: деньги здесь — дополнение к карточке,
+   а не её смысл; если не загрузились, карточка должна остаться рабочей. */
+async function loadCardMoney(id) {
+  const box = $('cardMoney'); if (!box || !isStaff()) return;
+  const per = payPeriod || nowPeriod();
+  try {
+    const r = await store.getPayrollRow(id, per);
+    if (!r || +$('cardBody').dataset.emp !== id) return;
+    box.innerHTML = `<div class="cm-pay"><span class="caps">К выдаче · ${esc(periodLabel(per))}</span>
+        <b class="money">${rub(r.to_pay_kop)} ₽</b></div>
+      <div class="cm-chips">
+        <span class="mini-chip">Начислено: <b>${rub(r.salary_kop)} ₽</b></span>
+        ${r.card_rasch_kop + r.card_avans_kop ? `<span class="mini-chip">Карта: <b>${rub(r.card_rasch_kop + r.card_avans_kop)} ₽</b></span>` : ''}
+        ${r.cash_kop + r.cash_avans_kop ? `<span class="mini-chip">Наличными: <b>${rub(r.cash_kop + r.cash_avans_kop)} ₽</b></span>` : ''}
+        ${r.flag_no_rate ? '<span class="mini-chip warn">нет ставки</span>' : ''}
+      </div>`;
+  } catch (err) { box.innerHTML = ''; }
 }
 
 /* ── форма карточки (владелец) ── */
@@ -1046,7 +1070,8 @@ function drawPayroll(filter = '') {
   }
 
   const sum = k => rows.reduce((s, r) => s + (r[k] || 0), 0);
-  const total = `<tfoot><tr class="pw-total"><td class="pw-name">ИТОГО</td><td colspan="4"></td>
+  const total = `<tfoot><tr class="pw-total"><td class="pw-name">ИТОГО</td><td></td>
+    <td class="num">${sum('norm_days')} дн</td><td class="num">${sum('fact_days')} дн</td><td></td>
     <td class="num sep fin"><b>${rub(sum('salary_kop'))}</b></td>
     <td class="num fin">${rub(sum('cash_avans_kop'))}</td>
     <td class="num fin">${rub(sum('card_rasch_kop') + sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
