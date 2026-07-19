@@ -210,16 +210,34 @@ async function refresh() {
 const specName = id => specialties.find(s => s.id === id)?.name || '—';
 const specCat = id => specialties.find(s => s.id === id)?.category || 'Прочие';
 function activeLines(e) { return (e.lines || []).filter(l => !l.valid_to).sort((a, b) => (a.line_type === 'основной' ? 0 : 1) - (b.line_type === 'основной' ? 0 : 1)); }
+/* Телефон. Зеркало phone_norm() из migrations/023 — держать в согласии с базой.
+   Расхождение здесь означает, что форма примет то, что база отвергнет; либо, что
+   опаснее, пропустит то, что база превратит в ДРУГОЙ номер. В базе номер всегда
+   лежит канонически (79XXXXXXXXX), человеку показываем красиво. */
+const PHONE_OK = /^79\d{9}$/;
+function normPhone(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  if (/[^0-9+() .-]/.test(s)) return s;                                   // буквы, юникод-цифры → не наш формат
+  const d = s.replace(/[^0-9]/g, '');
+  if (!d) return s;
+  if (d.length === 11 && (d[0] === '7' || d[0] === '8')) return '7' + d.slice(1);
+  if (d.length === 10 && d[0] === '9') return '7' + d;                    // без кода страны, только мобильный
+  return d;
+}
+const fmtPhone = p => PHONE_OK.test(String(p ?? '')) ? `+7 ${String(p).slice(1,4)} ${String(p).slice(4,7)}-${String(p).slice(7,9)}-${String(p).slice(9)}` : String(p ?? '');
 // Пробелы карточки: чего не хватает, чтобы человек был готов к расчёту/выдаче.
 const FIO_SENTINEL = '⚠ уточнить фамилию';   // маркер неполного ФИО, лежит в position импортированных карточек
 function cardGaps(e) {
   const fio = String(e.fio || '').trim();
-  const digits = String(e.phone || '').replace(/\D/g, '');
   return {
     // пробел по СОДЕРЖИМОМУ: нужна фамилия+имя (>=2 слова). sentinel — доп. сигнал по импортированным.
     fio: e.position === FIO_SENTINEL || fio.split(/\s+/).filter(Boolean).length < 2,
     rate: !(e.lines || []).some(l => !l.valid_to && l.line_type === 'основной'),
-    phone: digits.length < 11,   // +7XXXXXXXXXX — заодно отсекает буквы/мусор
+    // ТОТ ЖЕ инвариант, что CHECK в базе. Раньше стояло digits.length < 11 —
+    // и «77921554123» (потерянная цифра, дописанная кодом страны) проходило,
+    // значок пропадал, а СМС ушла бы чужому. См. migrations/023.
+    phone: !PHONE_OK.test(normPhone(e.phone)),
     spec: !e.specialty_id,
   };
 }
@@ -285,7 +303,7 @@ function openCard(id) {
       <div class="card cardpad"><div class="caps" style="margin-bottom:12px">Строки начисления</div>${lines}${oldLines ? `<div class="caps" style="margin:16px 0 6px">История ставок</div>${oldLines}` : ''}</div>
       <div class="card cardpad">
         <div class="field"><span class="caps">Должность</span><span class="val">${esc(e.position === FIO_SENTINEL ? '—' : (e.position || '—'))}</span></div>
-        <div class="field"><span class="caps">Телефон (для СМС)</span><span class="val num">${esc(e.phone || '—')}</span></div>
+        <div class="field"><span class="caps">Телефон (для СМС)</span><span class="val num">${esc(fmtPhone(e.phone) || '—')}</span></div>
         <div class="field"><span class="caps">Статус</span><span class="val">${e.status === 'active' ? 'активен' : 'архив'}</span></div>
         <div class="field" style="margin:0"><span class="caps">Карточка создана</span><span class="val small">${esc(fmtDT(e.created_at))}</span></div>
       </div>
@@ -400,6 +418,22 @@ function confirmBigAmounts(amounts) {
   });
 }
 
+/* Десять цифр — единственный по-настоящему двусмысленный ввод: это «набрала без
+   +7» или «потеряла цифру»? База различить не может (и оба варианта дают
+   правильный по форме номер), поэтому спрашиваем здесь, показав, что получится.
+   Цена ошибки — код на выдачу уходит чужому человеку, а карточка выглядит
+   заполненной. */
+function confirmPhone(norm) {
+  return new Promise(resolve => {
+    showModal2(`<h3>Проверьте номер</h3><div class="msub">Дописали код страны — вдруг потерялась цифра?</div>
+      <div class="rc-diff"><div>Сохраним как <b>${esc(fmtPhone(norm))}</b></div></div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="phNo">Исправить</button>
+        <button class="btn btn-primary btn-sm" id="phYes">${ICONS.check}Да, верно</button></div>`);
+    $('phNo').onclick = () => { closeModal2(); resolve(false); };
+    $('phYes').onclick = () => { closeModal2(); resolve(true); };
+  });
+}
+
 function collectLines(box) {
   const out = [];
   for (const blk of box.querySelectorAll('.lineblk')) {
@@ -434,7 +468,7 @@ function employeeForm(e) {
     <label class="flbl">ФИО</label><input class="input" id="mFio" value="${esc(e?.fio || '')}" placeholder="Фамилия Имя Отчество">
     <div class="frow"><div><label class="flbl">Специальность</label><select class="input" id="mSpec">${so}</select></div>
     <div><label class="flbl">Должность</label><input class="input" id="mPos" value="${esc(e?.position === FIO_SENTINEL ? '' : (e?.position || ''))}" placeholder="напр. Заведующий"></div></div>
-    <label class="flbl">Телефон (для СМС)</label><input class="input" id="mPhone" type="tel" inputmode="tel" value="${esc(e?.phone || '')}" placeholder="+7 …">
+    <label class="flbl">Телефон (для СМС)</label><input class="input" id="mPhone" type="tel" inputmode="tel" value="${esc(fmtPhone(e?.phone) || '')}" placeholder="+7 921 554-12-31">
     <label class="flbl">Строки начисления</label><div id="mLines"></div>
     <button class="btn btn-ghost btn-sm" id="mAddLine">${ICONS.plus}Ещё строка</button>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button><button class="btn btn-primary btn-sm" id="mSave">${ICONS.check}${e ? 'Сохранить' : 'Создать карточку'}</button></div>`);
@@ -448,7 +482,15 @@ function employeeForm(e) {
     const btn = $('mSave'); if (btn.disabled) return; btn.disabled = true;   // защита от двойного клика
     try {
       const fio = $('mFio').value.trim(); if (!fio) { $('mFio').focus(); btn.disabled = false; return; }
-      const patch = { fio, position: $('mPos').value.trim(), phone: $('mPhone').value.trim(), specialty_id: +$('mSpec').value || null };
+      // Телефон проверяем ДО записи: иначе CHECK базы прилетает сырым английским
+      // текстом в тост, который гаснет через 2.8 секунды.
+      const phoneRaw = $('mPhone').value.trim(), phoneNorm = normPhone(phoneRaw);
+      if (phoneRaw && !PHONE_OK.test(phoneNorm)) {
+        $('mPhone').focus(); btn.disabled = false;
+        toast('Телефон: нужен российский мобильный, например +7 921 554-12-31', true); return;
+      }
+      if (phoneRaw.replace(/[^0-9]/g, '').length === 10 && !(await confirmPhone(phoneNorm))) { btn.disabled = false; return; }
+      const patch = { fio, position: $('mPos').value.trim(), phone: phoneNorm || null, specialty_id: +$('mSpec').value || null };
       const lines = collectLines(box);
       // Крупная ставка в карточке → тоже переспросить, не опечатка ли.
       const big = bigAmounts(lines);
@@ -977,8 +1019,11 @@ const MONEY_KINDS = [
 ];
 const moneyKindLabel = k => (MONEY_KINDS.find(x => x[0] === k) || [k, k])[1];
 // Показываем только то, что роль реально может записать: политика ml_ins
-// (migrations/010) запрещает оператору премию — кто считает, тот не премирует.
-// Раньше список предлагал все шесть, и Алёна упиралась в отказ базы после ввода.
+// запрещает оператору премию — кто считает, тот не премирует. Раньше список
+// предлагал все шесть, и Алёна упиралась в отказ базы после ввода.
+// С migrations/022 §1 премия — ТОЛЬКО владелец: премия поднимает «к выдаче»
+// и не входит в Δ, поэтому у бухгалтера это был единственный рычаг на сумму,
+// которую она сама же и выдаёт (себе в том числе).
 function moneyKindsFor(role) {
   if (role === 'owner') return MONEY_KINDS;
   if (role === 'operator') return MONEY_KINDS.filter(k => k[0] !== 'premia');

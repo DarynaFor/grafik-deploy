@@ -344,6 +344,21 @@ export function lineLabel(l) {
    только то, что форму обошло. Но если долетело — Милена не должна читать
    «new row violates check constraint "rate_line_amount_sane_chk"» английским
    в тосте, который гаснет через 2.8 секунды. */
+/* Ошибки карточки сотрудника. До 022/023 путь сохранения карточки не заглядывал
+   ни в одну из этих таблиц — CHECK телефона прилетал Милене сырым английским
+   текстом Postgres. А это самая частая ошибка на этом экране: она заполняет
+   52 недостающих номера. */
+const EMPLOYEE_ERRORS = [
+  ['phone_fmt_chk',          'Проверьте телефон: нужен российский мобильный, например +7 921 554-12-31'],
+  ['employee_status_check',  'Недопустимый статус карточки'],
+  ['violates row-level security', 'Недостаточно прав: карточки заводит и меняет только владелец'],
+];
+export function employeeError(err) {
+  const raw = (err && (err.message || err.details || String(err))) || 'Неизвестная ошибка';
+  for (const [needle, human] of EMPLOYEE_ERRORS) if (raw.includes(needle)) return human;
+  return raw;
+}
+
 const RATE_ERRORS = [
   ['rate_line_amount_sane_chk', 'Сумма вне разумных границ (больше 0 и не больше 100 000 000 ₽)'],
   ['rate_line_kind_amount_chk', 'Для «12ч» нужны обе ставки — дневная и ночная; для процента — значение от 1 до 100'],
@@ -446,7 +461,7 @@ export class SupabaseStore {
   async createEmployee({ fio, position, phone, specialty_id, lines }) {
     const { data: e, error } = await this.sb.from('employee')
       .insert({ fio, position, phone, specialty_id, created_by: this.user.id }).select().single();
-    if (error) throw error;
+    if (error) throw new Error(employeeError(error));
     if (lines?.length) {
       const vfrom = rateFrom();
       const rows = lines.map(l => ({ employee_id: e.id, line_type: l.line_type, pay_kind: l.pay_kind,
@@ -464,7 +479,7 @@ export class SupabaseStore {
     // .select() возвращает изменённые ряды: если RLS не пустил — массив пустой,
     // и мы это заметим (иначе PostgREST молча вернёт success на 0 строк).
     const { data: upd, error } = await this.sb.from('employee').update(patch).eq('id', id).select();
-    if (error) throw error;              // поля-диффы в журнал пишет триггер БД
+    if (error) throw new Error(employeeError(error));   // поля-диффы в журнал пишет триггер БД
     if (!upd || !upd.length) throw new Error('Изменение не сохранено (недостаточно прав)');
     if (newLines) {
       const vfrom = rateFrom();
