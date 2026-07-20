@@ -4,6 +4,22 @@
    см. docs/sprint1-schema.sql). Выбор — по наличию ключей в config.js. */
 
 const LS_KEY = 'milena-app-demo-v1';
+// Фильтры журнала — ОДНО определение на оба стора, чтобы демо и прод судили
+// одинаково (демо-режим уже трижды вводил в заблуждение расхождением с продом).
+// premia не отдельный entity, а money_line с 'премия' в field (log_money_line
+// пишет '… · ' || ru_money_kind(kind)) — именно этот фильтр делает премию
+// находимой, а значит и безопасным возврат её ввода бухгалтеру.
+function journalMatch(j, filter) {
+  switch (filter) {
+    case 'red':      return !!j.red;
+    case 'money':    return j.entity === 'money_line' || j.entity === 'patient_payment';
+    case 'payout':   return j.entity === 'payout';
+    case 'premia':   return j.entity === 'money_line' && String(j.field || '').includes('премия');
+    case 'schedule': return j.entity === 'schedule';
+    case 'rate':     return j.entity === 'rate_line';
+    default:         return true;
+  }
+}
 const LOGIN_DAY_KEY = 'milena-login-day';                                        // день последнего входа (МСК)
 const mskDay = () => new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);   // календарная дата в МСК (UTC+3) — для ежедневного сброса доступа
 // С какого числа действует ставка. НЕ «сегодня», а 1-е число текущего месяца.
@@ -326,7 +342,12 @@ export class MockStore {
     r.status = 'confirmed'; this._save(); return 'ok';
   }
   async listRedRemarks(limit = 50) { return (this.db.journal || []).filter(j => j.red).slice(0, limit); }
-  async listJournal(limit = 100) { return this.db.journal.slice(0, limit); }
+  async listJournal({ filter = 'all', beforeId = null, limit = 50 } = {}) {
+    let arr = (this.db.journal || []).filter(j => journalMatch(j, filter)).sort((a, b) => (b.id || 0) - (a.id || 0));
+    if (beforeId != null) arr = arr.filter(j => (j.id || 0) < beforeId);
+    const rows = arr.slice(0, limit);
+    return { rows, hasMore: arr.length > limit, lastId: rows.length ? rows[rows.length - 1].id : null };
+  }
 }
 
 export function lineLabel(l) {
@@ -606,11 +627,26 @@ export class SupabaseStore {
     const { data, error } = await this.sb.from('journal').select('*, actor_user:app_user(display_name)').eq('red', true).order('at', { ascending: false }).limit(limit);
     if (error) throw error; return (data || []).map(j => ({ ...j, actor: j.actor_user?.display_name || j.actor }));
   }
-  async listJournal(limit = 100) {
-    const { data, error } = await this.sb.from('journal')
-      .select('*, actor_user:app_user(display_name)').order('at', { ascending: false }).limit(limit);
+  // Keyset-пагинация по id (не offset): журнал append-only, новые записи сверху,
+  // при offset они сдвигали бы страницы — строки дублировались бы или терялись.
+  // Сортировка по id, а не по at: at при заливке шаблона (31 запись) почти
+  // одинаков, id строго монотонен и без коллизий. Тянем limit+1, чтобы узнать,
+  // есть ли ещё, без отдельного count.
+  async listJournal({ filter = 'all', beforeId = null, limit = 50 } = {}) {
+    let q = this.sb.from('journal').select('*, actor_user:app_user(display_name)')
+      .order('id', { ascending: false }).limit(limit + 1);
+    if (filter === 'red') q = q.eq('red', true);
+    else if (filter === 'money') q = q.in('entity', ['money_line', 'patient_payment']);
+    else if (filter === 'payout') q = q.eq('entity', 'payout');
+    else if (filter === 'premia') q = q.eq('entity', 'money_line').ilike('field', '%премия%');
+    else if (filter === 'schedule') q = q.eq('entity', 'schedule');
+    else if (filter === 'rate') q = q.eq('entity', 'rate_line');
+    if (beforeId != null) q = q.lt('id', beforeId);
+    const { data, error } = await q;
     if (error) throw error;
-    return data.map(j => ({ ...j, actor: j.actor_user?.display_name || j.actor }));
+    const hasMore = data.length > limit;
+    const rows = (hasMore ? data.slice(0, limit) : data).map(j => ({ ...j, actor: j.actor_user?.display_name || j.actor }));
+    return { rows, hasMore, lastId: rows.length ? rows[rows.length - 1].id : null };
   }
 
   /* ── Расчёт (деньги) ────────────────────────────────────────────────

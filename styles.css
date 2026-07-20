@@ -156,6 +156,12 @@ body.authed .login-stage{display:none}
    старый период, смена правила расчёта — то, на что владелец должен смотреть сам */
 .jrow.jred{background:rgba(255,107,107,.07);border-left:3px solid var(--red);padding-left:15px}
 .jrow .jact{color:var(--red-d);font-size:11px;font-weight:800;letter-spacing:.06em}
+/* фильтр журнала: нейтральные пилюли над карточкой, активная — инверсия (работает в обеих темах) */
+.jf-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.jf-chip{font-size:12px;font-weight:700;color:var(--ink-2);background:var(--raise);border:1px solid var(--glass-bd);padding:5px 13px;border-radius:var(--r-pill);cursor:pointer;font-family:inherit;transition:.12s;white-space:nowrap}
+.jf-chip:hover{background:var(--raise-hi)}
+.jf-chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.jmore-wrap{display:flex;justify-content:center;padding:14px 0 4px}
 .empty{text-align:center;padding:46px 20px;color:var(--ink-2)}
 .readonly-note{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-3);background:var(--fill-1);border:1px dashed var(--glass-bd);border-radius:12px;padding:9px 13px;margin-bottom:16px}
 

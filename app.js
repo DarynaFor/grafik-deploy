@@ -1265,15 +1265,48 @@ async function payrollDialog(empId) {
   };
 }
 
-async function renderJournal() {
-  const rows = await store.listJournal();
-  $('journalList').innerHTML = rows.length ? rows.map(j => {
-    let what;
-    const act = J_ACTION[j.action] ? `<b class="jact">${esc(J_ACTION[j.action])}</b> · ` : '';
-    if (j.action === 'created') what = `${J_ENTITY[j.entity] || esc(j.entity)} создана: <b>${esc(j.new_value || '')}</b>`;
-    else what = `${act}${J_ENTITY[j.entity] || esc(j.entity)} · ${J_FIELD[j.field] || esc(j.field || '')}: ${j.old_value ? `<s>${esc(j.old_value)}</s> → ` : ''}<b>${esc(j.new_value || '—')}</b>`;
-    return `<div class="jrow${j.red ? ' jred' : ''}"><div style="flex:1"><div>${what}</div><div class="who">${esc(j.actor)}</div></div><div class="jt">${esc(fmtDT(j.at))}</div></div>`;
-  }).join('') : `<div class="empty">Журнал пуст — появится после первых изменений</div>`;
+// Фильтры журнала. Ключи совпадают с journalMatch() в store.js — оба стора судят
+// одинаково. Порядок: сначала «на что смотреть чаще» (красное = требует внимания),
+// потом деньги/выдачи/премии (тонули в правках графика), потом график/ставки.
+const J_FILTERS = [['all', 'Все'], ['red', 'Красные'], ['money', 'Деньги'],
+  ['payout', 'Выдачи'], ['premia', 'Премии'], ['schedule', 'График'], ['rate', 'Ставки']];
+let journalFilter = 'all', journalRows = [], journalLastId = null, journalHasMore = false, journalBusy = false;
+
+function journalRowHtml(j) {
+  let what;
+  const act = J_ACTION[j.action] ? `<b class="jact">${esc(J_ACTION[j.action])}</b> · ` : '';
+  if (j.action === 'created') what = `${J_ENTITY[j.entity] || esc(j.entity)} создана: <b>${esc(j.new_value || '')}</b>`;
+  else what = `${act}${J_ENTITY[j.entity] || esc(j.entity)} · ${J_FIELD[j.field] || esc(j.field || '')}: ${j.old_value ? `<s>${esc(j.old_value)}</s> → ` : ''}<b>${esc(j.new_value || '—')}</b>`;
+  return `<div class="jrow${j.red ? ' jred' : ''}"><div style="flex:1"><div>${what}</div><div class="who">${esc(j.actor)}</div></div><div class="jt">${esc(fmtDT(j.at))}</div></div>`;
+}
+
+// reset=true — сменили фильтр или зашли заново: тянем с начала. reset=false —
+// «Показать ещё»: дописываем следующую страницу к уже показанному (keyset по id).
+async function renderJournal(reset = true) {
+  if (journalBusy) return; journalBusy = true;
+  if (reset) { journalRows = []; journalLastId = null; journalHasMore = false; }
+  try {
+    const res = await store.listJournal({ filter: journalFilter, beforeId: reset ? null : journalLastId });
+    journalRows = reset ? res.rows : journalRows.concat(res.rows);
+    journalLastId = res.lastId ?? journalLastId;
+    journalHasMore = res.hasMore;
+  } catch (e) { toast(e.message || e, true); }
+  journalBusy = false;
+  drawJournal();
+}
+
+function drawJournal() {
+  const chips = J_FILTERS.map(([k, l]) => `<button class="jf-chip${journalFilter === k ? ' on' : ''}" data-jf="${k}">${esc(l)}</button>`).join('');
+  $('journalTools').innerHTML = `<div class="jf-chips">${chips}</div>`;
+  $('journalTools').querySelectorAll('.jf-chip').forEach(b => b.onclick = () => {
+    if (b.dataset.jf === journalFilter) return;
+    journalFilter = b.dataset.jf; renderJournal(true);
+  });
+  const body = journalRows.length ? journalRows.map(journalRowHtml).join('')
+    : `<div class="empty">${journalFilter === 'all' ? 'Журнал пуст — появится после первых изменений' : 'В этой категории записей нет'}</div>`;
+  const more = journalHasMore ? `<div class="jmore-wrap"><button class="btn btn-ghost btn-sm" id="jMore">Показать ещё</button></div>` : '';
+  $('journalList').innerHTML = body + more;
+  const mb = $('jMore'); if (mb) mb.onclick = () => renderJournal(false);
 }
 
 /* ── модалка / тост ── */
