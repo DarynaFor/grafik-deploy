@@ -341,6 +341,27 @@ export class MockStore {
     this.db.journal.unshift({ id: this.db.nextId.journal++, actor: this.user?.name || '?', action: 'retro', entity: 'schedule', entity_id: row.id, field: 'ретро-правка ' + r.work_date, old_value: String(old ?? '—'), new_value: String(r.new_fact ?? '—'), at: new Date().toISOString(), red: true });
     r.status = 'confirmed'; this._save(); return 'ok';
   }
+  // Демо-зеркало оплат пациентов: те же поля и та же арифметика сторно, что в
+  // v_patient_month / v_patient_events — иначе демо снова разошёлся бы с продом.
+  async listPatientMonth(period) {
+    const by = new Map();
+    for (const p of (this.db.patients || [])) {
+      if (String(p.paid_on || '').slice(0, 7) !== String(period).slice(0, 7)) continue;
+      const k = p.employee_id, cur = by.get(k) || { employee_id: k, period, fio: p.fio || '—', amount_kop: 0, visits: 0, reversed: 0 };
+      cur.amount_kop += p.amount_kop || 0;
+      if (p.reverses_id) cur.reversed++; else cur.visits++;
+      by.set(k, cur);
+    }
+    return [...by.values()].sort((a, b) => b.amount_kop - a.amount_kop);
+  }
+  async listPatientEvents({ period, beforeId = null, limit = 50 } = {}) {
+    let arr = (this.db.patients || [])
+      .filter(p => String(p.paid_on || '').slice(0, 7) === String(period).slice(0, 7))
+      .sort((a, b) => (b.id || 0) - (a.id || 0));
+    if (beforeId != null) arr = arr.filter(p => (p.id || 0) < beforeId);
+    const rows = arr.slice(0, limit);
+    return { rows, hasMore: arr.length > limit, lastId: rows.length ? rows[rows.length - 1].id : null };
+  }
   async listRedRemarks(limit = 50) { return (this.db.journal || []).filter(j => j.red).slice(0, limit); }
   async listJournal({ filter = 'all', beforeId = null, limit = 50 } = {}) {
     let arr = (this.db.journal || []).filter(j => journalMatch(j, filter)).sort((a, b) => (b.id || 0) - (a.id || 0));
@@ -646,6 +667,33 @@ export class SupabaseStore {
     if (error) throw error;
     const hasMore = data.length > limit;
     const rows = (hasMore ? data.slice(0, limit) : data).map(j => ({ ...j, actor: j.actor_user?.display_name || j.actor }));
+    return { rows, hasMore, lastId: rows.length ? rows[rows.length - 1].id : null };
+  }
+
+  /* ── Оплаты пациентов ───────────────────────────────────────────────
+     Только ЧТЕНИЕ. Вводить руками не даём (решение Дарины 20.07): оплаты
+     приходят импортом, а экран нужен, чтобы зайти и СВЕРИТЬ, что импорт лёг
+     верно. Это единственный источник процента врачей, и «атаку №1» (накрутку
+     процента) ловит именно видимая сверка — потерпевшего у неё нет.
+     Итоги считает БАЗА (v_patient_month): список постраничный, и сумма по
+     загруженной странице врала бы. Сторно вычитается само (отрицательная сумма
+     разрешена только строке с reverses_id). */
+  // period приходит как 'YYYY-MM', в базе это date первого числа — та же
+  // конвертация, что в listPayroll (period + '-01').
+  async listPatientMonth(period) {
+    const { data, error } = await this.sb.from('v_patient_month')
+      .select('*').eq('period', period + '-01').order('amount_kop', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  }
+  async listPatientEvents({ period, beforeId = null, limit = 50 } = {}) {
+    let q = this.sb.from('v_patient_events').select('*').eq('period', period + '-01')
+      .order('id', { ascending: false }).limit(limit + 1);
+    if (beforeId != null) q = q.lt('id', beforeId);
+    const { data, error } = await q;
+    if (error) throw error;
+    const hasMore = data.length > limit;
+    const rows = hasMore ? data.slice(0, limit) : data;
     return { rows, hasMore, lastId: rows.length ? rows[rows.length - 1].id : null };
   }
 

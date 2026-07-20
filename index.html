@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script>(function(){try{var t=localStorage.getItem('milena-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-<link rel="stylesheet" href="styles.css?v=32">
+<link rel="stylesheet" href="styles.css?v=33">
 </head>
 <body>
 
@@ -105,6 +105,21 @@
       <div class="gridwrap"><div id="payrollTable"></div></div>
     </section>
 
+    <section class="screen" id="s-patients">
+      <div class="page-head">
+        <div><h1>Оплаты пациентов</h1><p>Из чего считается процент врачей. Данные приходят импортом — здесь их видно и можно сверить.</p></div>
+        <div class="right">
+          <div class="month-nav"><button class="mn-btn" id="qPrev" aria-label="Пред. месяц">‹</button><span id="qLabel"></span><button class="mn-btn" id="qNext" aria-label="След. месяц">›</button></div>
+        </div>
+      </div>
+      <div class="sched-tools">
+        <div class="search"><span data-ic="search"></span><input id="patSearch" placeholder="Поиск по врачу…" autocomplete="off"></div>
+        <div id="patStat" class="sched-stat"></div>
+      </div>
+      <div id="patByDoc"></div>
+      <div class="card" id="patList"></div>
+    </section>
+
     <section class="screen" id="s-journal">
       <div class="page-head">
         <div><h1>Журнал</h1><p>Кто, когда и что изменил. Записи не удаляются и не правятся.</p></div>
@@ -131,6 +146,6 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=32"></script>
+<script type="module" src="app.js?v=33"></script>
 </body>
 </html>

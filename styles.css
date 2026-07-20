@@ -162,6 +162,15 @@ body.authed .login-stage{display:none}
 .jf-chip:hover{background:var(--raise-hi)}
 .jf-chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .jmore-wrap{display:flex;justify-content:center;padding:14px 0 4px}
+/* оплаты пациентов: итог по врачам — то, ЧЕМ сверяют импорт */
+.pat-doc{margin-bottom:14px;overflow:hidden}
+.pd-row{display:flex;align-items:center;gap:12px;padding:11px 17px;border-bottom:1px solid var(--hair);font-size:13.5px}
+.pd-row:last-child{border:none}
+.pd-name{font-weight:700;flex:1;min-width:0}
+.pd-n{color:var(--ink-2);font-size:12px;white-space:nowrap}
+.pd-rev{color:var(--amber-d);font-weight:700}
+.pd-sum{font-weight:700;color:var(--green-d);font-variant-numeric:tabular-nums;white-space:nowrap;min-width:96px;text-align:right}
+@media(max-width:560px){ .pd-row{flex-wrap:wrap;gap:4px 10px} .pd-name{flex:1 0 100%} .pd-sum{margin-left:auto} }
 .empty{text-align:center;padding:46px 20px;color:var(--ink-2)}
 .readonly-note{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-3);background:var(--fill-1);border:1px dashed var(--glass-bd);border-radius:12px;padding:9px 13px;margin-bottom:16px}
 

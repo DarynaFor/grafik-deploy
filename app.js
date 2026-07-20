@@ -24,6 +24,9 @@ const ICONS = {
   chevD: I('<path d="m6 9 6 6 6-6"/>', 16),
   minus: I('<path d="M5 12h14"/>', 15),
   coin: I('<circle cx="12" cy="12" r="9"/><path d="M9.5 16.5V7.5h3a2.6 2.6 0 0 1 0 5.2H9.5M8.5 14h4.5"/>', 20),
+  // квитанция об оплате приёма — свой значок, чтобы «Оплаты пациентов» не были
+  // третьей монеткой подряд рядом с «Расчёт» и «Ставки»
+  card: I('<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 9.5h17M7 14h5M7 16.5h3"/>', 20),
   cal: I('<rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>', 20),
   sun: I('<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.6 4.6l1.8 1.8M17.6 17.6l1.8 1.8M2.5 12H5M19 12h2.5M4.6 19.4l1.8-1.8M17.6 6.4l1.8-1.8"/>', 18),
   moon: I('<path d="M20.5 13.2A8 8 0 1 1 10.8 3.5a6.2 6.2 0 0 0 9.7 9.7Z"/>', 18),
@@ -114,6 +117,9 @@ const NAV = [
   { s: 'schedule', i: 'cal', l: 'График', staffOnly: true },
   { s: 'payroll', i: 'coin', l: 'Расчёт', staffOnly: true },
   { s: 'rates', i: 'coin', l: 'Ставки', ownerOnly: true },
+  // Только owner+operator: RLS на patient_payment (pp_sel) пускает именно их,
+  // касса оплаты пациентов не видит — это не её участок.
+  { s: 'patients', i: 'card', l: 'Оплаты пациентов', staffOnly: true },
   { s: 'specialties', i: 'tag', l: 'Специальности', staffOnly: true },
   { s: 'journal', i: 'journal', l: 'Журнал', ownerOnly: true },
 ];
@@ -127,6 +133,7 @@ function renderNav() {
 function go(screen) {
   curScreen = screen;
   if (screen === 'payroll') renderPayroll($('payrollSearch')?.value || '');
+  if (screen === 'patients' && patShown !== patPeriod) renderPatients();   // грузим при первом заходе и при смене месяца
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
   $('s-' + screen).classList.add('show');
   renderNav();
@@ -534,6 +541,15 @@ let curPeriod = null, scheduleRows = [], shiftKinds = [], schedSeq = 0;
    расчёт и вынесен в базу. Один хелпер на оба места. */
 const mskNow = () => new Date(Date.now() + 3 * 3600e3);              // «сейчас» по Москве (UTC+3)
 const nowPeriod = () => { const n = mskNow(); return n.getUTCFullYear() + '-' + String(n.getUTCMonth() + 1).padStart(2, '0'); };
+// Русские падежи после числа: 1 приём / 2 приёма / 5 приёмов. Без этого экран
+// говорил бы «2 приём», и владелец читал бы отчёт, спотыкаясь на каждой строке.
+function plural(n, one, few, many) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b > 1 && b < 5) return few;
+  return b === 1 ? one : many;
+}
+const dm = d => { const p = String(d || '').split('-'); return p.length === 3 ? p[2] + '.' + p[1] : String(d || ''); };   // 2026-07-05 → 05.07
 const periodLabel = p => { const [y, m] = p.split('-').map(Number); return MONTHS_RU[m] + ' ' + y; };
 const daysInMonth = p => { const [y, m] = p.split('-').map(Number); return new Date(y, m, 0).getDate(); };
 const cellDate = day => curPeriod + '-' + String(day).padStart(2, '0');
@@ -1265,6 +1281,66 @@ async function payrollDialog(empId) {
   };
 }
 
+/* ── Оплаты пациентов ───────────────────────────────────────────────────
+   ТОЛЬКО ЧТЕНИЕ. Оплаты приходят импортом (задача #44), руками их не вводят —
+   экран нужен, чтобы зайти и СВЕРИТЬ, что импорт лёг верно. Это единственный
+   источник процента врачей, а у накрутки процента нет потерпевшего (врач
+   доволен, теряет только владелец за 3000 км), поэтому видимая сверка — и есть
+   контроль. Итоги берём ГОТОВЫМИ из v_patient_month: список постраничный, и
+   сумма по загруженной странице врала бы. */
+let patPeriod = null, patRows = [], patLastId = null, patHasMore = false, patBusy = false, patMonth = [], patShown = null;
+function shiftPatMonth(d) { let [y, m] = patPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } patPeriod = y + '-' + String(m).padStart(2, '0'); renderPatients(); }
+
+async function renderPatients(reset = true) {
+  if (!isStaff()) { $('patList').innerHTML = ''; return; }
+  if (!patPeriod) patPeriod = nowPeriod();
+  $('qLabel').textContent = periodLabel(patPeriod);
+  if (patBusy) return; patBusy = true;
+  if (reset) { patRows = []; patLastId = null; patHasMore = false; }
+  try {
+    const [month, page] = await Promise.all([
+      reset ? store.listPatientMonth(patPeriod) : Promise.resolve(patMonth),
+      store.listPatientEvents({ period: patPeriod, beforeId: reset ? null : patLastId }),
+    ]);
+    patMonth = month;
+    patRows = reset ? page.rows : patRows.concat(page.rows);
+    patLastId = page.lastId ?? patLastId;
+    patHasMore = page.hasMore;
+    patShown = patPeriod;
+  } catch (e) { toast(e.message || e, true); }
+  patBusy = false;
+  drawPatients();
+}
+
+function drawPatients() {
+  const f = ($('patSearch')?.value || '').toLowerCase().trim();
+  const hit = s => !f || String(s || '').toLowerCase().includes(f);
+  const month = patMonth.filter(m => hit(m.fio));
+  // Итог берём из БАЗЫ по отфильтрованным врачам, а не по загруженной странице.
+  const total = month.reduce((s, m) => s + (m.amount_kop || 0), 0);
+  const visits = month.reduce((s, m) => s + (m.visits || 0), 0);
+  const rev = month.reduce((s, m) => s + (m.reversed || 0), 0);
+  $('patStat').innerHTML = `<span class="fs-count"><b>${fmt(visits)}</b> ${plural(visits, 'приём', 'приёма', 'приёмов')} · <b>${month.length}</b> ${plural(month.length, 'врач', 'врача', 'врачей')}</span>`
+    + `<span class="gap-chips"><span class="mini-chip">всего <b>${rub(total)} ₽</b></span>${rev ? `<span class="mini-chip chip-dev">сторно: ${rev}</span>` : ''}</span>`;
+
+  $('patByDoc').innerHTML = month.length ? `<div class="card pat-doc">${month.map(m =>
+    `<div class="pd-row"><div class="pd-name">${esc(m.fio || '—')}</div>`
+    + `<div class="pd-n">${fmt(m.visits)} ${plural(m.visits, 'приём', 'приёма', 'приёмов')}${m.reversed ? ` · <span class="pd-rev">сторно ${m.reversed}</span>` : ''}</div>`
+    + `<div class="pd-sum fin">${rub(m.amount_kop)} ₽</div></div>`).join('')}</div>` : '';
+
+  const rows = patRows.filter(p => hit(p.fio));
+  const body = rows.length ? rows.map(p => {
+    const st = !!p.reverses_id;
+    return `<div class="jrow${st ? ' jred' : ''}"><div style="flex:1">`
+      + `<div>${esc(dm(p.paid_on))}${p.paid_at ? ' · ' + esc(String(p.paid_at).slice(0, 5)) : ''} · <b>${esc(p.fio || '—')}</b>${st ? ' <b class="jact">СТОРНО</b>' : ''}</div>`
+      + `<div class="who">${esc(p.service || 'без названия услуги')}${p.is_import ? ' · из импорта' : ' · внесено вручную'}</div></div>`
+      + `<div class="jt fin"${st ? ' style="color:var(--red-d)"' : ''}>${rub(p.amount_kop)} ₽</div></div>`;
+  }).join('') : `<div class="empty">${patMonth.length ? 'Никого не найдено' : 'За ' + esc(periodLabel(patPeriod)) + ' оплат нет.<br><span class="small">Они появятся после импорта таблицы оплат</span>'}</div>`;
+  const more = (patHasMore && !f) ? `<div class="jmore-wrap"><button class="btn btn-ghost btn-sm" id="pMore">Показать ещё</button></div>` : '';
+  $('patList').innerHTML = body + more;
+  const mb = $('pMore'); if (mb) mb.onclick = () => renderPatients(false);
+}
+
 // Фильтры журнала. Ключи совпадают с journalMatch() в store.js — оба стора судят
 // одинаково. Порядок: сначала «на что смотреть чаще» (красное = требует внимания),
 // потом деньги/выдачи/премии (тонули в правках графика), потом график/ставки.
@@ -1336,6 +1412,11 @@ $('empSearch').oninput = e => renderEmployees(e.target.value);
 { const pp = $('pPrev'), pn = $('pNext');
   if (pp) pp.onclick = () => { shiftPayMonth(-1); renderPayroll($('payrollSearch')?.value || ''); };
   if (pn) pn.onclick = () => { shiftPayMonth(1); renderPayroll($('payrollSearch')?.value || ''); }; }
+// Оплаты пациентов: поиск фильтрует УЖЕ загруженное (drawPatients), месяц — перезагружает
+{ const qs = $('patSearch'); if (qs) qs.oninput = () => drawPatients(); }
+{ const qp = $('qPrev'), qn = $('qNext');
+  if (qp) qp.onclick = () => shiftPatMonth(-1);
+  if (qn) qn.onclick = () => shiftPatMonth(1); }
 // выбор отделения (empCat/schedCat) обрабатывает makeDropdown → onPick, отдельное onchange не нужно
 { const tb = $('themeBtn'); if (tb) tb.onclick = toggleTheme; paintThemeBtn(); }
 try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (!localStorage.getItem(THEME_KEY)) paintThemeBtn(); }); } catch (e) {}
