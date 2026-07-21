@@ -570,6 +570,25 @@ const periodLabel = p => { const [y, m] = p.split('-').map(Number); return MONTH
 const daysInMonth = p => { const [y, m] = p.split('-').map(Number); return new Date(y, m, 0).getDate(); };
 const cellDate = day => curPeriod + '-' + String(day).padStart(2, '0');
 const cellOf = (empId, day) => scheduleRows.find(s => s.employee_id === empId && s.work_date === cellDate(day));
+// Гос. праздники РФ — ТОЛЬКО фиксированные по ТК РФ ст.112 (одни и те же каждый год),
+// БЕЗ ежегодных переносов выходных. Причина двойная: переносы меняются постановлением
+// каждый год (моё знание про конкретный год ненадёжно), и здесь пометки нужны ЛИШЬ для
+// понимания — норма считается из графика, не из календаря (решение Дарины). Ключ MM-DD,
+// поэтому список стабилен по годам и не требует обновления. На расчёт НЕ влияет.
+const RF_HOLIDAYS = {
+  '01-01': 'Новый год', '01-02': 'Новогодние каникулы', '01-03': 'Новогодние каникулы',
+  '01-04': 'Новогодние каникулы', '01-05': 'Новогодние каникулы', '01-06': 'Новогодние каникулы',
+  '01-07': 'Рождество Христово', '01-08': 'Новогодние каникулы',
+  '02-23': 'День защитника Отечества', '03-08': 'Международный женский день',
+  '05-01': 'Праздник Весны и Труда', '05-09': 'День Победы',
+  '06-12': 'День России', '11-04': 'День народного единства',
+};
+// Метка дня для шапки графика: сб/вс (читаемость календаря) и/или гос. праздник (с названием).
+function dayMark(day) {
+  const [y, m] = curPeriod.split('-').map(Number);
+  const wd = new Date(Date.UTC(y, m - 1, day)).getUTCDay();   // 0=вс … 6=сб
+  return { weekend: wd === 0 || wd === 6, hol: RF_HOLIDAYS[curPeriod.slice(5) + '-' + String(day).padStart(2, '0')] || '' };
+}
 /* У «Расчёта» СВОЙ период. Раньше он двигал общий curPeriod, не перерисовывая
    График: тот показывал июль с июльскими клетками, а клик писал в август —
    факты уходили не в тот месяц молча. */
@@ -691,7 +710,14 @@ function drawSchedule() {
   const cget = (id, d) => byKey.get(id + '|' + cellDate(d)) || null;
 
   let head = '<div class="gr-corner">Сотрудник</div>';
-  for (let d = 1; d <= nd; d++) head += `<div class="gr-day${d === todayD ? ' today' : ''}${isClosed(d) ? ' dlock' : ''}${anyEdit ? ' tapday' : ''}" data-day="${d}" title="${isClosed(d) ? 'День закрыт — клик' : anyEdit ? 'Закрыть день' : ''}">${d}${isClosed(d) ? `<i class="dlockmark">${ICONS.lock}</i>` : ''}</div>`;
+  for (let d = 1; d <= nd; d++) {
+    const { weekend, hol } = dayMark(d);
+    // праздник важнее выходного (свой цвет и точка); today/dlock перебивают фон позже по CSS
+    const mk = hol ? ' gr-hol' : (weekend ? ' gr-wknd' : '');
+    const hint = isClosed(d) ? 'День закрыт — клик' : (anyEdit ? 'Закрыть день' : '');
+    const title = hol ? (hint ? hol + ' · ' + hint : hol) : hint;   // название праздника — в подсказке
+    head += `<div class="gr-day${d === todayD ? ' today' : ''}${isClosed(d) ? ' dlock' : ''}${mk}${anyEdit ? ' tapday' : ''}" data-day="${d}" title="${esc(title)}">${d}${hol ? '<i class="holdot"></i>' : ''}${isClosed(d) ? `<i class="dlockmark">${ICONS.lock}</i>` : ''}</div>`;
+  }
   head += '<div class="gr-day sum">Смен</div><div class="gr-day sum">План</div><div class="gr-day sum">Факт</div><div class="gr-day sum" title="факт − план за прошедшие дни">Δ</div>';
   let rows = '', shown = 0;
   for (const cat of cats) {
