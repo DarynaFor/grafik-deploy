@@ -71,7 +71,12 @@ const DEMO_SEED = {
     { id: 3, employee_id: 1, fio: 'Иванова Мария Петровна', paid_on: '2026-07-12', paid_at: '14:00', service: 'Приём повторный', amount_kop: 250000, reverses_id: null, is_import: true },
     { id: 4, employee_id: 2, fio: 'Петров Сергей Иванович', paid_on: '2026-07-08', paid_at: '09:30', service: 'Операция', amount_kop: 1200000, reverses_id: null, is_import: true },
   ],
-  nextId: { specialty: 5, employee: 1, journal: 1, line: 1, schedule: 1, retro: 1, patient: 5 },
+  // Пара подтверждённых выдач для секции «Последние выдачи» в обзоре владельца.
+  payouts: [
+    { id: 1, employee_id: 1, fio: 'Иванова Мария Петровна', amount_kop: 4000000, status: 'confirmed', confirmed_at: '2026-07-05T09:12:00', is_self_payout: false },
+    { id: 2, employee_id: 2, fio: 'Петров Сергей Иванович', amount_kop: 3500000, status: 'confirmed', confirmed_at: '2026-07-05T09:05:00', is_self_payout: false },
+  ],
+  nextId: { specialty: 5, employee: 1, journal: 1, line: 1, schedule: 1, retro: 1, patient: 5, payout: 3 },
 };
 
 /* ── ДЕМО ─────────────────────────────────────────────────────────── */
@@ -373,6 +378,10 @@ export class MockStore {
     return { rows, hasMore: arr.length > limit, lastId: rows.length ? rows[rows.length - 1].id : null };
   }
   async listRedRemarks(limit = 50) { return (this.db.journal || []).filter(j => j.red).slice(0, limit); }
+  async listRecentPayouts(limit = 5) {
+    return (this.db.payouts || []).filter(p => p.status === 'confirmed')
+      .sort((a, b) => String(b.confirmed_at || '').localeCompare(String(a.confirmed_at || ''))).slice(0, limit);
+  }
   async listJournal({ filter = 'all', beforeId = null, limit = 50 } = {}) {
     let arr = (this.db.journal || []).filter(j => journalMatch(j, filter)).sort((a, b) => (b.id || 0) - (a.id || 0));
     if (beforeId != null) arr = arr.filter(j => (j.id || 0) < beforeId);
@@ -657,6 +666,15 @@ export class SupabaseStore {
   async listRedRemarks(limit = 50) {                     // «красные замечания» владельцу: ретро-правки
     const { data, error } = await this.sb.from('journal').select('*, actor_user:app_user(display_name)').eq('red', true).order('at', { ascending: false }).limit(limit);
     if (error) throw error; return (data || []).map(j => ({ ...j, actor: j.actor_user?.display_name || j.actor }));
+  }
+  // Последние выданные наличные для обзора владельца. payout_sel пускает owner ко
+  // всем строкам; employee embed'ится по FK payout_employee_id_fkey.
+  async listRecentPayouts(limit = 5) {
+    const { data, error } = await this.sb.from('payout')
+      .select('*, emp:employee(fio)').eq('status', 'confirmed')
+      .order('confirmed_at', { ascending: false }).limit(limit);
+    if (error) throw error;
+    return (data || []).map(p => ({ ...p, fio: p.emp?.fio || '—' }));
   }
   // Keyset-пагинация по id (не offset): журнал append-only, новые записи сверху,
   // при offset они сдвигали бы страницы — строки дублировались бы или терялись.

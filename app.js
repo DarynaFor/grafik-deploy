@@ -27,6 +27,9 @@ const ICONS = {
   // квитанция об оплате приёма — свой значок, чтобы «Оплаты пациентов» не были
   // третьей монеткой подряд рядом с «Расчёт» и «Ставки»
   card: I('<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 9.5h17M7 14h5M7 16.5h3"/>', 20),
+  chart: I('<path d="M4 4v15.5a.5.5 0 0 0 .5.5H20"/><path d="M8 15l3.5-4 3 2.5L20 8"/>', 20),
+  alert: I('<path d="M12 3.5 2.5 20h19L12 3.5z"/><path d="M12 10v4M12 17.2v.1"/>', 20),
+  info: I('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.1"/>', 20),
   cal: I('<rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>', 20),
   sun: I('<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.6 4.6l1.8 1.8M17.6 17.6l1.8 1.8M2.5 12H5M19 12h2.5M4.6 19.4l1.8-1.8M17.6 6.4l1.8-1.8"/>', 18),
   moon: I('<path d="M20.5 13.2A8 8 0 1 1 10.8 3.5a6.2 6.2 0 0 0 9.7 9.7Z"/>', 18),
@@ -113,6 +116,9 @@ function renderLogin() {
 
 /* ── каркас после входа ── */
 const NAV = [
+  // Обзор — только владельцу и первым: с него Милена начинает, оттуда видит,
+  // не залезая в экраны, всё ли в порядке. Остальные роли работают, а не смотрят.
+  { s: 'overview', i: 'chart', l: 'Обзор', ownerOnly: true },
   { s: 'employees', i: 'users', l: 'Сотрудники', staffOnly: true },
   { s: 'schedule', i: 'cal', l: 'График', staffOnly: true },
   { s: 'payroll', i: 'coin', l: 'Расчёт', staffOnly: true },
@@ -132,6 +138,7 @@ function renderNav() {
 }
 function go(screen) {
   curScreen = screen;
+  if (screen === 'overview') renderOverview();
   if (screen === 'payroll') renderPayroll($('payrollSearch')?.value || '');
   // Грузим ВСЕГДА, как renderPayroll выше. Условие `patShown !== patPeriod` было
   // сломано дважды: при обоих null оно давало false и экран не открывался НИКОГДА;
@@ -172,7 +179,8 @@ async function enter() {
   $('addEmpBtn').style.display = isOwner() ? '' : 'none';
   $('roNote').innerHTML = isOwner() ? '' : `<div class="readonly-note">${ICONS.lock} Карточки, телефоны и ставки заводит и меняет владелец — у вас просмотр.</div>`;
   await refresh();
-  go('employees');
+  // Владелец начинает с обзора (он для него и создан), остальные — с рабочего экрана.
+  go(isOwner() ? 'overview' : 'employees');
 }
 // Кастомный дропдаун «в нашем стиле»: нативный <select> нельзя стилизовать — попап с
 // опциями рисует ОС (белый, чужой теме). host — div.cselect; opts — [{v,label}]; onPick(v).
@@ -1289,6 +1297,94 @@ async function payrollDialog(empId) {
   };
 }
 
+/* ── Обзор владельца ─────────────────────────────────────────────────────
+   Затверджений дизайн — renderPhone у прототипі (hero «Всего к выдаче», плитки,
+   «Требует внимания», «Последние выдачи», подпись «из неизменяемого журнала»).
+   Дельта: цифры реальные из v_month_total; появились ВЫДАНО/ОСТАТОК (payout);
+   «Требует внимания» строится из настоящих флагов + красных записей журнала, и
+   каждый пункт КЛИКАБЕЛЕН на нужный экран. График «Наличка по дням» отложен —
+   он пуст до первого дня выдач (3b-6), рисовать диаграмму нулевого ряда рано. */
+let ovPeriod = null, ovData = null, ovSeq = 0;
+function shiftOvMonth(d) { if (!ovPeriod) ovPeriod = nowPeriod(); let [y, m] = ovPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } ovPeriod = y + '-' + String(m).padStart(2, '0'); renderOverview(); }
+
+// Флаги v_month_total → человеческие строки «Требует внимания». Красные — сверху.
+// Порядок массива = порядок показа. Клик ведёт на «Расчёт», где это видно построчно.
+const OV_ALERTS = [
+  { key: 'flag_overpaid', red: true, t: 'Выдано больше назначенного', d: 'проверьте кассу — это не должно случаться' },
+  { key: 'flag_money_without_calc', red: true, t: 'Деньги есть, а расчёта нет', d: 'выплата без начисления под ней' },
+  { key: 'flag_no_data', red: false, t: 'График есть, а денег ноль', d: 'человек работал, но ничего не начислено' },
+  { key: 'flag_oklad_no_days', red: false, t: 'Оклад есть, отработанных дней ноль', d: 'оклад не на что начислить' },
+  { key: 'flag_pct_no_rate', red: false, t: 'Процент без ставки', d: 'оплаты пациентов есть, а ставки процента нет' },
+  { key: 'flag_no_rate', red: false, t: 'Не заведена ставка', d: 'без ставки зарплата не считается' },
+  { key: 'flag_partial_month', red: false, t: 'Неполный месяц', d: 'приём или увольнение в середине месяца' },
+];
+
+async function renderOverview(reset = true) {
+  if (!isOwner()) { $('overviewBody').innerHTML = ''; return; }
+  if (!ovPeriod) ovPeriod = nowPeriod();
+  const want = ovPeriod, seq = ++ovSeq;
+  $('oLabel').textContent = periodLabel(want);
+  let rows, remarks, payouts;
+  try {
+    [rows, remarks, payouts] = await Promise.all([
+      store.listPayroll(want), store.listRedRemarks(6), store.listRecentPayouts(5),
+    ]);
+  } catch (e) { if (seq === ovSeq) { toast(e.message || e, true); $('oLabel').textContent = periodLabel(ovData?.period || want); } return; }
+  if (seq !== ovSeq) return;                       // месяц сменили, пока грузили
+  ovData = { rows, remarks, payouts, period: want };
+  $('oLabel').textContent = periodLabel(want);
+  drawOverview();
+}
+
+function drawOverview() {
+  if (!ovData) return;
+  const { rows, remarks, payouts } = ovData;
+  const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
+  const toPay = sum('to_pay_kop'), salary = sum('salary_kop');
+  const card = sum('card_rasch_kop') + sum('card_avans_kop');
+  const paid = sum('paid_kop'), ostatok = sum('ostatok_kop');
+  const people = rows.filter(r => r.status === 'active').length;
+
+  // hero + плитки
+  const metric = (l, v, cls, gc) => `<div class="ov-metric${cls ? ' ' + cls : ''}"${gc ? ` style="--gc:${gc}"` : ''}><div class="l">${l}</div><div class="v">${v}</div></div>`;
+  const hero = `<div class="ov-hero"><div class="l">К выдаче наличными · ${esc(periodLabel(ovData.period))}</div>`
+    + `<div class="v">${rub(toPay)} <small>₽</small></div>`
+    + `<div class="ov-sub">${paid ? `выдано <b>${rub(paid)} ₽</b> · осталось <b>${rub(ostatok)} ₽</b>` : 'по всем сотрудникам · наличными'}</div></div>`;
+  const bento = `<div class="ov-bento">`
+    + metric('Начислено всего', rub(salary) + ' ₽', '', 'rgba(139,123,232,.34)')
+    + metric('Официально на карту', rub(card) + ' ₽', '', 'rgba(62,115,216,.34)')
+    + metric('Выдано наличными', rub(paid) + ' ₽', '', 'rgba(31,165,101,.4)')
+    + metric('Сотрудников', fmt(people), '', 'rgba(224,153,42,.34)')
+    + `</div>`;
+
+  // Требует внимания: флаги-агрегаты (кликают на Расчёт) + красные записи (на Журнал)
+  const flagAlerts = OV_ALERTS.map(a => {
+    const n = rows.filter(r => r[a.key]).length;
+    return n ? `<button class="ov-alert${a.red ? ' red' : ''}" data-go="payroll"><span class="oa-ic">${a.red ? ICONS.alert : ICONS.info}</span><div><div class="oa-t">${esc(a.t)} · ${n}</div><div class="oa-d">${esc(a.d)}</div></div></button>` : '';
+  }).filter(Boolean);
+  const remarkAlerts = (remarks || []).slice(0, 4).map(j =>
+    `<button class="ov-alert red" data-go="journal-red"><span class="oa-ic">${ICONS.alert}</span><div><div class="oa-t">${esc(J_FIELD[j.field] || j.field || 'запись')}${j.new_value ? ' · ' + esc(j.new_value) : ''}</div><div class="oa-d">${esc(j.actor || '')} · ${esc(fmtDT(j.at))}</div></div></button>`);
+  const alerts = [...flagAlerts, ...remarkAlerts];
+  const attention = alerts.length
+    ? alerts.join('')
+    : `<div class="ov-alert ok"><span class="oa-ic">${ICONS.check}</span><div><div class="oa-t">Всё в порядке</div><div class="oa-d">крупных расхождений, переплат и пробелов не видно</div></div></div>`;
+
+  // Последние выдачи
+  const paysHtml = (payouts && payouts.length) ? payouts.map(p =>
+    `<div class="jrow"><div class="oa-ic" style="color:var(--green)">${ICONS.check}</div><div style="flex:1"><div style="font-weight:700;font-size:13.5px">${esc(p.fio || '—')}${p.is_self_payout ? ' <span class="pd-rev">себе</span>' : ''}</div><div class="who">подтверждено кодом · ${esc(fmtDT(p.confirmed_at))}</div></div><div class="fin" style="font-weight:700;color:var(--green-d)">${rub(p.amount_kop)} ₽</div></div>`).join('')
+    : `<div class="jrow" style="border:none"><div style="flex:1;color:var(--ink-3);font-size:13px">Выдач ещё не было</div></div>`;
+
+  $('overviewBody').innerHTML = hero + bento
+    + `<div class="ov-sec">Требует внимания</div><div class="ov-alerts">${attention}</div>`
+    + `<div class="ov-sec">Последние выдачи</div><div class="card">${paysHtml}</div>`
+    + `<div class="note ov-note">${ICONS.lock}Все суммы — из неизменяемого журнала</div>`;
+
+  $('overviewBody').querySelectorAll('[data-go]').forEach(b => b.onclick = () => {
+    if (b.dataset.go === 'journal-red') { journalFilter = 'red'; go('journal'); renderJournal(true); }
+    else go(b.dataset.go);
+  });
+}
+
 /* ── Оплаты пациентов ───────────────────────────────────────────────────
    ТОЛЬКО ЧТЕНИЕ. Оплаты приходят импортом (задача #44), руками их не вводят —
    экран нужен, чтобы зайти и СВЕРИТЬ, что импорт лёг верно. Это единственный
@@ -1453,6 +1549,10 @@ $('empSearch').oninput = e => renderEmployees(e.target.value);
 { const pp = $('pPrev'), pn = $('pNext');
   if (pp) pp.onclick = () => { shiftPayMonth(-1); renderPayroll($('payrollSearch')?.value || ''); };
   if (pn) pn.onclick = () => { shiftPayMonth(1); renderPayroll($('payrollSearch')?.value || ''); }; }
+// Обзор владельца: навигация по месяцам
+{ const op = $('oPrev'), on = $('oNext');
+  if (op) op.onclick = () => shiftOvMonth(-1);
+  if (on) on.onclick = () => shiftOvMonth(1); }
 // Оплаты пациентов: поиск фильтрует УЖЕ загруженное (drawPatients), месяц — перезагружает
 { const qs = $('patSearch'); if (qs) qs.oninput = () => drawPatients(); }
 { const qp = $('qPrev'), qn = $('qNext');

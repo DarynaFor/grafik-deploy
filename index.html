@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script>(function(){try{var t=localStorage.getItem('milena-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-<link rel="stylesheet" href="styles.css?v=34">
+<link rel="stylesheet" href="styles.css?v=35">
 </head>
 <body>
 
@@ -36,6 +36,16 @@
   </div>
   <nav class="side" id="sideNav"></nav>
   <main class="main">
+    <section class="screen" id="s-overview">
+      <div class="page-head">
+        <div><h1 id="ovHi">Обзор</h1><p id="ovSub">Всё главное одним взглядом: сколько к выдаче, что требует внимания, последние выдачи.</p></div>
+        <div class="right">
+          <div class="month-nav"><button class="mn-btn" id="oPrev" aria-label="Пред. месяц">‹</button><span id="oLabel"></span><button class="mn-btn" id="oNext" aria-label="След. месяц">›</button></div>
+        </div>
+      </div>
+      <div id="overviewBody"></div>
+    </section>
+
     <section class="screen" id="s-employees">
       <div class="page-head">
         <div><h1>Сотрудники</h1><p id="empSubtitle">Карточки со строками начисления</p></div>
@@ -146,6 +156,6 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=34"></script>
+<script type="module" src="app.js?v=35"></script>
 </body>
 </html>
