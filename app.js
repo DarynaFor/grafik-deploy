@@ -133,7 +133,12 @@ function renderNav() {
 function go(screen) {
   curScreen = screen;
   if (screen === 'payroll') renderPayroll($('payrollSearch')?.value || '');
-  if (screen === 'patients' && patShown !== patPeriod) renderPatients();   // грузим при первом заходе и при смене месяца
+  // Грузим ВСЕГДА, как renderPayroll выше. Условие `patShown !== patPeriod` было
+  // сломано дважды: при обоих null оно давало false и экран не открывался НИКОГДА;
+  // а если бы открылся — Алёна заносит импорт, а Милена не может обновить, потому
+  // что повторный заход в тот же месяц был бы no-op. Экран сверки с кэшем, который
+  // не сбрасывается, отменяет сам себя.
+  if (screen === 'patients') renderPatients();
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
   $('s-' + screen).classList.add('show');
   renderNav();
@@ -549,7 +554,10 @@ function plural(n, one, few, many) {
   if (b > 1 && b < 5) return few;
   return b === 1 ? one : many;
 }
-const dm = d => { const p = String(d || '').split('-'); return p.length === 3 ? p[2] + '.' + p[1] : String(d || ''); };   // 2026-07-05 → 05.07
+// 2026-07-05 → «05.07.26». Год НУЖЕН: навигация по месяцам достаёт любой год, и
+// без него июль 2025 и июль 2026 в списке выглядят одинаково. Формат строгий —
+// на неожиданном входе возвращаем как есть, а не режем строку вслепую.
+const dm = d => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || '')); return m ? `${m[3]}.${m[2]}.${m[1].slice(2)}` : String(d || ''); };
 const periodLabel = p => { const [y, m] = p.split('-').map(Number); return MONTHS_RU[m] + ' ' + y; };
 const daysInMonth = p => { const [y, m] = p.split('-').map(Number); return new Date(y, m, 0).getDate(); };
 const cellDate = day => curPeriod + '-' + String(day).padStart(2, '0');
@@ -1288,28 +1296,57 @@ async function payrollDialog(empId) {
    доволен, теряет только владелец за 3000 км), поэтому видимая сверка — и есть
    контроль. Итоги берём ГОТОВЫМИ из v_patient_month: список постраничный, и
    сумма по загруженной странице врала бы. */
-let patPeriod = null, patRows = [], patLastId = null, patHasMore = false, patBusy = false, patMonth = [], patShown = null;
-function shiftPatMonth(d) { let [y, m] = patPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } patPeriod = y + '-' + String(m).padStart(2, '0'); renderPatients(); }
+let patPeriod = null, patRows = [], patLastId = null, patHasMore = false, patMonth = [], patShown = null, patSeq = 0;
+function shiftPatMonth(d) { if (!patPeriod) patPeriod = nowPeriod(); let [y, m] = patPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } patPeriod = y + '-' + String(m).padStart(2, '0'); renderPatients(); }
 
 async function renderPatients(reset = true) {
   if (!isStaff()) { $('patList').innerHTML = ''; return; }
   if (!patPeriod) patPeriod = nowPeriod();
-  $('qLabel').textContent = periodLabel(patPeriod);
-  if (patBusy) return; patBusy = true;
-  if (reset) { patRows = []; patLastId = null; patHasMore = false; }
+  // Токен против гонки — тот же приём, что schedSeq и payrollSeq. Без него быстрый
+  // двойной клик по ‹/› давал ДЕНЬГИ ОДНОГО МЕСЯЦА ПОД ЗАГОЛОВКОМ ДРУГОГО: ответ
+  // приходил уже после смены месяца и записывался как показанный. На экране,
+  // созданном ловить накрутку процента, это тихая подмена месяца.
+  const want = patPeriod, seq = ++patSeq;
+  const wantLast = reset ? null : patLastId;
+  $('qLabel').textContent = periodLabel(want);          // сразу показываем, ЧТО грузим
+  let month, page;
   try {
-    const [month, page] = await Promise.all([
-      reset ? store.listPatientMonth(patPeriod) : Promise.resolve(patMonth),
-      store.listPatientEvents({ period: patPeriod, beforeId: reset ? null : patLastId }),
+    [month, page] = await Promise.all([
+      reset ? store.listPatientMonth(want) : Promise.resolve(patMonth),
+      store.listPatientEvents({ period: want, beforeId: wantLast }),
     ]);
-    patMonth = month;
-    patRows = reset ? page.rows : patRows.concat(page.rows);
-    patLastId = page.lastId ?? patLastId;
-    patHasMore = page.hasMore;
-    patShown = patPeriod;
-  } catch (e) { toast(e.message || e, true); }
-  patBusy = false;
+  } catch (e) {
+    if (seq !== patSeq) return;
+    toast(e.message || e, true);
+    // Возвращаем заголовок к тому месяцу, который РЕАЛЬНО на экране, иначе
+    // осталась бы шапка нового месяца над данными старого.
+    $('qLabel').textContent = periodLabel(patShown || want);
+    return;
+  }
+  if (seq !== patSeq) return;               // месяц сменили, пока ждали — ответ выбрасываем
+  // Состояние обновляем ТОЛЬКО целиком и только после удачной загрузки: раньше
+  // patRows чистились до try, а patMonth присваивался внутри — при обрыве сети
+  // оставались итоги старого месяца под новым заголовком.
+  patMonth = month;
+  patRows = reset ? page.rows : patRows.concat(page.rows);
+  patLastId = page.lastId ?? patLastId;
+  patHasMore = page.hasMore;
+  patShown = want;
+  $('qLabel').textContent = periodLabel(want);
   drawPatients();
+}
+
+// Пустой список при поиске НЕ значит «нет оплат»: итог по врачам приходит за весь
+// месяц, а строки — постранично, поэтому у найденного врача сумма уже видна, а его
+// приёмы могут быть ещё не подгружены. Раньше здесь стояло «Никого не найдено» —
+// на экране сверки это читалось как недостача, которой нет.
+function emptyPatText(f, month) {
+  if (f && month.length) {
+    const n = month.reduce((s, m) => s + (m.visits || 0) + (m.reversed || 0), 0);
+    return `<div class="empty">Оплаты этого врача есть (${fmt(n)}), но ещё не загружены<br><span class="small">нажмите «Показать ещё» ниже</span></div>`;
+  }
+  if (f) return '<div class="empty">Такого врача в этом месяце нет</div>';
+  return `<div class="empty">За ${esc(periodLabel(patShown || patPeriod))} оплат нет.<br><span class="small">Они появятся после импорта таблицы оплат</span></div>`;
 }
 
 function drawPatients() {
@@ -1335,8 +1372,12 @@ function drawPatients() {
       + `<div>${esc(dm(p.paid_on))}${p.paid_at ? ' · ' + esc(String(p.paid_at).slice(0, 5)) : ''} · <b>${esc(p.fio || '—')}</b>${st ? ' <b class="jact">СТОРНО</b>' : ''}</div>`
       + `<div class="who">${esc(p.service || 'без названия услуги')}${p.is_import ? ' · из импорта' : ' · внесено вручную'}</div></div>`
       + `<div class="jt fin"${st ? ' style="color:var(--red-d)"' : ''}>${rub(p.amount_kop)} ₽</div></div>`;
-  }).join('') : `<div class="empty">${patMonth.length ? 'Никого не найдено' : 'За ' + esc(periodLabel(patPeriod)) + ' оплат нет.<br><span class="small">Они появятся после импорта таблицы оплат</span>'}</div>`;
-  const more = (patHasMore && !f) ? `<div class="jmore-wrap"><button class="btn btn-ghost btn-sm" id="pMore">Показать ещё</button></div>` : '';
+  }).join('') : emptyPatText(f, month);
+  // Кнопку показываем ВСЕГДА, когда есть что грузить. Пряталась при поиске — а
+  // «Показать ещё» тянет весь месяц, то есть именно ею разрыв и закрывался:
+  // каждый клик подтягивал список к итогу. Спрятанная, она превращала известное
+  // ограничение в тупик, и остаток разрыва читался как ложный сигнал о недостаче.
+  const more = patHasMore ? `<div class="jmore-wrap"><button class="btn btn-ghost btn-sm" id="pMore">Показать ещё</button></div>` : '';
   $('patList').innerHTML = body + more;
   const mb = $('pMore'); if (mb) mb.onclick = () => renderPatients(false);
 }

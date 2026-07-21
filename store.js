@@ -61,7 +61,17 @@ const DEMO_SEED = {
   schedule: [],
   closed: [],      // закрытые дни табеля: [{work_date, closed_by, closed_at}]
   retro: [],       // заявки на ретро-правку закрытого дня (СМС-код): [{id,work_date,employee_id,target,new_fact,code,attempts,status,expires}]
-  nextId: { specialty: 5, employee: 1, journal: 1, line: 1, schedule: 1, retro: 1 },
+  // Оплаты пациентов в демо. Раньше ключа не было вовсе, и оба Mock-метода
+  // возвращали [] — то есть рабочий экран и МЁРТВЫЙ выглядели одинаково пусто.
+  // Именно это скрыло, что экран не открывался ни разу. Пара со сторно — чтобы
+  // в демо было видно, что сторно вычитается, а не просто «минус строка».
+  patients: [
+    { id: 1, employee_id: 1, fio: 'Иванова Мария Петровна', paid_on: '2026-07-05', paid_at: '10:15', service: 'Консультация', amount_kop: 300000, reverses_id: null, is_import: true },
+    { id: 2, employee_id: 1, fio: 'Иванова Мария Петровна', paid_on: '2026-07-05', paid_at: '10:15', service: 'Консультация', amount_kop: -300000, reverses_id: 1, is_import: false },
+    { id: 3, employee_id: 1, fio: 'Иванова Мария Петровна', paid_on: '2026-07-12', paid_at: '14:00', service: 'Приём повторный', amount_kop: 250000, reverses_id: null, is_import: true },
+    { id: 4, employee_id: 2, fio: 'Петров Сергей Иванович', paid_on: '2026-07-08', paid_at: '09:30', service: 'Операция', amount_kop: 1200000, reverses_id: null, is_import: true },
+  ],
+  nextId: { specialty: 5, employee: 1, journal: 1, line: 1, schedule: 1, retro: 1, patient: 5 },
 };
 
 /* ── ДЕМО ─────────────────────────────────────────────────────────── */
