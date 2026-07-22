@@ -308,6 +308,24 @@ function renderEmployees(filter = '') {
   applyIcons($('empList'));
   $('empList').querySelectorAll('.emp-row').forEach(r => r.onclick = () => openCard(+r.dataset.id));
 }
+// Точный признак неполного месяца — из дат приёма/увольнения, а не из эвристики
+// «размах окладных дней < 60%». Показываем как ПРЕДУПРЕЖДЕНИЕ: расчёт оклада пока
+// прежний (знаменатель = свои плановые дни → нанятый 20-го получит полный оклад
+// за неполный месяц), поэтому владелец должен это видеть и обработать вручную,
+// пока Милена не решит правило пропорции. Смотрим на ТЕКУЩИЙ период расчёта.
+function partialMonthNote(e) {
+  const per = payPeriod || nowPeriod();               // 'YYYY-MM'
+  const [y, m] = per.split('-').map(Number);
+  const first = per + '-01';
+  const last = per + '-' + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0');
+  const parts = [];
+  if (e.hired_on && e.hired_on > first && e.hired_on <= last) parts.push('принят ' + dm(e.hired_on));
+  if (e.left_on && e.left_on >= first && e.left_on < last) parts.push('уволен ' + dm(e.left_on));
+  if (!parts.length) return '';
+  return `<div class="card cardpad ov-warn" style="margin-top:16px;border-left:3px solid var(--amber)">`
+    + `<b>Неполный месяц ${esc(periodLabel(per))}:</b> ${esc(parts.join(', '))}. `
+    + `Оклад считается по своим плановым дням — проверьте сумму вручную (точная пропорция появится позже).</div>`;
+}
 function openCard(id) {
   const e = employees.find(x => x.id === id); if (!e) return;
   const lines = activeLines(e).map(l => `<div class="line-row"><span class="pill ${l.line_type === 'основной' ? 'o' : 's'}">${l.line_type === 'основной' ? 'Основной' : 'Совмест.'}</span><div style="font-weight:700">${esc(lineLabel(l))}</div><span class="lv muted small">с ${esc(l.valid_from || '—')}</span></div>`).join('') || '<div class="empty" style="padding:20px">Строк начисления нет</div>';
@@ -324,10 +342,11 @@ function openCard(id) {
       <div class="card cardpad">
         <div class="field"><span class="caps">Должность</span><span class="val">${esc(e.position === FIO_SENTINEL ? '—' : (e.position || '—'))}</span></div>
         <div class="field"><span class="caps">Телефон (для СМС)</span><span class="val num">${esc(fmtPhone(e.phone) || '—')}</span></div>
+        <div class="field"><span class="caps">Принят / уволен</span><span class="val small">${e.hired_on || e.left_on ? esc(dm(e.hired_on) || '—') + ' — ' + esc(dm(e.left_on) || '…') : '—'}</span></div>
         <div class="field"><span class="caps">Статус</span><span class="val">${e.status === 'active' ? 'активен' : 'архив'}</span></div>
         <div class="field" style="margin:0"><span class="caps">Карточка создана</span><span class="val small">${esc(fmtDT(e.created_at))}</span></div>
       </div>
-    </div>`;
+    </div>${partialMonthNote(e)}`;
   $('cardBody').dataset.emp = id;      // чья карточка сейчас открыта — чтобы
   applyIcons($('cardBody'));           // поздний ответ по деньгам не лёг в чужую
   const eb = $('editEmpBtn'); if (eb) eb.onclick = () => employeeForm(e);
@@ -489,6 +508,9 @@ function employeeForm(e) {
     <div class="frow"><div><label class="flbl">Специальность</label><select class="input" id="mSpec">${so}</select></div>
     <div><label class="flbl">Должность</label><input class="input" id="mPos" value="${esc(e?.position === FIO_SENTINEL ? '' : (e?.position || ''))}" placeholder="напр. Заведующий"></div></div>
     <label class="flbl">Телефон (для СМС)</label><input class="input" id="mPhone" type="tel" inputmode="tel" value="${esc(fmtPhone(e?.phone) || '')}" placeholder="+7 921 554-12-31">
+    <div class="frow"><div><label class="flbl">Принят</label><input class="input" id="mHired" type="date" value="${esc(e?.hired_on || '')}"></div>
+    <div><label class="flbl">Уволен</label><input class="input" id="mLeft" type="date" value="${esc(e?.left_on || '')}"></div></div>
+    <div class="msub" style="margin-top:-4px">Даты нужны, чтобы точно видеть неполный месяц. На расчёт оклада пока не влияют.</div>
     <label class="flbl">Строки начисления</label><div id="mLines"></div>
     <button class="btn btn-ghost btn-sm" id="mAddLine">${ICONS.plus}Ещё строка</button>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button><button class="btn btn-primary btn-sm" id="mSave">${ICONS.check}${e ? 'Сохранить' : 'Создать карточку'}</button></div>`);
@@ -510,7 +532,13 @@ function employeeForm(e) {
         toast('Телефон: нужен российский мобильный, например +7 921 554-12-31', true); return;
       }
       if (phoneRaw.replace(/[^0-9]/g, '').length === 10 && !(await confirmPhone(phoneNorm))) { btn.disabled = false; return; }
-      const patch = { fio, position: $('mPos').value.trim(), phone: phoneNorm || null, specialty_id: +$('mSpec').value || null };
+      const hired_on = $('mHired').value || null, left_on = $('mLeft').value || null;
+      // Проверяем ДО записи, а не ловим сырой CHECK базы в тосте.
+      if (hired_on && left_on && left_on < hired_on) {
+        $('mLeft').focus(); btn.disabled = false;
+        toast('Дата увольнения не может быть раньше даты приёма', true); return;
+      }
+      const patch = { fio, position: $('mPos').value.trim(), phone: phoneNorm || null, specialty_id: +$('mSpec').value || null, hired_on, left_on };
       const lines = collectLines(box);
       // Крупная ставка в карточке → тоже переспросить, не опечатка ли.
       const big = bigAmounts(lines);

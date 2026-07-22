@@ -123,11 +123,12 @@ export class MockStore {
   }
 
   async listEmployees() { return structuredClone(this.db.employees); }
-  async createEmployee({ fio, position, phone, specialty_id, lines }) {
+  async createEmployee({ fio, position, phone, specialty_id, hired_on, left_on, lines }) {
     const vfrom = rateFrom();
     const e = {
       id: this.db.nextId.employee++, fio, position: position || '', phone: phone || '',
       specialty_id: specialty_id || null, status: 'active',
+      hired_on: hired_on || null, left_on: left_on || null,
       created_at: new Date().toISOString(),
       lines: (lines || []).map(l => ({ ...l, id: this.db.nextId.line++, valid_from: vfrom, valid_to: null })),
     };
@@ -138,7 +139,7 @@ export class MockStore {
   async updateEmployee(id, patch, newLines) {
     const e = this.db.employees.find(x => x.id === id);
     if (!e) throw new Error('Карточка не найдена');
-    for (const f of ['fio', 'phone', 'specialty_id', 'status']) {
+    for (const f of ['fio', 'position', 'phone', 'specialty_id', 'status', 'hired_on', 'left_on']) {
       if (patch[f] !== undefined && patch[f] !== e[f]) {
         this._log('updated', 'employee', id, f, String(e[f] ?? ''), String(patch[f] ?? ''));
         e[f] = patch[f];
@@ -519,9 +520,9 @@ export class SupabaseStore {
     if (error) throw error;
     return data.map(e => ({ ...e, lines: e.lines || [] }));
   }
-  async createEmployee({ fio, position, phone, specialty_id, lines }) {
+  async createEmployee({ fio, position, phone, specialty_id, hired_on, left_on, lines }) {
     const { data: e, error } = await this.sb.from('employee')
-      .insert({ fio, position, phone, specialty_id, created_by: this.user.id }).select().single();
+      .insert({ fio, position, phone, specialty_id, hired_on: hired_on || null, left_on: left_on || null, created_by: this.user.id }).select().single();
     if (error) throw new Error(employeeError(error));
     if (lines?.length) {
       const vfrom = rateFrom();
