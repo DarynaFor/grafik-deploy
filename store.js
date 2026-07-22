@@ -543,23 +543,19 @@ export class SupabaseStore {
     if (error) throw new Error(employeeError(error));   // поля-диффы в журнал пишет триггер БД
     if (!upd || !upd.length) throw new Error('Изменение не сохранено (недостаточно прав)');
     if (newLines) {
-      const vfrom = rateFrom();
-      const { data: active, error: eSel } = await this.sb.from('rate_line')
-        .select('*').eq('employee_id', id).is('valid_to', null);
-      if (eSel) throw new Error(rateError(eSel));
-      for (const ol of active || []) {
-        if (!newLines.find(nl => nl._keep === ol.id)) {
-          const { data: cl, error: eUpd } = await this.sb.from('rate_line')
-            .update({ valid_to: vfrom }).eq('id', ol.id).select();
-          if (eUpd) throw new Error(rateError(eUpd));
-          if (!cl || !cl.length) throw new Error('Не удалось закрыть старую ставку (недостаточно прав)');
-        }
-      }
-      const fresh = newLines.filter(nl => !nl._keep).map(l => ({ employee_id: id,
-        line_type: l.line_type, pay_kind: l.pay_kind, amount: l.amount ?? null,
-        amount_night: l.amount_night ?? null, percent: l.percent ?? null,
-        valid_from: vfrom, created_by: this.user.id }));
-      if (fresh.length) { const { error: e2 } = await this.sb.from('rate_line').insert(fresh); if (e2) throw new Error(rateError(e2)); }
+      // ВЕСЬ реконсайл строк — одним RPC в транзакции (migrations/028). Раньше здесь
+      // был цикл: закрыть лишние строки отдельными запросами, потом вставить новые.
+      // Транзакции между ними не было — если вставку отклоняли (опечатка в сумме),
+      // часть строк оставалась ЗАКРЫТОЙ без замены → дыра в ставках → тихий недоплат.
+      // Тот же класс, что чинил 013 для экрана «Ставки»; это второй вход — карточка.
+      const p_keep_ids = newLines.filter(l => l._keep).map(l => l._keep);
+      const p_new_lines = newLines.filter(l => !l._keep).map(l => ({
+        line_type: l.line_type, pay_kind: l.pay_kind,
+        amount: l.amount ?? null, amount_night: l.amount_night ?? null, percent: l.percent ?? null,
+      }));
+      const { error: eR } = await this.sb.rpc('reconcile_employee_rates',
+        { p_employee_id: id, p_keep_ids, p_new_lines, p_valid_from: null });
+      if (eR) throw new Error(rateError(eR));
     }
   }
   async setPrimaryRate(id, line, validFrom) {
@@ -588,8 +584,27 @@ export class SupabaseStore {
     const start = period + '-01';
     const [y, m] = period.split('-').map(Number);
     const next = (m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01');
-    const { data, error } = await this.sb.from('schedule').select('*').gte('work_date', start).lt('work_date', next);
-    if (error) throw error; return data;
+    // Порционно — НЕ зависим от «Max rows» в панели Supabase. 119×31 = до 3689 строк
+    // за месяц; при штатном лимите 1000 PostgREST молча ОБРЕЗАЛ БЫ до 1000, и ~2/3
+    // графика пропали бы БЕЗ ошибки, а клик по «пустой» ячейке затёр бы реальные
+    // данные upsert'ом. Раньше это держалось на том, что кто-то вручную поднял
+    // лимит до 9999 (#53). Теперь тянем страницами до тех пор, пока страница
+    // полная, — при любом лимите берём всё.
+    return this._fetchAll(() => this.sb.from('schedule').select('*').gte('work_date', start).lt('work_date', next));
+  }
+  // Достаёт ВСЕ строки запроса страницами через .range(), не завися от серверного
+  // лимита строк. Порядок по id обязателен: без стабильной сортировки .range()
+  // между страницами мог бы дублировать или терять строки. makeQuery — функция,
+  // возвращающая свежий билдер (range/order его мутируют).
+  async _fetchAll(makeQuery, pageSize = 1000) {
+    const all = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await makeQuery().order('id', { ascending: true }).range(from, from + pageSize - 1);
+      if (error) throw error;
+      all.push(...data);
+      if (data.length < pageSize) break;   // неполная страница = последняя
+    }
+    return all;
   }
   async setScheduleCell(employeeId, work_date, cell) {
     const empty = (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null && (cell.fact ?? null) === null;
