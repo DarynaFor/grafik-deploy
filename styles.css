@@ -13,8 +13,12 @@
   --bar:rgba(14,15,18,.6); --modal-grad:linear-gradient(180deg,rgba(32,34,40,.97),rgba(22,24,28,.95));
   --toast-bg:rgba(255,255,255,.14); --toast-ink:#fff;
   --r-ctl:14px; --r-card:24px; --r-pill:999px;
-  --sans:'Space Grotesk',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-  --led:'Sora',system-ui,sans-serif;
+  /* Системные шрифты (решение Дарины 22.07): ноль заграничных зависимостей,
+     ничего не грузится. Space Grotesk/Sora не умели кириллицу — русский текст и
+     так был системным, менялись лишь цифры. Табличные цифры (font-variant-numeric:
+     tabular-nums) системные шрифты поддерживают, деньги столбиком выравниваются. */
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  --led:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
   --sh:inset 0 1px 0 rgba(255,255,255,.07),0 18px 44px rgba(0,0,0,.55);
   --sh-sm:inset 0 1px 0 rgba(255,255,255,.05),0 6px 18px rgba(0,0,0,.45);
   --sh-pop:0 26px 70px rgba(0,0,0,.55);
