@@ -412,6 +412,7 @@ export function lineLabel(l) {
    52 недостающих номера. */
 const EMPLOYEE_ERRORS = [
   ['phone_fmt_chk',          'Проверьте телефон: нужен российский мобильный, например +7 921 554-12-31'],
+  ['employee_hire_leave_chk','Дата увольнения не может быть раньше даты приёма'],
   ['employee_status_check',  'Недопустимый статус карточки'],
   ['violates row-level security', 'Недостаточно прав: карточки заводит и меняет только владелец'],
 ];

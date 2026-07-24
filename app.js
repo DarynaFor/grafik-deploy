@@ -1,7 +1,11 @@
 /* Milena · Спринт 1 — вход, карточки сотрудников, специальности, журнал.
    Данные — через store.js (демо: localStorage · прод: Supabase).
    Все пользовательские строки при выводе проходят esc() — без исключений. */
-import { makeStore, lineLabel, sameRate } from './store.js?v=23';
+// Версия импорта ДОЛЖНА идти в ногу с app.js/styles.css (index.html). Отставание
+// безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
+// новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
+// пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
+import { makeStore, lineLabel, sameRate } from './store.js?v=41';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
