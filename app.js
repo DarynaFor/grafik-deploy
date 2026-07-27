@@ -157,9 +157,11 @@ function go(screen) {
 }
 const ROLE_LABELS = { owner: 'владелец', operator: 'оператор', cashier1: 'касса · Бух 1', cashier2: 'карта / 1С · Бух 2' };
 const isStaff = () => ['owner', 'operator'].includes(store.me()?.role);   // кто работает с карточками
-// График ведёт оператор (Алёна) с переданных головами отделений листов. Владелец (Милена) — только просмотр.
+// График ведёт оператор (Алёна) с переданных головами отделений листов. Владелец
+// (Милена) тоже может править — чтобы протестировать и объяснить Алёне, а также
+// поправить как надзор (решение Дарины 27.07: раньше владелец был только-просмотр).
 // Позже добавим роли голов отделений — они будут вносить свой отдел; тогда сюда добавится их роль.
-const canEditSchedule = () => store.me()?.role === 'operator';
+const canEditSchedule = () => ['operator', 'owner'].includes(store.me()?.role);
 async function enter() {
   const me = store.me(); if (!me) return;
   document.body.classList.add('authed');
@@ -707,7 +709,10 @@ function drawSchedule() {
   const isClosed = d => closedDays.has(cellDate(d));
   const anyEdit = meRole === 'operator' || meRole === 'owner';   // есть ли право что-то править (для навешивания обработчиков)
   // клетку дня d правит: оператор — если день ОТКРЫТ; владелец — если ЗАКРЫТ (override, в журнал)
-  const canEditDay = d => (meRole === 'operator' && !isClosed(d)) || (meRole === 'owner' && isClosed(d));
+  // Владелец правит ЛЮБОЙ день (открытый — обычным попапом, закрытый — напрямую,
+  // без СМС, он доверенный). Оператор — только открытые. Закрытый день оператору
+  // идёт через СМС-подтверждение (строка ниже).
+  const canEditDay = d => meRole === 'owner' || (meRole === 'operator' && !isClosed(d));
   const todayD = (nowPeriod() === curPeriod) ? mskNow().getUTCDate() : 0;
   const active = employees.filter(e => e.status !== 'archived');
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
