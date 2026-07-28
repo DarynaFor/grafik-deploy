@@ -391,8 +391,8 @@ async function loadCardMoney(id) {
   try {
     const r = await store.getPayrollRow(id, per);
     if (!r || +$('cardBody').dataset.emp !== id) return;
-    box.innerHTML = `<div class="cm-pay"><span class="caps">К выдаче · ${esc(periodLabel(per))}</span>
-        <b class="money">${rub(r.to_pay_kop)} ₽</b></div>
+    box.innerHTML = `<div class="cm-pay"><span class="caps">Осталось выдать · ${esc(periodLabel(per))}</span>
+        <b class="money">${rub(r.delta_kop)} ₽</b></div>
       <div class="cm-chips">
         <span class="mini-chip">Начислено: <b>${rub(r.salary_kop)} ₽</b></span>
         ${r.card_rasch_kop + r.card_avans_kop ? `<span class="mini-chip">Карта: <b>${rub(r.card_rasch_kop + r.card_avans_kop)} ₽</b></span>` : ''}
@@ -1435,16 +1435,17 @@ function drawOverview() {
   if (!ovData) return;
   const { rows, remarks, payouts } = ovData;
   const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
-  const toPay = sum('to_pay_kop'), salary = sum('salary_kop');
+  const delta = sum('delta_kop'), salary = sum('salary_kop');
   const card = sum('card_rasch_kop') + sum('card_avans_kop');
-  const paid = sum('paid_kop'), ostatok = sum('ostatok_kop');
+  const paid = sum('paid_kop');
   const people = rows.filter(r => r.status === 'active').length;
 
-  // hero + плитки
+  // hero + плитки. Главное число — «Осталось выдать» = Δ (начислено − выданное),
+  // т.е. сколько ещё раздать людям (в осн. наличными), если все вышли по графику.
   const metric = (l, v, cls, gc) => `<div class="ov-metric${cls ? ' ' + cls : ''}"${gc ? ` style="--gc:${gc}"` : ''}><div class="l">${l}</div><div class="v">${v}</div></div>`;
-  const hero = `<div class="ov-hero"><div class="l">К выдаче наличными · ${esc(periodLabel(ovData.period))}</div>`
-    + `<div class="v">${rub(toPay)} <small>₽</small></div>`
-    + `<div class="ov-sub">${paid ? `выдано <b>${rub(paid)} ₽</b> · осталось <b>${rub(ostatok)} ₽</b>` : 'по всем сотрудникам · наличными'}</div></div>`;
+  const hero = `<div class="ov-hero"><div class="l">Осталось выдать · ${esc(periodLabel(ovData.period))}</div>`
+    + `<div class="v">${rub(delta)} <small>₽</small></div>`
+    + `<div class="ov-sub">начислено <b>${rub(salary)} ₽</b> · уже на карту <b>${rub(card)} ₽</b></div></div>`;
   const bento = `<div class="ov-bento">`
     + metric('Начислено всего', rub(salary) + ' ₽', '', 'rgba(139,123,232,.34)')
     + metric('Официально на карту', rub(card) + ' ₽', '', 'rgba(62,115,216,.34)')
