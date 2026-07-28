@@ -1201,8 +1201,19 @@ function drawPayroll(filter = '') {
     <th class="num sep">Зарплата</th><th class="num">Аванс нал.</th><th class="num">Карта</th><th class="num">Наличка</th>
     <th class="num">Отпускные</th><th class="num">Премия</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
 
-  let body = '';
+  // Разбивка по специальностям (как в графике): сортируем по категории,
+  // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
+  const catOf = r => specCat(employees.find(e => e.id === r.employee_id)?.specialty_id) || 'Прочие';
+  rows.sort((a, b) => catOf(a).localeCompare(catOf(b)) || (a.fio || '').localeCompare(b.fio || ''));
+  let body = '', curCat = null;
   for (const r of rows) {
+    const cat = catOf(r);
+    if (cat !== curCat) {
+      curCat = cat;
+      const inCat = rows.filter(x => catOf(x) === cat);
+      const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
+      body += `<tr class="pw-group"><td colspan="12"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+    }
     const my = linesFor(r);
     const flags = payrollFlags(r);
     // одна ставка → одна строка без объединения; несколько → rowspan справа

@@ -19,7 +19,7 @@
 <meta name="theme-color" content="#0C0D10" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#EBE6DD" media="(prefers-color-scheme: light)">
 <script>(function(){try{var t=localStorage.getItem('milena-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-<link rel="stylesheet" href="styles.css?v=46">
+<link rel="stylesheet" href="styles.css?v=47">
 </head>
 <body>
 
@@ -165,6 +165,31 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=46"></script>
+<script type="module" src="app.js?v=47"></script>
+<!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
+     без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
+     index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —
+     один раз перезагружаемся (guard в sessionStorage не даёт зациклиться).
+     Так выкатки доходят до пользователей сами, без ⌘⇧R. version.txt не нужен —
+     index.html всегда отдаётся сервером. -->
+<script>
+(function () {
+  try {
+    var s = document.querySelector('script[src*="app.js?v="]');
+    var cur = s && (s.getAttribute('src').match(/v=(\d+)/) || [])[1];
+    if (!cur) return;
+    fetch(location.pathname + '?_ts=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (html) {
+        if (!html) return;
+        var m = html.match(/app\.js\?v=(\d+)/);
+        if (m && +m[1] > +cur && !sessionStorage.getItem('vr' + m[1])) {
+          sessionStorage.setItem('vr' + m[1], '1');
+          location.reload();
+        }
+      }).catch(function () {});
+  } catch (e) {}
+})();
+</script>
 </body>
 </html>

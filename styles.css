@@ -433,6 +433,9 @@ body.authed .login-stage{display:none}
 .pw-sub td{color:var(--ink-2)}
 .pw-total td{background:var(--surf-1);font-weight:700;border-top:1px solid var(--glass-bd);border-bottom:none}
 .pw-total .pw-name,.pw-total .pw-pay{background:var(--surf-1)}
+.pw-group td{background:var(--surf-1);padding:0;border-bottom:1px solid var(--glass-bd)}
+.pw-group span{position:sticky;left:0;display:inline-block;padding:7px 12px;font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
+.pw-group b{color:var(--green-d);font-weight:800}
 .pw .money{color:var(--green-d)}
 .pw-flag{display:inline-block;padding:2px 7px;border-radius:var(--r-pill);
   font-size:10px;font-weight:700;letter-spacing:.03em;vertical-align:middle}
