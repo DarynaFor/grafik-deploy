@@ -524,3 +524,8 @@ body.authed .login-stage{display:none}
   .imp-sum{padding:12px 14px}
   .imp-table th,.imp-table td{padding:8px 9px}
 }
+
+/* .xlsx-загрузка */
+.imp-filebtn{cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.imp-filebtn span[data-ic]{display:inline-flex;align-items:center}
+.imp-tag.imp-fired{color:var(--red-d);background:rgba(255,107,107,.12)}

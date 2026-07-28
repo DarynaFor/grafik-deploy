@@ -663,6 +663,21 @@ function splitImportLine(line) {
   }
   return { fio: fioCell, amount };
 }
+// Шапка/итог/не-ФИО? Общий фильтр для вставки и .xlsx.
+function isImportHeaderFio(fn) {
+  return !fn || !/[а-яё]{2}/i.test(fn) || /^(итого|итог|всего|сумма|ведомость|фио|сотрудник|списком|расшифровка|период|№)/.test(fn);
+}
+// Строка предпросмотра из ФИО + суммы (копейки) + пометки «уволен» (зачёркнут в
+// файле). Общий вход для вставки и .xlsx. Автогалочка ТОЛЬКО у точного совпадения
+// (ok) и не у уволенного: weak/fuzzy/уволен подставляем в выбор, но галочку
+// человек ставит сам. (аудит H2)
+function buildImportRow(fio, amount_kop, rawAmount, struck) {
+  const match = matchEmp(fio, employees);
+  const over = amount_kop != null && amount_kop > MONEY_MAX_KOP;      // > 1 млн — база не примет
+  const autoOk = match.status === 'ok' && amount_kop != null && !over && !struck;
+  return { raw: fio, rawAmount: rawAmount || '', amount_kop, over, struck: !!struck, match,
+    chosenId: match.emp?.id || null, autoOk, include: autoOk, dup: false, userSet: false };
+}
 function parseImport() {
   const ta = $('impPaste'); const text = ta ? ta.value : '';
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
@@ -671,19 +686,219 @@ function parseImport() {
   for (const line of lines) {
     if (rows.length >= MAX_IMPORT_ROWS) { importState.truncated = true; break; }   // защита от гигантской вставки
     const { fio, amount } = splitImportLine(line);
-    const fn = fioNorm(fio);
-    if (!fn || !/[а-яё]{2}/i.test(fn)) continue;                      // не ФИО (номер строки и т.п.)
-    if (/^(итого|итог|всего|сумма|ведомость|фио|сотрудник|списком)/.test(fn)) continue;  // шапка/итоги
-    const amount_kop = parseAmountKop(amount);
-    const match = matchEmp(fio, employees);
-    const over = amount_kop != null && amount_kop > MONEY_MAX_KOP;    // > 1 млн — база не примет
-    // Автогалочка ТОЛЬКО у точного совпадения (ok). weak/fuzzy — не угадка деньгами:
-    // человека подставим в выбор, но галочку человек ставит сам. (аудит H2)
-    const autoOk = match.status === 'ok' && amount_kop != null && !over;
-    rows.push({ raw: fio, rawAmount: amount, amount_kop, over, match,
-      chosenId: match.emp?.id || null, autoOk, include: autoOk, dup: false, userSet: false });
+    if (isImportHeaderFio(fioNorm(fio))) continue;
+    rows.push(buildImportRow(fio, parseAmountKop(amount), amount, false));
   }
   importState.rows = rows; importState.parsed = true;
+}
+
+/* ── Чтение .xlsx прямо в браузере, без внешних зависимостей ────────────────
+   .xlsx = ZIP(XML). Распаковываем нативным DecompressionStream('deflate-raw'),
+   читаем sharedStrings / styles / лист через DOMParser. Зачёркнутый шрифт
+   (styles.xml <strike/>) → уволен. Суммы-числа берём КАК ЧИСЛО (без строковой
+   неоднозначности), текст — строгим parseAmountKop. Идём по фактическим ячейкам
+   <c>, а не по <dimension> — раздутый номинальный диапазон (баг экспортов 1С) не
+   мешает. Файлом Бух пока не грузит (нет ростера) — это владелец/Алёна. */
+async function inflateRaw(bytes) {
+  const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+async function unzipXlsx(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let eocd = -1;
+  const lo = Math.max(0, buf.length - 22 - 65536);
+  for (let i = buf.length - 22; i >= lo; i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+  if (eocd < 0) throw new Error('файл не похож на .xlsx (нет ZIP)');
+  const cdCount = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const want = /^xl\/(sharedStrings|styles|workbook)\.xml$|^xl\/_rels\/workbook\.xml\.rels$|^xl\/worksheets\/[^/]+\.xml$/;
+  const out = {};
+  for (let n = 0; n < cdCount && p + 46 <= buf.length; n++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;                 // central directory header
+    const method = dv.getUint16(p + 10, true);
+    const compSize = dv.getUint32(p + 20, true);
+    const uncompSize = dv.getUint32(p + 24, true);                   // защита от «zip-бомбы»/раздутого файла
+    const nameLen = dv.getUint16(p + 28, true);
+    const extraLen = dv.getUint16(p + 30, true);
+    const commentLen = dv.getUint16(p + 32, true);
+    const lho = dv.getUint32(p + 42, true);                          // смещение локального заголовка
+    const name = new TextDecoder().decode(buf.subarray(p + 46, p + 46 + nameLen));
+    if (want.test(name) && lho + 30 <= buf.length) {
+      if (uncompSize > 40 * 1024 * 1024) throw new Error('слишком большой лист в файле');   // от раздутого/битого .xlsx
+      const lNameLen = dv.getUint16(lho + 26, true);
+      const lExtraLen = dv.getUint16(lho + 28, true);
+      const start = lho + 30 + lNameLen + lExtraLen;
+      const comp = buf.subarray(start, start + compSize);
+      out[name] = method === 0 ? comp : await inflateRaw(comp);      // 0=STORE, 8=DEFLATE
+    }
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+function xlsxDoc(bytes) { return bytes ? new DOMParser().parseFromString(new TextDecoder().decode(bytes), 'application/xml') : null; }
+function xlsxSharedStrings(doc) {
+  if (!doc) return [];
+  return [...doc.getElementsByTagName('si')].map(si => [...si.getElementsByTagName('t')].map(t => t.textContent).join(''));
+}
+function xlsxStruckStyles(doc) {
+  const struck = new Set(); if (!doc) return struck;
+  const struckFonts = new Set();
+  const fonts = doc.getElementsByTagName('fonts')[0];
+  if (fonts) [...fonts.children].forEach((f, i) => { if (f.tagName === 'font' && f.getElementsByTagName('strike').length) struckFonts.add(i); });
+  const cellXfs = doc.getElementsByTagName('cellXfs')[0];
+  if (cellXfs) [...cellXfs.children].forEach((xf, i) => { if (xf.tagName === 'xf' && struckFonts.has(+(xf.getAttribute('fontId') || 0))) struck.add(i); });
+  return struck;
+}
+// Стили с ДАТА/ВРЕМЯ форматом. В Excel дата — это ЧИСЛО (серия дней: 20.07.2026 =
+// 46223), и без этой проверки колонка даты справа от суммы утекла бы «суммой»
+// 46 223 ₽. Отличаем по numFmt: встроенные дата-ID + пользовательский код с y/d/h.
+const XLSX_DATE_BUILTIN = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58]);
+function xlsxDateStyles(doc) {
+  const dateStyles = new Set(); if (!doc) return dateStyles;
+  const fmtIsDate = {};
+  for (const nf of doc.getElementsByTagName('numFmt')) {
+    const id = +(nf.getAttribute('numFmtId') || -1);
+    const code = (nf.getAttribute('formatCode') || '').toLowerCase()
+      .replace(/"[^"]*"/g, '').replace(/'[^']*'/g, '').replace(/\[[^\]]*\]/g, '').replace(/\\./g, '');
+    fmtIsDate[id] = /[yd]/.test(code) || /h/.test(code) || (/m/.test(code) && /[:/.\-]/.test(code));
+  }
+  const cellXfs = doc.getElementsByTagName('cellXfs')[0];
+  if (cellXfs) [...cellXfs.children].forEach((xf, i) => {
+    if (xf.tagName !== 'xf') return;
+    const id = +(xf.getAttribute('numFmtId') || 0);
+    if (XLSX_DATE_BUILTIN.has(id) || fmtIsDate[id]) dateStyles.add(i);
+  });
+  return dateStyles;
+}
+// Индекс столбца из «A1». Клэмп к максимуму Excel (XFD=16383): битый ref типа
+// «ZZZZZZ1» дал бы индекс в сотни млн → разреженный массив на 3e8 → зависание
+// цикла по дыркам (for..of их НЕ пропускает). (аудит H1)
+function xlsxColIndex(ref) { const m = /^([A-Z]+)/.exec(ref || ''); if (!m) return 0; let n = 0; for (const ch of m[1]) { n = n * 26 + (ch.charCodeAt(0) - 64); if (n > 16384) return 16383; } return n - 1; }
+function xlsxSheetRows(doc, shared, struckStyles, dateStyles) {
+  const rows = []; if (!doc) return rows;
+  for (const row of doc.getElementsByTagName('row')) {
+    const cells = [];
+    for (const c of row.getElementsByTagName('c')) {
+      const col = xlsxColIndex(c.getAttribute('r'));
+      const t = c.getAttribute('t'), s = +(c.getAttribute('s') || 0);
+      const vEl = c.getElementsByTagName('v')[0];
+      let value = '', num = null;
+      if (t === 's') value = shared[+(vEl ? vEl.textContent : -1)] || '';
+      else if (t === 'inlineStr' || t === 'str') value = ((c.getElementsByTagName('t')[0] || vEl) || {}).textContent || '';
+      else { value = vEl ? vEl.textContent : ''; if (value !== '' && isFinite(+value)) num = +value; }
+      cells[col] = { value: String(value).trim(), num, struck: struckStyles.has(s), date: num != null && dateStyles.has(s) };
+    }
+    rows.push(cells);
+  }
+  return rows;
+}
+// Ячейка → копейки. Число — напрямую (без строковой неоднозначности и float-шума),
+// текст — строгим parseAmountKop. Дата-ячейка (число с дата-форматом) НЕ сумма.
+function cellAmountKop(c) {
+  if (!c || c.date) return null;
+  if (c.num != null) return c.num > 0 ? Math.round(c.num * 100) : null;
+  return parseAmountKop(c.value);
+}
+// Колонка суммы по ЗАГОЛОВКУ (в первых строках) — надёжнее, чем гадать по формату:
+// табельный номер / оклад справа от суммы иначе перебил бы её при равном счёте.
+const XLSX_AMOUNT_HDR = /сумма|выдач|выдать|начислен|оклад|аванс|отпускн|зарплат|премия|к.выдаче/i;
+function xlsxAmountColumn(grid) {
+  for (const cells of grid.slice(0, 6)) {
+    for (let ci = 0; ci < cells.length; ci++) {
+      const c = cells[ci];
+      if (c && c.num == null && XLSX_AMOUNT_HDR.test(c.value)) return { col: ci, header: cells };   // заголовок = текст, не число
+    }
+  }
+  return { col: -1, header: null };
+}
+function xlsxGridToRows(grid) {
+  const out = [];
+  importState.truncated = false;
+  const { col: amountCol, header: headerCells } = xlsxAmountColumn(grid);
+  for (const cells of grid) {
+    if (cells === headerCells) continue;                                  // саму строку-шапку не берём
+    if (out.length >= MAX_IMPORT_ROWS) { importState.truncated = true; break; }
+    let fioCell = null, bestC = -1;
+    for (const c of cells) { if (!c) continue; const k = (c.value.match(/[а-яё]/gi) || []).length; if (k > bestC) { bestC = k; fioCell = c; } }
+    if (!fioCell || isImportHeaderFio(fioNorm(fioCell.value))) continue;
+    let amountCell = null;
+    // 1) колонка суммы из шапки — если там валидная сумма
+    if (amountCol >= 0 && cells[amountCol] && cells[amountCol] !== fioCell && cellAmountKop(cells[amountCol]) != null)
+      amountCell = cells[amountCol];
+    // 2) иначе по формату: копейки-запятая / дробное число / тысячи; при равном — правая
+    if (!amountCell) {
+      let bestScore = -1;
+      for (const c of cells) {
+        if (!c || c === fioCell || cellAmountKop(c) == null) continue;
+        const norm = c.value.replace(/\s/g, ' ');
+        const score = (c.num != null ? 1 : 0)
+          + (c.num != null && !Number.isInteger(c.num) ? 2 : 0)          // число с копейками — сильный признак денег
+          + (/,\d{1,2}$/.test(norm) ? 2 : 0) + (/\d[ .]\d{3}(\D|$)/.test(norm) ? 1 : 0);
+        if (score >= bestScore) { bestScore = score; amountCell = c; }
+      }
+    }
+    const rawAmount = amountCell ? (amountCell.num != null ? String(amountCell.num) : amountCell.value) : '';
+    out.push(buildImportRow(fioCell.value, cellAmountKop(amountCell), rawAmount, fioCell.struck));
+  }
+  return out;
+}
+// Первый ВИДИМЫЙ лист = порядок в workbook.xml + маппинг r:id→файл в .rels, а НЕ
+// имя файла sheetN.xml (при перестановке вкладок первым может быть sheet3.xml).
+// Фолбэк — sheet1.xml / первый по алфавиту. (аудит M2)
+function xlsxFirstSheetPath(parts) {
+  const wsKeys = Object.keys(parts).filter(k => /^xl\/worksheets\/[^/]+\.xml$/.test(k)).sort();
+  if (wsKeys.length <= 1) return wsKeys[0];                          // один лист — без гаданий
+  try {
+    const wb = xlsxDoc(parts['xl/workbook.xml']);
+    const rels = xlsxDoc(parts['xl/_rels/workbook.xml.rels']);
+    const sheet1 = wb && wb.getElementsByTagName('sheet')[0];
+    const rid = sheet1 && (sheet1.getAttribute('r:id') || sheet1.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id'));
+    if (rid && rels) for (const rel of rels.getElementsByTagName('Relationship')) {
+      if (rel.getAttribute('Id') !== rid) continue;
+      let target = (rel.getAttribute('Target') || '').replace(/^\//, '');
+      if (!target.startsWith('xl/')) target = 'xl/' + target;
+      if (parts[target]) return target;
+    }
+  } catch (e) { /* фолбэк ниже */ }
+  return parts['xl/worksheets/sheet1.xml'] ? 'xl/worksheets/sheet1.xml' : wsKeys[0];
+}
+// Загрузка из файла: .xlsx (ZIP) или .csv (грубо, RU-разделитель «;» → таб).
+async function importFromFile(file) {
+  if (!file) return;
+  // Любая попытка файла ОБНУЛЯЕТ предпросмотр: чтобы после провала (битый/большой
+  // файл B) не остались и не были подтверждены строки прошлого файла A. (аудит M1)
+  importState.rows = []; importState.parsed = false; importState.truncated = false; renderImportPreview();
+  if (file.size > 6 * 1024 * 1024) { toast('Файл больше 6 МБ — вставьте список текстом', true); return; }
+  const name = (file.name || '').toLowerCase();
+  try {
+    if (name.endsWith('.csv') || file.type === 'text/csv') {
+      const text = await file.text();
+      const ta = $('impPaste');
+      // ; (RU-CSV) как разделитель колонок → таб, чтобы разобрать общим путём
+      if (ta) ta.value = text.replace(/\r/g, '').split('\n').map(l => l.includes('\t') ? l : l.replace(/;/g, '\t')).join('\n');
+      parseImport();
+    } else {
+      if (typeof DecompressionStream === 'undefined') throw new Error('этот браузер не читает .xlsx — вставьте текстом');
+      const buf = new Uint8Array(await file.arrayBuffer());
+      const parts = await unzipXlsx(buf);
+      const shared = xlsxSharedStrings(xlsxDoc(parts['xl/sharedStrings.xml']));
+      const stylesDoc = xlsxDoc(parts['xl/styles.xml']);
+      const struckStyles = xlsxStruckStyles(stylesDoc);
+      const dateStyles = xlsxDateStyles(stylesDoc);
+      const sheetName = xlsxFirstSheetPath(parts);
+      if (!sheetName) throw new Error('в файле нет листа');
+      const grid = xlsxSheetRows(xlsxDoc(parts[sheetName]), shared, struckStyles, dateStyles);
+      importState.rows = xlsxGridToRows(grid);
+      importState.parsed = true;
+    }
+    await importLoadExisting();
+    renderImportPreview();
+    const struckN = importState.rows.filter(r => r.struck).length;
+    toast(`Разобрано строк: ${importState.rows.length}${struckN ? ` · зачёркнутых (уволены): ${struckN}` : ''}`);
+  } catch (e) {
+    importState.rows = []; importState.parsed = false; renderImportPreview();   // провал не оставляет чужих строк
+    toast('Не удалось прочитать файл: ' + (e.message || 'ошибка'), true);
+  }
 }
 // Пересчёт «уже внесено» + права на галочку. Ручной выбор (userSet) сохраняем;
 // нетронутые строки — по autoOk. Дубль / пере-лимит всегда снимают галочку.
@@ -720,14 +935,16 @@ function renderImport() {
         <input type="month" id="impMonth" value="${importState.period}">
       </div>
       <div class="imp-field">
-        <label>Список из документа — ФИО и сумма в каждой строке</label>
-        <textarea id="impPaste" rows="7" spellcheck="false" placeholder="Вставьте из Excel или наберите. Например:
+        <label>Список из документа — вставьте текстом или загрузите файл</label>
+        <textarea id="impPaste" rows="6" spellcheck="false" placeholder="Вставьте из Excel или наберите. Например:
 Иванова Мария Петровна&#9;77 520,00
 Петров Сергей Иванович&#9;56 626,28"></textarea>
       </div>
       <div class="imp-actions">
         <button class="btn btn-primary" id="impParse">Разобрать</button>
-        <span class="muted small">Ничего не запишется, пока вы не подтвердите загрузку.</span>
+        <label class="btn btn-ghost imp-filebtn" for="impFile"><span data-ic="upload"></span>Файл .xlsx</label>
+        <input type="file" id="impFile" accept=".xlsx,.csv" hidden>
+        <span class="muted small">Ничего не запишется, пока вы не подтвердите. Зачёркнутых (уволены) в файле не включаем по умолчанию.</span>
       </div>
     </div>
     <div id="impPreview"></div>`;
@@ -736,6 +953,7 @@ function renderImport() {
   });
   $('impMonth').onchange = e => { importState.period = e.target.value; if (importState.parsed) importLoadExisting().then(renderImportPreview); };
   $('impParse').onclick = async () => { parseImport(); await importLoadExisting(); renderImportPreview(); };
+  $('impFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; importFromFile(f); };   // value='' → тот же файл повторно перечитается
   applyIcons($('importBody'));
   if (importState.parsed) renderImportPreview();
 }
@@ -764,9 +982,10 @@ function renderImportPreview() {
       : r.amount_kop != null
         ? `${rub(r.amount_kop)} ₽${big ? ' <span class="imp-tag">крупная</span>' : ''}<div class="imp-src">${esc(r.rawAmount || '')}</div>`
         : '<span class="imp-nomoney">нет суммы</span>';
+    const tags = (r.dup ? ' <span class="imp-tag">уже внесено</span>' : '') + (r.struck ? ' <span class="imp-tag imp-fired">уволен</span>' : '');
     return `<tr class="${r.include && canCheck ? '' : 'imp-off'}${r.dup ? ' imp-dup' : ''}">
       <td class="imp-ck"><input type="checkbox" data-ci="${i}"${r.include && canCheck ? ' checked' : ''}${(!canCheck || loading) ? ' disabled' : ''}></td>
-      <td class="imp-raw">${esc(r.raw)}${r.dup ? ' <span class="imp-tag">уже внесено</span>' : ''}</td>
+      <td class="imp-raw">${esc(r.raw)}${tags}</td>
       <td>${nameCell}</td>
       <td class="num">${amt}</td>
       <td><span class="imp-pill ${cls}">${esc(lbl)}</span></td>
@@ -774,6 +993,8 @@ function renderImportPreview() {
   }).join('');
   const notes = [];
   if (dupCount) notes.push(`${dupCount} уже внесено`);
+  const struckN = rows.filter(r => r.struck).length;
+  if (struckN) notes.push(`${struckN} уволены (зачёркнуты)`);
   if (noAmount) notes.push(`${noAmount} без суммы`);
   if (overCount) notes.push(`${overCount} свыше лимита`);
   notes.push(`${rows.length} строк всего`);
