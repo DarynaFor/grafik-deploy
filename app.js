@@ -1270,8 +1270,8 @@ function renderPayrollStat(rows) {
   $('payrollStat').innerHTML =
     `<span class="mini-chip strong">Осталось выдать: <b class="money">${rub(s('delta_kop'))} ₽</b></span>
      <span class="mini-chip">Начислено: <b>${rub(s('salary_kop'))} ₽</b></span>
-     <span class="mini-chip">Выдано наличными: <b>${rub(s('cash_kop') + s('cash_avans_kop'))} ₽</b></span>
-     <span class="mini-chip">К выдаче наличными: <b class="money">${rub(s('to_pay_kop'))} ₽</b></span>
+     <span class="mini-chip">Выдано на карту: <b>${rub(s('card_avans_kop') + s('card_rasch_kop'))} ₽</b></span>
+     ${s('cash_kop') + s('cash_avans_kop') ? `<span class="mini-chip">Выдано наличными: <b>${rub(s('cash_kop') + s('cash_avans_kop'))} ₽</b></span>` : ''}
      ${problems ? `<span class="mini-chip warn">Нужна ставка: <b>${problems}</b></span>` : ''}`;
 }
 
@@ -1312,10 +1312,9 @@ async function payrollDialog(empId) {
       ${r.cash_avans_kop ? `<div class="me-row"><span class="muted">Аванс наличными</span><b>${rub(r.cash_avans_kop)} ₽</b></div>` : ''}
       ${r.premia_kop ? `<div class="me-row"><span class="muted">Премия</span><b>${rub(r.premia_kop)} ₽</b></div>` : ''}
       ${r.otpusk_kop ? `<div class="me-row"><span class="muted">Отпускные</span><b>${rub(r.otpusk_kop)} ₽</b></div>` : ''}
-      <div class="me-row me-sum"><span>К выдаче наличными</span><b class="money">${rub(r.to_pay_kop)} ₽</b></div>
-      <div class="me-row"><span class="muted small">Столько должен выдать Бух 1. Факт выдачи и подтверждение суммы получателем — в кассе.</span></div>
-      ${r.delta_kop ? `<div class="me-row"><span class="muted small">Не расписано по карте и наличным</span><span class="small${recorded(r) > 0 && Math.abs(r.delta_kop) > 10000 ? ' pw-flag amber' : ''}">${rub(r.delta_kop)} ₽</span></div>` : ''}
-      ${r.unchecked_kop ? `<div class="me-row"><span class="muted small">Из них вне сверки (премия + отпускные)</span><span class="small">${rub(r.unchecked_kop)} ₽</span></div>` : ''}</div>
+      <div class="me-row me-sum"><span>Осталось выдать</span><b class="money">${rub(r.delta_kop)} ₽</b></div>
+      <div class="me-row"><span class="muted small">Зарплата минус уже выданное (карта/наличные). Столько ещё раздать — в основном наличными. Отпускные сюда не входят (выплачены отдельно на карту).</span></div>
+      ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
     ${canEdit ? `<label class="flbl">Внести деньги</label>
       <div class="me-add">
         <select class="input" id="pmKind">${moneyKindsFor(store.me()?.role).map(k => `<option value="${k[0]}">${k[1]}</option>`).join('')}</select>
