@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=41';
+import { makeStore, lineLabel, sameRate } from './store.js?v=43';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -59,7 +59,7 @@ const catShift = cat => hashStr('~' + cat) % 12;
 const catColor = cat => `hsl(${catHue(cat)}, 56%, ${50 + catShift(cat)}%)`;   // точка/полоска: 50–61%
 const catTint = cat => `hsl(${catHue(cat)}, 58%, ${85 + (catShift(cat) >> 1)}%)`;   // аватарка (пастель): 85–90%
 const initials = f => String(f || '?').split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase();
-const PAY_KINDS = [['оклад', 'Оклад'], ['сутки', 'Сутки'], ['12ч', '12ч день / ночь'], ['почасово', 'Почасово'], ['процент', 'Процент']];
+const PAY_KINDS = [['оклад', 'Оклад'], ['фикс', 'Фикс/мес'], ['сутки', 'Сутки'], ['12ч', '12ч день / ночь'], ['почасово', 'Почасово'], ['процент', 'Процент']];
 const payKindLabel = k => (PAY_KINDS.find(p => p[0] === k) || [k, k])[1];
 const fmtDT = iso => { const d = new Date(iso); return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
 const fmt = n => Number(n || 0).toLocaleString('ru-RU');            // 80000 → «80 000» (деньги, ставки)
@@ -100,10 +100,22 @@ function renderLogin() {
     foot.innerHTML = 'После подключения базы здесь будет вход по почте и паролю. <button id="resetDemo" style="color:var(--ink-2);text-decoration:underline">Сбросить демо-данные</button>';
     const rd = $('resetDemo'); if (rd) rd.onclick = () => { store.resetDemo(); toast('Демо-данные сброшены'); };
   } else {
-    body.innerHTML = `<label class="flbl">Почта</label><input class="input" id="lgEmail" type="email" autocomplete="username">
-      <label class="flbl">Пароль</label><input class="input" id="lgPass" type="password" autocomplete="current-password">
-      <div style="height:16px"></div><button class="btn btn-primary" id="lgGo" style="width:100%;justify-content:center">Войти</button>
-      <div class="small" id="lgErr" style="color:var(--red-d);margin-top:10px"></div>`;
+    // Настоящий <form> с submit — не косметика: связка ключей (iCloud Keychain) предлагает
+    // «Сохранить пароль» и потом подставляет его именно на отправке формы. Вход сбрасывается
+    // каждый день (LOGIN_DAY_KEY в store.js), поэтому автозаполнение здесь — это разница между
+    // «открыла иконку и вошла в один тап» и «набирает пароль руками каждое утро».
+    // method="post" — страховка: если обработчик почему-то не навесится, браузер уйдёт на POST
+    // (405), но НЕ утащит почту с паролем в адресную строку и историю, как сделал бы GET.
+    // novalidate обязателен: <form> включает встроенную проверку type="email", и она
+    // срабатывает ДО нашего обработчика. Почта с кириллицей (милена@клиника.рф) вообще
+    // не смогла бы войти — браузер молча блокировал бы отправку и ругался бы своим
+    // текстом на своём языке. Без формы такой проверки не было — возвращаем как было.
+    body.innerHTML = `<form id="lgForm" method="post" action="" novalidate>
+      <label class="flbl" for="lgEmail">Почта</label><input class="input" id="lgEmail" name="email" type="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="next">
+      <label class="flbl" for="lgPass">Пароль</label><input class="input" id="lgPass" name="password" type="password" autocomplete="current-password" enterkeyhint="go">
+      <div style="height:16px"></div><button class="btn btn-primary" id="lgGo" type="submit" style="width:100%;justify-content:center">Войти</button>
+      <div class="small" id="lgErr" style="color:var(--red-d);margin-top:10px"></div>
+    </form>`;
     const go = async () => {
       const btn = $('lgGo');
       if (btn.disabled) return;                                       // защита от повторных кликов (первый коннект медленный)
@@ -112,8 +124,17 @@ function renderLogin() {
       try { await store.login($('lgEmail').value.trim(), $('lgPass').value); await enter(); }   // успех → enter() прячет экран входа
       catch (e) { $('lgErr').textContent = 'Не получилось войти: ' + e.message; btn.disabled = false; btn.innerHTML = 'Войти'; }
     };
-    $('lgGo').onclick = go;
-    $('lgPass').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    // submit ловит и клик по кнопке, и Enter в любом поле — отдельный onclick не нужен.
+    // Пустое поле не дёргает сервер, но и не молчит: молчаливый перевод фокуса владелец
+    // читает как «кнопка не работает» — пишем словами. И гасим прошлую ошибку, иначе
+    // старая красная строка висит поверх новой попытки.
+    $('lgForm').addEventListener('submit', e => {
+      e.preventDefault();
+      const err = $('lgErr'); err.textContent = '';
+      if (!$('lgEmail').value.trim()) { err.textContent = 'Введите почту'; return $('lgEmail').focus(); }
+      if (!$('lgPass').value) { err.textContent = 'Введите пароль'; return $('lgPass').focus(); }
+      go();
+    });
     foot.textContent = 'Доступ выдаёт владелец. Забыли пароль — напишите владельцу.';
   }
 }
@@ -399,7 +420,7 @@ function renderLineFields(blk, l) {
   const kind = blk.querySelector('.lb-pay').value, box = blk.querySelector('.lb-fields');
   if (kind === 'процент') box.innerHTML = `<label class="flbl" style="margin-top:0">Процент %</label><input class="input lb-percent" inputmode="decimal" value="${l?.percent ?? ''}" placeholder="напр. 35">`;
   else if (kind === '12ч') box.innerHTML = `<div class="frow"><div><label class="flbl" style="margin-top:0">День ₽</label><input class="input lb-amount" inputmode="numeric" value="${l?.amount ?? ''}" placeholder="2500"></div><div><label class="flbl" style="margin-top:0">Ночь ₽</label><input class="input lb-night" inputmode="numeric" value="${l?.amount_night ?? ''}" placeholder="3000"></div></div>`;
-  else box.innerHTML = `<label class="flbl" style="margin-top:0">Ставка ₽ ${kind === 'оклад' ? '/мес' : kind === 'сутки' ? '/смена' : '/час'}</label><input class="input lb-amount" inputmode="numeric" value="${l?.amount ?? ''}" placeholder="напр. 50 000">`;
+  else box.innerHTML = `<label class="flbl" style="margin-top:0">Ставка ₽ ${(kind === 'оклад' || kind === 'фикс') ? '/мес' : kind === 'сутки' ? '/смена' : '/час'}</label><input class="input lb-amount" inputmode="numeric" value="${l?.amount ?? ''}" placeholder="напр. 50 000">`;
 }
 function wireLineBlock(blk, l) {
   renderLineFields(blk, l);
@@ -1178,7 +1199,7 @@ function drawPayroll(filter = '') {
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
     <th class="num sep">Зарплата</th><th class="num">Аванс нал.</th><th class="num">Карта</th><th class="num">Наличка</th>
-    <th class="num">Отпускные</th><th class="num">Премия</th><th class="num pw-pay">К выдаче</th></tr></thead>`;
+    <th class="num">Отпускные</th><th class="num">Премия</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
 
   let body = '';
   for (const r of rows) {
@@ -1193,7 +1214,7 @@ function drawPayroll(filter = '') {
       <td class="num fin">${rub(r.cash_kop)}</td>
       <td class="num fin">${rub(r.otpusk_kop)}</td>
       <td class="num fin">${rub(r.premia_kop)}</td>
-      <td class="num pw-pay fin"><b class="money">${rub(r.to_pay_kop)}</b></td>`;
+      <td class="num pw-pay fin"><b class="money">${rub(r.delta_kop)}</b></td>`;
     if (!my.length) {
       body += `<tr class="pw-row" data-id="${r.employee_id}"><td class="pw-name"><span class="pw-fio">${esc(r.fio)}</span>${flags}</td>
         <td colspan="4" class="muted small">${r.flag_no_rate ? 'нет ставки' : 'нет начислений за месяц'}</td>${right}</tr>`;
@@ -1216,7 +1237,7 @@ function drawPayroll(filter = '') {
     <td class="num fin">${rub(sum('cash_avans_kop'))}</td>
     <td class="num fin">${rub(sum('card_rasch_kop') + sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
-    <td class="num pw-pay fin"><b class="money">${rub(sum('to_pay_kop'))}</b></td></tr></tfoot>`;
+    <td class="num pw-pay fin"><b class="money">${rub(sum('delta_kop'))}</b></td></tr></tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
   $('payrollTable').querySelectorAll('.pw-row').forEach(tr => {
@@ -1244,11 +1265,13 @@ function payrollFlags(r) {
 function renderPayrollStat(rows) {
   const s = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
   const problems = rows.filter(r => r.flag_no_rate || r.flag_oklad_no_days).length;
+  // «Осталось выдать» = Σ Δ = начислено − выплачено (карта+нал). Главное число:
+  // сколько ещё раздать людям (в осн. наличными), если все вышли по графику.
   $('payrollStat').innerHTML =
-    `<span class="mini-chip">К выдаче: <b class="money">${rub(s('to_pay_kop'))} ₽</b></span>
+    `<span class="mini-chip strong">Осталось выдать: <b class="money">${rub(s('delta_kop'))} ₽</b></span>
      <span class="mini-chip">Начислено: <b>${rub(s('salary_kop'))} ₽</b></span>
-     <span class="mini-chip">Наличными всего: <b>${rub(s('cash_kop') + s('cash_avans_kop'))} ₽</b></span>
-     ${s('unchecked_kop') ? `<span class="mini-chip">Вне сверки: <b>${rub(s('unchecked_kop'))} ₽</b></span>` : ''}
+     <span class="mini-chip">Выдано наличными: <b>${rub(s('cash_kop') + s('cash_avans_kop'))} ₽</b></span>
+     <span class="mini-chip">К выдаче наличными: <b class="money">${rub(s('to_pay_kop'))} ₽</b></span>
      ${problems ? `<span class="mini-chip warn">Нужна ставка: <b>${problems}</b></span>` : ''}`;
 }
 
@@ -1639,7 +1662,32 @@ $('addEmpBtn').onclick = () => employeeForm(null);
 $('addSpecBtn').onclick = specForm;
 $('backBtn').onclick = () => go('employees');
 $('logoutBtn').innerHTML = ICONS.out;
-$('logoutBtn').onclick = async () => { await store.logout(); document.body.classList.remove('authed'); renderLogin(); };
+// finally: выход должен ВЫГЛЯДЕТЬ выходом даже если signOut упал по сети. Иначе экран
+// остаётся «внутри программы», хотя store.logout() уже снял пользователя и ключ дня.
+$('logoutBtn').onclick = async () => {
+  try { await store.logout(); }
+  finally { document.body.classList.remove('authed'); renderLogin(); }
+};
+
+// Суточный сброс входа отрабатывает в store.init(), то есть при ЗАГРУЗКЕ страницы. Программа,
+// поставленная иконкой на телефон, страницу не перезагружает — возвращается из переключателя
+// задач «как была», и вчерашний вход прожил бы сколько угодно. Проверяем день при каждом
+// возврате в программу: перезагрузка гонит код по уже проверенной ветке init() → форма входа.
+// Открытая форма — исключение: перезагрузка стёрла бы незаконченный ввод без предупреждения,
+// а «вернулся в программу» — это ещё и просто погасший по автоблокировке экран телефона, пока
+// владелец сверяет сумму с бумажки. Хуже всего ретро-правка: в замыкании висит уже отправленный
+// СМС-код, и после перезагрузки его пришлось бы запрашивать заново (а попытки ограничены).
+// Пропускаем — сброс отработает при следующем возврате, когда форма будет закрыта.
+// TODO(осознанно не сделано): окно, которое НИКОГДА не сворачивают (Safari на втором мониторе),
+// так и не сбросится — событие привязано к возврату, а не ко времени. Сброс по таймеру не ставим
+// намеренно: он перезагружал бы страницу под руками у работающего человека, а это хуже, чем сам
+// пропуск. Угроза, ради которой задуман суточный сброс, — забытый/потерянный телефон, и её
+// покрывает именно возврат в программу.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !store.dayExpired()) return;
+  if ($('modalOv').classList.contains('show') || $('modalOv2').classList.contains('show')) return;
+  location.reload();
+});
 applyIcons();
 
 (async () => {

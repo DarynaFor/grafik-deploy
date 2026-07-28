@@ -101,6 +101,7 @@ export class MockStore {
   }
   async login() { throw new Error('В демо-режиме вход по кнопкам ниже'); }
   async logout() { this.user = null; sessionStorage.removeItem('milena-demo-user'); }
+  dayExpired() { return false; }   // в демо суточного сброса нет — там и данных настоящих нет
   me() { return this.user; }
 
   _log(action, entity, entityId, field, oldV, newV) {
@@ -395,7 +396,7 @@ export function lineLabel(l) {
   const kind = l.pay_kind;
   if (kind === 'процент') return `${l.line_type} · процент ${l.percent ?? '?'} %`;
   if (kind === '12ч') return `${l.line_type} · 12ч день ${l.amount ?? '?'} / ночь ${l.amount_night ?? '?'} ₽`;
-  const unit = { 'оклад': '₽/мес', 'сутки': '₽/смена', 'почасово': '₽/час' }[kind] || '₽';
+  const unit = { 'оклад': '₽/мес', 'фикс': '₽/мес', 'сутки': '₽/смена', 'почасово': '₽/час' }[kind] || '₽';
   return `${l.line_type} · ${kind} ${l.amount ?? '?'} ${unit}`;
 }
 
@@ -504,7 +505,26 @@ export class SupabaseStore {
     await this._loadProfile(data.user);
     return this.user;
   }
-  async logout() { if (this.sb) await this.sb.auth.signOut(); this.user = null; }
+  // Ключ дня снимаем ВСЕГДА, даже если signOut не достучался до сети: в библиотеке есть
+  // ветка раннего выхода по сетевой ошибке, при которой сессия остаётся в localStorage.
+  // Тогда «Выйти» нарисует форму входа, а следующее открытие в тот же день пустило бы
+  // обратно БЕЗ пароля (гейт на init() сверяет только день). Снятый ключ закрывает это.
+  async logout() {
+    try { if (this.sb) await this.sb.auth.signOut(); }
+    finally { this.user = null; localStorage.removeItem(LOGIN_DAY_KEY); }   // сначала юзер: если
+    // localStorage запрещён (Safari «Блокировать все cookie»), removeItem бросит — и при обратном
+    // порядке владелец остался бы залогинен в памяти при нарисованной форме входа.
+  }
+  // Вход просрочен? Проверяется не только при загрузке: программа, поставленная на телефон
+  // иконкой, месяцами не перезагружается — висит в переключателе задач и возвращается «как
+  // была». Без этой проверки вчерашний вход жил бы сколько угодно.
+  // Если хранилище отвалилось посреди сессии — считаем вход просроченным, а не живым: лишний
+  // ввод пароля дешевле бессрочного доступа. Зацикливания не будет — после перезагрузки
+  // init() не выставит пользователя, и охранник !!this.user закоротит проверку.
+  dayExpired() {
+    if (!this.user) return false;
+    try { return localStorage.getItem(LOGIN_DAY_KEY) !== mskDay(); } catch (e) { return true; }
+  }
   me() { return this.user; }
 
   async listSpecialties() {

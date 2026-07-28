@@ -439,6 +439,7 @@ body.authed .login-stage{display:none}
 .pw-flag.red{background:rgba(255,107,107,.14);color:var(--red-d)}
 .pw-flag.amber{background:rgba(242,193,78,.14);color:var(--amber-d)}
 .mini-chip.warn{background:rgba(255,107,107,.12);color:var(--red-d)}
+.mini-chip.strong{background:rgba(31,165,101,.14);color:var(--green-d);border-color:rgba(31,165,101,.32);font-size:12.5px}
 /* модалка человека */
 .me-row{display:flex;justify-content:space-between;gap:14px;padding:3px 0;font-size:13.5px}
 .me-sum{border-top:1px solid var(--hair);margin-top:5px;padding-top:7px;font-weight:700}
