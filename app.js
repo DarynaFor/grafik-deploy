@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=43';
+import { makeStore, lineLabel, sameRate } from './store.js?v=49';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -37,6 +37,7 @@ const ICONS = {
   cal: I('<rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>', 20),
   sun: I('<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.6 4.6l1.8 1.8M17.6 17.6l1.8 1.8M2.5 12H5M19 12h2.5M4.6 19.4l1.8-1.8M17.6 6.4l1.8-1.8"/>', 18),
   moon: I('<path d="M20.5 13.2A8 8 0 1 1 10.8 3.5a6.2 6.2 0 0 0 9.7 9.7Z"/>', 18),
+  upload: I('<path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/><path d="M12 4v11M8 8l4-4 4 4"/>', 20),
 };
 function applyIcons(root) { (root || document).querySelectorAll('[data-ic]').forEach(e => { e.innerHTML = ICONS[e.dataset.ic] || ''; }); }
 
@@ -151,11 +152,41 @@ const NAV = [
   // Только owner+operator: RLS на patient_payment (pp_sel) пускает именно их,
   // касса оплаты пациентов не видит — это не её участок.
   { s: 'patients', i: 'card', l: 'Оплаты пациентов', staffOnly: true },
+  // Импорт ведомостей: каждый вносит СВОИ документы. Кто какой вид денег может
+  // писать — заперто в RLS money_line (миграция 008); экран лишь показывает то,
+  // что роль реально может внести, и то же проверит база. show: canImport.
+  { s: 'import', i: 'upload', l: 'Импорт', show: () => canImport() },
   { s: 'specialties', i: 'tag', l: 'Специальности', staffOnly: true },
   { s: 'journal', i: 'journal', l: 'Журнал', ownerOnly: true },
 ];
 function isOwner() { return store.me()?.role === 'owner'; }
-function navItems() { return NAV.filter(n => (!n.ownerOnly || isOwner()) && (!n.staffOnly || isStaff())); }
+function navItems() { return NAV.filter(n => (!n.ownerOnly || isOwner()) && (!n.staffOnly || isStaff()) && (!n.show || n.show())); }
+
+// ── Импорт: какие виды денег доступны роли (зеркало RLS ml_ins, миграция 008) ──
+// Алёна (operator) — отпускные/наличные; Бух 2 (cashier2) — карту/премию;
+// владелец — всё. Касса (cashier1) сюда не заходит: её поверхность узкая (одна
+// выдача по одному человеку), список ведомостей ей не нужен.
+const IMPORT_KIND_META = {
+  otpusk:     { label: 'Отпускные',       hint: 'уже выплаченные отпускные, в отдельную графу' },
+  card_avans: { label: 'Аванс на карту',  hint: 'реестр аванса (ТКБ), официальная часть' },
+  card_rasch: { label: 'Расчёт на карту', hint: 'окончательный расчёт по 1С' },
+  cash_avans: { label: 'Аванс наличными', hint: 'выданный наличными аванс' },
+  cash:       { label: 'Наличные',        hint: 'выданные наличными' },
+  premia:     { label: 'Премия',          hint: 'разовая премия, попадёт в журнал' },
+};
+// ⚠ Только owner+operator: сопоставление ФИО идёт на КЛИЕНТЕ по всему ростеру,
+// а читать employee (emp_select) могут лишь owner и operator. Бух (cashier1/2)
+// не видит даже имён — это НАМЕРЕННАЯ граница (миграция 024: «Расширять
+// emp_select НЕЛЬЗЯ»). Поэтому карту-реестр (аванс/1С) сейчас грузит владелец
+// (у него есть и ростер, и право писать card_*). Когда появится логин Бух 2,
+// его импорт карты сделаем через СЕРВЕРНЫЙ матч-RPC (SECURITY DEFINER вернёт
+// employee_id по списку, не раскрывая ростер) — тогда добавится cashier2.
+const IMPORT_KINDS_BY_ROLE = {
+  owner:    ['otpusk', 'card_avans', 'card_rasch', 'cash_avans', 'cash', 'premia'],
+  operator: ['otpusk', 'cash_avans', 'cash'],
+};
+function importKinds() { return IMPORT_KINDS_BY_ROLE[store.me()?.role] || []; }
+function canImport() { return importKinds().length > 0; }
 function renderNav() {
   $('sideNav').innerHTML = navItems().map(n => `<button class="nav-item${n.s === curScreen ? ' active' : ''}" data-s="${n.s}"><span class="ic">${ICONS[n.i]}</span>${n.l}</button>`).join('');
   $('mobileNav').innerHTML = navItems().map(n => `<button data-s="${n.s}" class="${n.s === curScreen ? 'active' : ''}"><span>${ICONS[n.i]}</span>${n.l}</button>`).join('');
@@ -171,6 +202,7 @@ function go(screen) {
   // что повторный заход в тот же месяц был бы no-op. Экран сверки с кэшем, который
   // не сбрасывается, отменяет сам себя.
   if (screen === 'patients') renderPatients();
+  if (screen === 'import') renderImport();
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
   $('s-' + screen).classList.add('show');
   renderNav();
@@ -498,6 +530,346 @@ function confirmPhone(norm) {
     $('phNo').onclick = () => { closeModal2(); resolve(false); };
     $('phYes').onclick = () => { closeModal2(); resolve(true); };
   });
+}
+
+/* ══ Импорт ведомостей ═════════════════════════════════════════════════════
+   Вставка списка из документа (ФИО + сумма) → сопоставление с карточками →
+   предпросмотр (кого нашли / кого нет / что уже внесено) → человек подтверждает
+   → запись в money_line ОДНИМ пакетом. До подтверждения ничего не пишется.
+   Право писать вид денег заперто в RLS money_line (ml_ins, миграция 022): тут
+   лишь то, что роль реально может внести, и то же проверит база. Прямая вставка
+   всегда source='manual' — метка «из парсера» (source='import' + import_batch)
+   зарезервирована за серверной процедурой (010 §8); её сделаем к .xlsx-загрузке.
+   Файлом .xlsx — следующий шаг; пока вставка текста (быстрая польза).
+   Сопоставление — якорь по фамилии; имя может быть в другом падеже/инициале. */
+const MONEY_MAX_KOP = 100000000;   // потолок одной записи (money_line_sane_chk, 010): 1 000 000 ₽
+const MONEY_BIG_KOP = 30000000;    // «крупная, переспросить» — 300 000 ₽ (ловим опечатку на порядок)
+const MAX_IMPORT_ROWS = 500;       // защита от гигантской вставки: ведомость клиники ≤ ~150 строк
+const importState = { kind: null, period: null, rows: [], parsed: false, existing: new Set(), loading: false, truncated: false };
+
+// Может ли строка попасть в загрузку: есть человек, сумма в пределах, не дубль.
+function importCanInclude(r) { return !!(r.chosenId && r.amount_kop != null && r.amount_kop <= MONEY_MAX_KOP && !r.dup); }
+
+function fioNorm(s) {
+  return String(s || '').toLowerCase().replace(/ё/g, 'е')
+    .replace(/[^a-zа-я-]+/gi, ' ').replace(/\s+/g, ' ').trim();
+}
+// Левенштейн → доля совпадения 0..1 (ловим опечатку в фамилии).
+function simRatio(a, b) {
+  a = a || ''; b = b || ''; if (a === b) return 1; if (!a || !b) return 0;
+  const m = a.length, n = b.length;
+  const d = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) d[i][0] = i;
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return 1 - d[m][n] / Math.max(m, n);
+}
+// Уверенность по имени. Полное совпадение — да. Инициал против полного имени с
+// той же буквы — да (в ведомости «Иванова М.П.»). Но ДВА РАЗНЫХ полных имени
+// (Пётр против Павел) с одной буквы — НЕ уверенно: это разные люди, не опечатка.
+function givenConfident(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const aInit = a.length <= 1, bInit = b.length <= 1;
+  return (aInit || bInit) && a[0] === b[0];
+}
+// Сопоставление ФИО из ведомости с карточкой. Якорь — фамилия (первое слово).
+// Возвращаем не вердикт, а предложение со статусом; человек в предпросмотре решает.
+function matchEmp(raw, emps) {
+  const q = fioNorm(raw);
+  if (!q) return { status: 'empty' };
+  const pool = emps.filter(e => e.status !== 'archived');
+  const src = pool.length ? pool : emps;
+  const exact = src.filter(e => fioNorm(e.fio) === q);
+  if (exact.length === 1) return { status: 'ok', emp: exact[0] };
+  if (exact.length > 1) return { status: 'many', cands: exact };
+  const qs = q.split(' '); const surname = qs[0], given = qs[1] || '';
+  const bySur = src.filter(e => fioNorm(e.fio).split(' ')[0] === surname);
+  if (bySur.length === 1) {
+    // Одна фамилия в базе, но имя совпало лишь по первой букве двух ПОЛНЫХ имён
+    // → weak (в предпросмотре с выбором), НЕ ok. Иначе «Иванов Пётр» молча ушёл
+    // бы деньгами «Иванову Павлу». (аудит H1)
+    const gOk = givenConfident(given, fioNorm(bySur[0].fio).split(' ')[1] || '');
+    return { status: gOk ? 'ok' : 'weak', emp: bySur[0] };
+  }
+  if (bySur.length > 1) {
+    // Несколько однофамильцев: ok ТОЛЬКО если полное имя из ведомости уникально
+    // совпало; либо (ввод — инициал) инициал уникально указал на одного. Иначе
+    // many — пусть выберут руками, не угадываем по первой букве полного имени.
+    const byFull = bySur.filter(e => (fioNorm(e.fio).split(' ')[1] || '') === given);
+    if (byFull.length === 1) return { status: 'ok', emp: byFull[0] };
+    if (given.length <= 1 && given) {
+      const byInit = bySur.filter(e => { const g = fioNorm(e.fio).split(' ')[1] || ''; return g[0] === given[0]; });
+      if (byInit.length === 1) return { status: 'ok', emp: byInit[0] };
+    }
+    return { status: 'many', cands: bySur };
+  }
+  let best = null;
+  for (const e of src) {
+    const s = simRatio(surname, fioNorm(e.fio).split(' ')[0]);
+    if (!best || s > best.s) best = { emp: e, s };
+  }
+  if (best && best.s >= 0.82) return { status: 'fuzzy', emp: best.emp, score: best.s };
+  return { status: 'new' };
+}
+// Сумма из ведомости → копейки. СТРОГО: «77 520,00» (пробел-тысячи + запятая-
+// копейки), «70.000» / «1.234.567» (точки — тысячи ПО 3), «300.00» (точка-копейки
+// 1–2 знака), «150000». Всё прочее → null: дата «28.07.2026», минус, «1e5», номер
+// с буквами, «1,234» — чтобы не залить чужой столбец под видом суммы. Разобранное
+// показываем рублями рядом с исходником — промах видно (\s покрывает и nbsp).
+function parseAmountKop(s) {
+  let t = String(s || '').replace(/\s/g, '');
+  if (!/^\d[\d.,]*$/.test(t)) return null;                    // старт с цифры, только цифры/точки/запятые
+  const commas = (t.match(/,/g) || []).length, dots = (t.match(/\./g) || []).length;
+  if (commas > 1) return null;                                // «1,,2», «1,2,3»
+  if (commas === 1) {
+    const i = t.indexOf(','), intp = t.slice(0, i), frac = t.slice(i + 1);
+    if (frac.length < 1 || frac.length > 2) return null;      // копейки 1–2 знака
+    if (intp.includes('.') && !/^\d{1,3}(\.\d{3})*$/.test(intp)) return null;  // точки до запятой — тысячи по 3
+    t = intp.replace(/\./g, '') + '.' + frac;
+  } else if (dots >= 1) {
+    const last = t.slice(t.lastIndexOf('.') + 1);
+    if (dots >= 2 || last.length === 3) {
+      if (!/^\d{1,3}(\.\d{3})+$/.test(t)) return null;         // все точки — тысячи по 3; «28.07.2026» отсеивается
+      t = t.replace(/\./g, '');
+    } else if (last.length > 2) return null;                  // «12.3456» — не деньги
+  }
+  const v = parseFloat(t);
+  return isFinite(v) && v > 0 ? Math.round(v * 100) : null;
+}
+// Строка ведомости → { fio, amount }. Колонки: таб / 2+ пробела / «|». ФИО —
+// ячейка с максимумом кириллицы; сумма — последняя ячейка, что парсится как деньги.
+function splitImportLine(line) {
+  let cells = line.includes('\t') ? line.split('\t') : line.split(/\s{2,}|\s*\|\s*/);
+  cells = cells.map(c => c.trim()).filter(Boolean);
+  if (cells.length < 2) {
+    const m = line.trim().match(/^(.*?[а-яё])\s+([\d][\d\s.,]*)$/i);
+    if (m) return { fio: m[1].trim(), amount: m[2].trim() };
+    return { fio: line.trim(), amount: '' };
+  }
+  let fioCell = cells[0], bestC = -1;
+  for (const c of cells) { const n = (c.match(/[а-яё]/gi) || []).length; if (n > bestC) { bestC = n; fioCell = c; } }
+  // Сумма: среди денежных ячеек предпочитаем отформатированную как деньги
+  // (копейки-запятая / разделитель тысяч), чтобы не схватить табельный номер или
+  // короткое целое; при равном счёте — самую правую.
+  let amount = '', bestScore = -1;
+  for (const c of cells) {
+    if (c === fioCell || parseAmountKop(c) == null) continue;
+    const norm = c.replace(/\s/g, ' ');                          // nbsp → пробел для проверки формата
+    const score = (/,\d{1,2}$/.test(norm) ? 2 : 0) + (/\d[ .]\d{3}(\D|$)/.test(norm) ? 1 : 0);
+    if (score >= bestScore) { bestScore = score; amount = c; }
+  }
+  return { fio: fioCell, amount };
+}
+function parseImport() {
+  const ta = $('impPaste'); const text = ta ? ta.value : '';
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const rows = [];
+  importState.truncated = false;
+  for (const line of lines) {
+    if (rows.length >= MAX_IMPORT_ROWS) { importState.truncated = true; break; }   // защита от гигантской вставки
+    const { fio, amount } = splitImportLine(line);
+    const fn = fioNorm(fio);
+    if (!fn || !/[а-яё]{2}/i.test(fn)) continue;                      // не ФИО (номер строки и т.п.)
+    if (/^(итого|итог|всего|сумма|ведомость|фио|сотрудник|списком)/.test(fn)) continue;  // шапка/итоги
+    const amount_kop = parseAmountKop(amount);
+    const match = matchEmp(fio, employees);
+    const over = amount_kop != null && amount_kop > MONEY_MAX_KOP;    // > 1 млн — база не примет
+    // Автогалочка ТОЛЬКО у точного совпадения (ok). weak/fuzzy — не угадка деньгами:
+    // человека подставим в выбор, но галочку человек ставит сам. (аудит H2)
+    const autoOk = match.status === 'ok' && amount_kop != null && !over;
+    rows.push({ raw: fio, rawAmount: amount, amount_kop, over, match,
+      chosenId: match.emp?.id || null, autoOk, include: autoOk, dup: false, userSet: false });
+  }
+  importState.rows = rows; importState.parsed = true;
+}
+// Пересчёт «уже внесено» + права на галочку. Ручной выбор (userSet) сохраняем;
+// нетронутые строки — по autoOk. Дубль / пере-лимит всегда снимают галочку.
+async function importLoadExisting() {
+  importState.existing = new Set();
+  try { importState.existing = await store.existingMoneyIds(importState.period, importState.kind); }
+  catch (e) { /* дубль-подсветка не критична — база всё равно append-only */ }
+  for (const r of importState.rows) {
+    r.dup = !!(r.chosenId && importState.existing.has(r.chosenId));
+    r.include = importCanInclude(r) && (r.userSet ? r.include : r.autoOk);
+  }
+}
+function importEmpOptions(selId) {
+  const act = employees.filter(e => e.status !== 'archived').slice()
+    .sort((a, b) => fioNorm(a.fio) < fioNorm(b.fio) ? -1 : 1);
+  return '<option value="">— не сопоставлять —</option>' +
+    act.map(e => `<option value="${e.id}"${e.id === selId ? ' selected' : ''}>${esc(e.fio)}</option>`).join('');
+}
+function renderImport() {
+  const kinds = importKinds();
+  if (!canImport()) { $('importBody').innerHTML = '<div class="card cardpad muted">Импорт недоступен для вашей роли.</div>'; return; }
+  if (!importState.kind || !kinds.includes(importState.kind)) importState.kind = kinds[0];
+  if (!importState.period) { const d = new Date(); importState.period = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+  const meta = IMPORT_KIND_META[importState.kind] || {};
+  $('importBody').innerHTML = `
+    <div class="card cardpad imp-setup">
+      <div class="imp-field">
+        <label>Что вносим</label>
+        <div class="imp-kinds">${kinds.map(k => `<button class="imp-kind${k === importState.kind ? ' on' : ''}" data-ik="${k}">${esc(IMPORT_KIND_META[k].label)}</button>`).join('')}</div>
+        <div class="imp-hint">${esc(meta.hint || '')}</div>
+      </div>
+      <div class="imp-field imp-month">
+        <label>За месяц</label>
+        <input type="month" id="impMonth" value="${importState.period}">
+      </div>
+      <div class="imp-field">
+        <label>Список из документа — ФИО и сумма в каждой строке</label>
+        <textarea id="impPaste" rows="7" spellcheck="false" placeholder="Вставьте из Excel или наберите. Например:
+Иванова Мария Петровна&#9;77 520,00
+Петров Сергей Иванович&#9;56 626,28"></textarea>
+      </div>
+      <div class="imp-actions">
+        <button class="btn btn-primary" id="impParse">Разобрать</button>
+        <span class="muted small">Ничего не запишется, пока вы не подтвердите загрузку.</span>
+      </div>
+    </div>
+    <div id="impPreview"></div>`;
+  $('importBody').querySelectorAll('[data-ik]').forEach(b => b.onclick = () => {
+    importState.kind = b.dataset.ik; importState.parsed = false; importState.rows = []; renderImport();
+  });
+  $('impMonth').onchange = e => { importState.period = e.target.value; if (importState.parsed) importLoadExisting().then(renderImportPreview); };
+  $('impParse').onclick = async () => { parseImport(); await importLoadExisting(); renderImportPreview(); };
+  applyIcons($('importBody'));
+  if (importState.parsed) renderImportPreview();
+}
+function renderImportPreview() {
+  const box = $('impPreview'); if (!box) return;
+  if (!importState.parsed) { box.innerHTML = ''; return; }
+  const rows = importState.rows;
+  if (!rows.length) { box.innerHTML = '<div class="card cardpad muted">Не нашлось ни одной строки с ФИО и суммой. Проверьте, что вставлены строки вида «Фамилия Имя Отчество ⟶ сумма».</div>'; return; }
+  const STLABEL = { ok: ['Сопоставлен', 'ok'], weak: ['Проверьте имя', 'warn'], fuzzy: ['Похоже на опечатку', 'warn'], many: ['Несколько совпадений', 'warn'], new: ['Не найден', 'bad'], empty: ['Пусто', 'bad'] };
+  const loading = importState.loading;
+  const incl = rows.filter(r => r.include && importCanInclude(r));
+  const total = incl.reduce((s, r) => s + r.amount_kop, 0);
+  const dupCount = rows.filter(r => r.dup).length;
+  const noAmount = rows.filter(r => r.amount_kop == null).length;
+  const overCount = rows.filter(r => r.over).length;
+  const trs = rows.map((r, i) => {
+    const [lbl, cls] = STLABEL[r.match.status] || ['—', 'bad'];
+    const canCheck = importCanInclude(r);
+    const fixed = r.match.status === 'ok' && !r.dup && !r.over;
+    const nameCell = fixed
+      ? `<b>${esc(r.match.emp.fio)}</b>`
+      : `<select data-ri="${i}" class="imp-sel"${loading ? ' disabled' : ''}>${importEmpOptions(r.chosenId)}</select>`;
+    const big = r.amount_kop != null && !r.over && r.amount_kop > MONEY_BIG_KOP;
+    const amt = r.over
+      ? `${rub(r.amount_kop)} ₽<div class="imp-nomoney">больше 1 млн — нельзя</div>`
+      : r.amount_kop != null
+        ? `${rub(r.amount_kop)} ₽${big ? ' <span class="imp-tag">крупная</span>' : ''}<div class="imp-src">${esc(r.rawAmount || '')}</div>`
+        : '<span class="imp-nomoney">нет суммы</span>';
+    return `<tr class="${r.include && canCheck ? '' : 'imp-off'}${r.dup ? ' imp-dup' : ''}">
+      <td class="imp-ck"><input type="checkbox" data-ci="${i}"${r.include && canCheck ? ' checked' : ''}${(!canCheck || loading) ? ' disabled' : ''}></td>
+      <td class="imp-raw">${esc(r.raw)}${r.dup ? ' <span class="imp-tag">уже внесено</span>' : ''}</td>
+      <td>${nameCell}</td>
+      <td class="num">${amt}</td>
+      <td><span class="imp-pill ${cls}">${esc(lbl)}</span></td>
+    </tr>`;
+  }).join('');
+  const notes = [];
+  if (dupCount) notes.push(`${dupCount} уже внесено`);
+  if (noAmount) notes.push(`${noAmount} без суммы`);
+  if (overCount) notes.push(`${overCount} свыше лимита`);
+  notes.push(`${rows.length} строк всего`);
+  box.innerHTML = `
+    <div class="card imp-preview">
+      ${importState.truncated ? `<div class="imp-warn">Показаны первые ${MAX_IMPORT_ROWS} строк — остальное не разобрано. Загрузите частями.</div>` : ''}
+      <div class="imp-sum">
+        <div class="imp-sum-main"><b>${incl.length}</b> к загрузке · <b>${rub(total)} ₽</b></div>
+        <div class="muted small">${notes.join(' · ')}</div>
+        <button class="btn btn-primary btn-sm" id="impLoad"${(incl.length && !loading) ? '' : ' disabled'}>${loading ? 'Загрузка…' : 'Загрузить' + (incl.length ? ' ' + incl.length : '')}</button>
+      </div>
+      <div class="imp-tablewrap"><table class="imp-table">
+        <thead><tr><th></th><th>Из ведомости</th><th>Сотрудник в базе</th><th class="num">Сумма</th><th>Статус</th></tr></thead>
+        <tbody>${trs}</tbody>
+      </table></div>
+    </div>`;
+  box.querySelectorAll('[data-ci]').forEach(c => c.onchange = () => { const r = importState.rows[+c.dataset.ci]; r.include = c.checked; r.userSet = true; renderImportPreview(); });
+  box.querySelectorAll('[data-ri]').forEach(sel => sel.onchange = () => {
+    const r = importState.rows[+sel.dataset.ri];
+    r.chosenId = sel.value ? +sel.value : null;
+    r.userSet = true;
+    r.dup = !!(r.chosenId && importState.existing.has(r.chosenId));
+    r.include = importCanInclude(r);
+    renderImportPreview();
+  });
+  const lb = $('impLoad'); if (lb) lb.onclick = doImportLoad;
+}
+// Подтверждение → Promise<boolean>. Показываем сумму и то, что отменить можно
+// только сторно — как и в других денежных действиях.
+function confirmImportLoad(kindLabel, period, count, total, warn) {
+  return new Promise(resolve => {
+    showModal(`<h3>Загрузить «${esc(kindLabel)}»?</h3>
+      <div class="msub">За ${esc(period)} · записи попадут в журнал, их увидит владелец</div>
+      <div class="rc-diff"><div><b>${count}</b> чел · <b>${fmt(Math.round(total / 100))} ₽</b></div></div>
+      ${warn ? `<div class="imp-warn">${esc(warn).replace(/\n/g, '<br>')}</div>` : ''}
+      <div class="msub" style="margin-top:8px">Отменить запись можно только сторно. Продолжить?</div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="ilNo">Отмена</button>
+        <button class="btn btn-primary btn-sm" id="ilYes">${ICONS.check}Загрузить</button></div>`);
+    $('ilNo').onclick = () => { closeModal(); resolve(false); };
+    $('ilYes').onclick = () => { closeModal(); resolve(true); };
+  });
+}
+async function doImportLoad() {
+  if (importState.loading) return;                                 // повторный вход заблокирован (аудит H1)
+  const incl = importState.rows.filter(r => r.include && importCanInclude(r));
+  if (!incl.length) return;
+  // сколько ЛИШНИХ строк на одного человека (в списке дважды/трижды → суммы сложатся)
+  const cnt = new Map();
+  for (const r of incl) cnt.set(r.chosenId, (cnt.get(r.chosenId) || 0) + 1);
+  const extra = [...cnt.values()].reduce((s, c) => s + (c - 1), 0);
+  const total = incl.reduce((s, r) => s + r.amount_kop, 0);
+  const meta = IMPORT_KIND_META[importState.kind];
+  const bigList = incl.filter(r => r.amount_kop > MONEY_BIG_KOP);
+  const warns = [];
+  if (extra) warns.push(`Один и тот же человек в списке несколько раз (${extra} ${extra === 1 ? 'лишняя строка' : 'лишних строк'}) — суммы сложатся. Если это ошибка, снимите галочки.`);
+  if (bigList.length) warns.push('Крупные суммы: ' + bigList.slice(0, 6).map(r => {
+    const e = employees.find(x => x.id === r.chosenId); return `${e ? e.fio.split(' ')[0] : '?'} ${rub(r.amount_kop)} ₽`;
+  }).join(', ') + (bigList.length > 6 ? '…' : '') + ' — проверьте, не опечатка ли.');
+  if (!(await confirmImportLoad(meta.label, importState.period, incl.length, total, warns.join('\n')))) return;
+  importState.loading = true;                                      // голое присвоение (не бросит); блокирует повторный вход
+  try {
+    renderImportPreview();                                         // блокируем кнопку/галочки — уже под try, чтобы флаг не залип
+    // Свежая проверка «уже внесено» — вдруг кто-то залил, пока подтверждали.
+    // ⚠ TODO(v2): это НЕ закрывает гонку двух клиентов (owner+Алёна вносят один
+    // и тот же реестр period+kind одновременно): оба видят dup=false → двойная
+    // выплата. money_line append-only без unique(employee,period,kind) — по
+    // замыслу. Полное решение — серверная import-RPC с ключом идемпотентности
+    // (та же процедура даст source='import'+batch и доступ Бух 2 без ростера).
+    // Пока: окно сужено, двойная запись видна в журнале и снимается сторно.
+    await importLoadExisting();
+    const send = incl.filter(r => r.include && importCanInclude(r));
+    if (send.length < incl.length) {
+      importState.loading = false; renderImportPreview();
+      toast('Список изменился — часть уже внесена, проверьте', true);
+      return;
+    }
+    const items = send.map(r => ({ employee_id: r.chosenId, amount_kop: r.amount_kop }));
+    const sentSum = items.reduce((s, it) => s + it.amount_kop, 0);
+    const res = await store.addMoneyLinesBatch(importState.period, importState.kind, items);
+    // Считаем по ОТПРАВЛЕННОМУ, а не по возврату: .insert().select() фильтруется
+    // SELECT-политикой, и для будущих ролей мог бы вернуть меньше, чем записал.
+    if (Array.isArray(res) && res.length !== items.length)
+      toast(`Записано ${items.length}, база подтвердила ${res.length} — проверьте журнал`, true);
+    else
+      toast(`Загружено ${items.length} · ${rub(sentSum)} ₽`);
+    const doneIds = new Set(send.map(r => r.chosenId));
+    importState.rows = importState.rows.filter(r => !(doneIds.has(r.chosenId) && r.include && importCanInclude(r)));
+    importState.parsed = importState.rows.length > 0;
+    importState.loading = false;
+    await importLoadExisting();                                    // помечаем только что внесённых как «уже внесено»
+    renderImport();
+  } catch (e) {
+    importState.loading = false;
+    renderImportPreview();
+    toast(e.message || 'Не удалось загрузить', true);
+  }
 }
 
 function collectLines(box) {

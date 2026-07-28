@@ -254,6 +254,36 @@ export class MockStore {
     this._log('сторно', 'money_line', r.id, row.kind, (row.amount_kop / 100) + ' ₽', (r.amount_kop / 100) + ' ₽');
     this._save(); return r;
   }
+  // Импорт ведомостей: множество employee_id, у кого за период уже есть чистая
+  // (не сторнированная) сумма этого вида — чтобы не залить второй раз.
+  async existingMoneyIds(period, kind) {
+    const net = new Map();
+    for (const r of (this.db.money || [])) {
+      if (r.kind !== kind || r.period !== period) continue;
+      net.set(r.employee_id, (net.get(r.employee_id) || 0) + r.amount_kop);
+    }
+    return new Set([...net].filter(([, v]) => v > 0).map(([k]) => k));
+  }
+  async addMoneyLinesBatch(period, kind, items) {
+    this.db.money = this.db.money || [];
+    // Зеркалим прод: money_line_sane_chk (010) — |сумма| ≤ 1 000 000 ₽. В проде
+    // такой ряд рушит ВЕСЬ пакет (атомарно), поэтому и здесь — до единой записи.
+    if (items.some(it => it.amount_kop > 100000000)) throw new Error('Сумма вне разумных границ');
+    const out = [];
+    for (const it of items) {
+      if (!(it.amount_kop > 0)) continue;
+      // source='manual' — как в проде: прямую вставку RLS (022) не пускает под
+      // source='import', та метка зарезервирована за серверной процедурой (010 §8).
+      const row = { id: (this.db.nextId.money = (this.db.nextId.money || 1) + 1),
+        employee_id: it.employee_id, period, kind, amount_kop: it.amount_kop,
+        note: it.note || 'импорт ведомости', entered_by: this.user?.name || '?',
+        created_at: new Date().toISOString(), source: 'manual' };
+      this.db.money.push(row);
+      this._log('деньги', 'money_line', row.id, kind, null, (it.amount_kop / 100) + ' ₽');
+      out.push(row);
+    }
+    this._save(); return out;
+  }
   async listMoneyEvents(employee_id, period) {
     return (this.db.money || []).filter(x => x.employee_id === employee_id && x.period === period)
       .map(x => ({ ...x, kind_label: MONEY_KIND_RU[x.kind] || x.kind, entered_by_name: x.entered_by, is_import: false }));
@@ -811,6 +841,29 @@ export class SupabaseStore {
       .select('*').eq('employee_id', employee_id).eq('period', period + '-01')
       .order('created_at', { ascending: false });
     if (error) throw error; return data || [];
+  }
+  // Импорт ведомостей: у кого за (период, вид) уже есть чистая сумма > 0 —
+  // защита от повторной заливки. Сторно-пары в сумме дают 0 и не блокируют.
+  async existingMoneyIds(period, kind) {
+    const { data, error } = await this.sb.from('money_line')
+      .select('employee_id, amount_kop').eq('period', period + '-01').eq('kind', kind);
+    if (error) throw error;
+    const net = new Map();
+    for (const r of data || []) net.set(r.employee_id, (net.get(r.employee_id) || 0) + r.amount_kop);
+    return new Set([...net].filter(([, v]) => v > 0).map(([k]) => k));
+  }
+  // Пакетная запись из импорта — ОДНИМ insert (атомарно: либо все ряды, либо
+  // ни одного). entered_by ставим сами = auth.uid(), как требует RLS (ml_ins);
+  // право писать этот kind проверит база — при отказе весь пакет откатится.
+  async addMoneyLinesBatch(period, kind, items) {
+    const rows = items.filter(it => it.amount_kop > 0).map(it => ({
+      employee_id: it.employee_id, period: period + '-01', kind,
+      amount_kop: it.amount_kop, note: it.note || 'импорт ведомости', entered_by: this.user.id,
+    }));
+    if (!rows.length) return [];
+    const { data, error } = await this.sb.from('money_line').insert(rows).select();
+    if (error) throw new Error(moneyError(error));
+    return data;
   }
 }
 
