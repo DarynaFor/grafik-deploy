@@ -1212,7 +1212,7 @@ function drawPayroll(filter = '') {
       curCat = cat;
       const inCat = rows.filter(x => catOf(x) === cat);
       const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group"><td colspan="12"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="12"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
