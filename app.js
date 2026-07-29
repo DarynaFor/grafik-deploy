@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=49';
+import { makeStore, lineLabel, sameRate } from './store.js?v=51';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -545,7 +545,7 @@ function confirmPhone(norm) {
 const MONEY_MAX_KOP = 100000000;   // потолок одной записи (money_line_sane_chk, 010): 1 000 000 ₽
 const MONEY_BIG_KOP = 30000000;    // «крупная, переспросить» — 300 000 ₽ (ловим опечатку на порядок)
 const MAX_IMPORT_ROWS = 500;       // защита от гигантской вставки: ведомость клиники ≤ ~150 строк
-const importState = { kind: null, period: null, rows: [], parsed: false, existing: new Set(), loading: false, truncated: false };
+const importState = { kind: null, period: null, rows: [], parsed: false, existing: new Set(), loading: false, truncated: false, fileName: null };
 
 // Может ли строка попасть в загрузку: есть человек, сумма в пределах, не дубль.
 function importCanInclude(r) { return !!(r.chosenId && r.amount_kop != null && r.amount_kop <= MONEY_MAX_KOP && !r.dup); }
@@ -683,6 +683,7 @@ function parseImport() {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const rows = [];
   importState.truncated = false;
+  importState.fileName = null;                                     // вставка — не файл (для провенанса)
   for (const line of lines) {
     if (rows.length >= MAX_IMPORT_ROWS) { importState.truncated = true; break; }   // защита от гигантской вставки
     const { fio, amount } = splitImportLine(line);
@@ -867,7 +868,7 @@ async function importFromFile(file) {
   if (!file) return;
   // Любая попытка файла ОБНУЛЯЕТ предпросмотр: чтобы после провала (битый/большой
   // файл B) не остались и не были подтверждены строки прошлого файла A. (аудит M1)
-  importState.rows = []; importState.parsed = false; importState.truncated = false; renderImportPreview();
+  importState.rows = []; importState.parsed = false; importState.truncated = false; importState.fileName = file.name || null; renderImportPreview();
   if (file.size > 6 * 1024 * 1024) { toast('Файл больше 6 МБ — вставьте список текстом', true); return; }
   const name = (file.name || '').toLowerCase();
   try {
@@ -1057,31 +1058,30 @@ async function doImportLoad() {
   importState.loading = true;                                      // голое присвоение (не бросит); блокирует повторный вход
   try {
     renderImportPreview();                                         // блокируем кнопку/галочки — уже под try, чтобы флаг не залип
-    // Свежая проверка «уже внесено» — вдруг кто-то залил, пока подтверждали.
-    // ⚠ TODO(v2): это НЕ закрывает гонку двух клиентов (owner+Алёна вносят один
-    // и тот же реестр period+kind одновременно): оба видят dup=false → двойная
-    // выплата. money_line append-only без unique(employee,period,kind) — по
-    // замыслу. Полное решение — серверная import-RPC с ключом идемпотентности
-    // (та же процедура даст source='import'+batch и доступ Бух 2 без ростера).
-    // Пока: окно сужено, двойная запись видна в журнале и снимается сторно.
+    // Предварительно снимаем уже внесённых (подсказка, чтобы меньше слать зря).
+    // АТОМАРНЫЙ дедуп + защита от гонки двух клиентов теперь на СЕРВЕРЕ
+    // (import_money_batch, миграция 034): вставка под advisory-lock, дубли
+    // отбиваются там. Здесь гонки уже нет.
     await importLoadExisting();
     const send = incl.filter(r => r.include && importCanInclude(r));
-    if (send.length < incl.length) {
+    if (!send.length) {
       importState.loading = false; renderImportPreview();
-      toast('Список изменился — часть уже внесена, проверьте', true);
+      toast('Все выбранные строки уже внесены', true);
       return;
     }
     const items = send.map(r => ({ employee_id: r.chosenId, amount_kop: r.amount_kop }));
-    const sentSum = items.reduce((s, it) => s + it.amount_kop, 0);
-    const res = await store.addMoneyLinesBatch(importState.period, importState.kind, items);
-    // Считаем по ОТПРАВЛЕННОМУ, а не по возврату: .insert().select() фильтруется
-    // SELECT-политикой, и для будущих ролей мог бы вернуть меньше, чем записал.
-    if (Array.isArray(res) && res.length !== items.length)
-      toast(`Записано ${items.length}, база подтвердила ${res.length} — проверьте журнал`, true);
-    else
-      toast(`Загружено ${items.length} · ${rub(sentSum)} ₽`);
-    const doneIds = new Set(send.map(r => r.chosenId));
-    importState.rows = importState.rows.filter(r => !(doneIds.has(r.chosenId) && r.include && importCanInclude(r)));
+    const res = await store.importMoneyBatch(importState.period, importState.kind, items, importState.fileName);
+    const ins = res.inserted_count ?? (res.inserted ? res.inserted.length : 0);
+    const insSum = (res.inserted || []).reduce((s, x) => s + (x.amount_kop || 0), 0);
+    const skipped = res.skipped_count ?? 0;
+    const unmatched = (res.unmatched || []).length;
+    let msg = `Загружено ${ins} · ${rub(insSum)} ₽`;
+    if (skipped) msg += ` · пропущено (уже внесено): ${skipped}`;
+    if (unmatched) msg += ` · не сопоставлено: ${unmatched}`;
+    toast(msg, unmatched > 0);
+    // убираем обработанных (внесённых + пропущенных-дублей); проблемные остаются
+    const doneIds = new Set([...(res.inserted || []), ...(res.skipped || [])].map(x => x.employee_id));
+    importState.rows = importState.rows.filter(r => !(doneIds.has(r.chosenId) && r.include));
     importState.parsed = importState.rows.length > 0;
     importState.loading = false;
     await importLoadExisting();                                    // помечаем только что внесённых как «уже внесено»

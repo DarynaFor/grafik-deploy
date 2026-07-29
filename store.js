@@ -284,6 +284,39 @@ export class MockStore {
     }
     this._save(); return out;
   }
+  // Зеркало серверной import_money_batch (миграция 034): провенанс source='import',
+  // дедуп по чистой сумме (period,kind), сопоставление по fio (точное). Демо без
+  // RLS и без замка — но форма ответа и логика та же, чтобы демо не расходилось.
+  async importMoneyBatch(period, kind, items, filename) {
+    this.db.money = this.db.money || [];
+    const batch_id = (this.db.nextId.batch = (this.db.nextId.batch || 0) + 1);
+    const norm = s => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+    const inserted = [], skipped = [], unmatched = [];
+    for (const it of (items || [])) {
+      const amt = it.amount_kop;
+      if (!(amt > 0) || amt > 100000000) { unmatched.push({ item: it, reason: 'сумма вне границ' }); continue; }
+      // как на сервере: ключ employee_id присутствует → путь по id; иначе по fio.
+      let emp = null;
+      if ('employee_id' in it) {
+        emp = it.employee_id;
+        if (emp == null || !this.db.employees.some(e => e.id === emp)) { unmatched.push({ item: it, reason: 'нет сотрудника' }); continue; }
+      } else if (it.fio && norm(it.fio) !== '') {
+        const hits = this.db.employees.filter(e => e.status !== 'archived' && norm(e.fio) === norm(it.fio));
+        if (hits.length !== 1) { unmatched.push({ fio: it.fio, reason: hits.length ? 'неоднозначно' : 'не найден' }); continue; }
+        emp = hits[0].id;
+      } else { unmatched.push({ fio: it.fio || '', reason: 'пустое ФИО' }); continue; }
+      const net = this.db.money.filter(m => m.employee_id === emp && m.period === period && m.kind === kind).reduce((s, m) => s + m.amount_kop, 0);
+      if (net > 0) { skipped.push({ employee_id: emp }); continue; }
+      const row = { id: (this.db.nextId.money = (this.db.nextId.money || 1) + 1), employee_id: emp, period, kind,
+        amount_kop: amt, note: 'импорт ведомости', entered_by: this.user?.name || '?',
+        created_at: new Date().toISOString(), source: 'import', import_batch_id: batch_id };
+      this.db.money.push(row);
+      this._log('деньги', 'money_line', row.id, kind, null, (amt / 100) + ' ₽');
+      inserted.push({ employee_id: emp, amount_kop: amt });
+    }
+    this._save();
+    return { batch_id, inserted_count: inserted.length, inserted, skipped_count: skipped.length, skipped, unmatched };
+  }
   async listMoneyEvents(employee_id, period) {
     return (this.db.money || []).filter(x => x.employee_id === employee_id && x.period === period)
       .map(x => ({ ...x, kind_label: MONEY_KIND_RU[x.kind] || x.kind, entered_by_name: x.entered_by, is_import: false }));
@@ -862,6 +895,17 @@ export class SupabaseStore {
     }));
     if (!rows.length) return [];
     const { data, error } = await this.sb.from('money_line').insert(rows).select();
+    if (error) throw new Error(moneyError(error));
+    return data;
+  }
+  // Импорт через СЕРВЕРНУЮ процедуру (миграция 034): провенанс source='import'+
+  // партия, атомарный дедуп под advisory-lock (закрывает гонку двух клиентов),
+  // серверное сопоставление ФИО. items = [{employee_id|fio, amount_kop}].
+  // Возвращает {batch_id, inserted_count, inserted, skipped_count, skipped, unmatched}.
+  async importMoneyBatch(period, kind, items, filename) {
+    const { data, error } = await this.sb.rpc('import_money_batch', {
+      p_kind: kind, p_period: period + '-01', p_items: items, p_filename: filename || null,
+    });
     if (error) throw new Error(moneyError(error));
     return data;
   }
