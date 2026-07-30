@@ -193,7 +193,11 @@ export class MockStore {
       const cells = (this.db.schedule || []).filter(s => s.employee_id === e.id && String(s.work_date).startsWith(period));
       const lines = (e.lines || []).filter(l => !l.valid_to);
       for (const l of lines) {
-        if (l.pay_kind === 'процент') continue;
+        if (l.pay_kind === 'процент') {   // ЗП = % × ручная выручка (зеркало v_month_salary/036)
+          const rev = (this.db.docRevenue || []).filter(x => x.employee_id === e.id && x.period === period).reduce((s, x) => s + x.amount_kop, 0);
+          if (rev > 0) out.push({ employee_id: e.id, kind: 'процент', planned: 0, worked: 0, hours: 0, money_kop: Math.round(rev * (l.percent || 0) / 100), isPct: true });
+          continue;
+        }
         const want = { 'оклад': ['day'], 'сутки': ['day24'], '12ч': ['day12', 'night12'], 'почасово': ['custom'] }[l.pay_kind] || [];
         const mine = cells.filter(c => want.includes(c.plan_kind));
         const planned = mine.length;
@@ -222,8 +226,8 @@ export class MockStore {
       const cash = sum('cash'), premia = sum('premia'), otpusk = sum('otpusk');
       return { employee_id: e.id, period: period + '-01', fio: e.fio, status: e.status,
         oklad_kop: my.filter(l => l.kind === 'оклад').reduce((s, l) => s + l.money_kop, 0),
-        shift_kop: my.filter(l => l.kind !== 'оклад').reduce((s, l) => s + l.money_kop, 0),
-        percent_kop: 0, salary_kop: salary,
+        shift_kop: my.filter(l => l.kind !== 'оклад' && l.kind !== 'процент').reduce((s, l) => s + l.money_kop, 0),
+        percent_kop: my.filter(l => l.kind === 'процент').reduce((s, l) => s + l.money_kop, 0), salary_kop: salary,
         cash_kop: cash, cash_avans_kop: sum('cash_avans'), premia_kop: premia, otpusk_kop: otpusk,
         card_avans_kop: sum('card_avans'), card_rasch_kop: sum('card_rasch'),
         to_pay_kop: cash + premia + otpusk,
@@ -317,6 +321,19 @@ export class MockStore {
     }
     this._save();
     return { batch_id, inserted_count: inserted.length, inserted, skipped_count: skipped.length, skipped, unmatched };
+  }
+  async getDoctorRevenue(employee_id, period) {
+    return (this.db.docRevenue || []).filter(r => r.employee_id === employee_id && r.period === period).reduce((s, r) => s + r.amount_kop, 0);
+  }
+  async setDoctorRevenue(employee_id, period, target_kop) {
+    this.db.docRevenue = this.db.docRevenue || [];
+    const cur = await this.getDoctorRevenue(employee_id, period);
+    const delta = target_kop - cur;
+    if (delta === 0) return null;
+    const row = { id: (this.db.nextId.docrev = (this.db.nextId.docrev || 0) + 1), employee_id, period, amount_kop: delta, created_at: new Date().toISOString() };
+    this.db.docRevenue.push(row);
+    this._log('выручка', 'doctor_month_revenue', row.id, null, null, (target_kop / 100) + ' ₽');
+    this._save(); return row;
   }
   async listMoneyEvents(employee_id, period) {
     return (this.db.money || []).filter(x => x.employee_id === employee_id && x.period === period)
@@ -907,6 +924,26 @@ export class SupabaseStore {
     const { data, error } = await this.sb.rpc('import_money_batch', {
       p_kind: kind, p_period: period + '-01', p_items: items, p_filename: filename || null,
     });
+    if (error) throw new Error(moneyError(error));
+    return data;
+  }
+  // Месячная выручка врача (для %). Хранение append-only (миграция 036) → чистое
+  // значение = сумма строк. Показываем net, «установка» пишет дельту (net станет
+  // target), чтобы значение было редактируемым, но каждое изменение — в журнал.
+  async getDoctorRevenue(employee_id, period) {
+    const { data, error } = await this.sb.from('doctor_month_revenue')
+      .select('amount_kop').eq('employee_id', employee_id).eq('period', period + '-01');
+    if (error) throw error;
+    return (data || []).reduce((s, r) => s + r.amount_kop, 0);
+  }
+  async setDoctorRevenue(employee_id, period, target_kop) {
+    const cur = await this.getDoctorRevenue(employee_id, period);
+    const delta = target_kop - cur;
+    if (delta === 0) return null;                              // без изменений
+    const { data, error } = await this.sb.from('doctor_month_revenue')
+      .insert({ employee_id, period: period + '-01', amount_kop: delta,
+        note: cur ? 'коррекция выручки' : null, entered_by: this.user.id })
+      .select().single();
     if (error) throw new Error(moneyError(error));
     return data;
   }

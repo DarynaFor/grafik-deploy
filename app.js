@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=52';
+import { makeStore, lineLabel, sameRate } from './store.js?v=53';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -1906,6 +1906,12 @@ async function payrollDialog(empId) {
   const r = payrollRows.find(x => x.employee_id === empId); if (!r) return;
   const my = payrollLines.filter(l => l.employee_id === empId);
   const canEdit = isStaff();
+  // процентник: ЗП = % × выручка. Пока оплаты пациентов неполные — выручку за месяц
+  // вносят руками (СЕО/Алёна). Показываем поле, если у врача есть ставка «процент».
+  const emp = employees.find(e => e.id === empId);
+  const pctLine = emp && emp.lines && emp.lines.find(l => l.pay_kind === 'процент');
+  let curRev = 0;
+  if (pctLine && canEdit) { try { curRev = await store.getDoctorRevenue(empId, payPeriod); } catch (e) {} }
   const breakdown = my.length
     ? my.map(l => `<div class="me-row"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}</span><b>${rub(l.money_kop)} ₽</b></div>`).join('')
     : `<div class="me-row"><span class="muted">${r.flag_no_rate ? 'Ставка не заведена' : 'Начислений за месяц нет'}</span><b>0 ₽</b></div>`;
@@ -1923,6 +1929,12 @@ async function payrollDialog(empId) {
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money">${rub(r.delta_kop)} ₽</b></div>
       <div class="me-row"><span class="muted small">Зарплата минус уже выданное (карта/наличные). Столько ещё раздать — в основном наличными. Отпускные сюда не входят (выплачены отдельно на карту).</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
+    ${pctLine && canEdit ? `<label class="flbl">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё</label>
+      <div class="me-add">
+        <input class="input" id="pmRev" placeholder="выручка ₽" autocomplete="off" inputmode="numeric" value="${curRev ? fmt(Math.round(curRev / 100)) : ''}">
+        <button class="btn btn-primary btn-sm" id="pmRevSave">${ICONS.check}Сохранить</button>
+      </div>
+      <div class="msub">Для процентников считаем ЗП от введённой выручки (оплаты пациентов пока неполные). Изменение выручки видит владелец в журнале.</div>` : ''}
     ${canEdit ? `<label class="flbl">Внести деньги</label>
       <div class="me-add">
         <select class="input" id="pmKind">${moneyKindsFor(store.me()?.role).map(k => `<option value="${k[0]}">${k[1]}</option>`).join('')}</select>
@@ -1986,6 +1998,21 @@ async function payrollDialog(empId) {
       const fresh = payrollRows.find(x => x.employee_id === empId);
       if (fresh) toast(ICONS.check + 'Внесено · к выдаче ' + rub(fresh.to_pay_kop) + ' ₽');
       closeModal(); payrollDialog(empId);      // пересобираем с актуальными цифрами
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
+  // Сохранить месячную выручку врача → база пересчитает % → refresh покажет ЗП.
+  if (pctLine && canEdit) $('pmRevSave').onclick = async () => {
+    const btn = $('pmRevSave'); if (btn.disabled) return;
+    let rev;
+    try { rev = parseNum($('pmRev').value, { thousands: true, field: 'выручку', max: RATE_ABSURD }); }
+    catch (err) { toast(err.message, true); return; }
+    if (rev == null || rev < 0) { toast('Укажите выручку (0 — убрать)', true); return; }
+    btn.disabled = true;
+    try {
+      const res = await store.setDoctorRevenue(empId, payPeriod, Math.round(rev * 100));
+      await renderPayroll($('payrollSearch')?.value || '');
+      toast(ICONS.check + (res ? 'Выручка внесена — зарплата пересчитана' : 'Без изменений'));
+      closeModal(); payrollDialog(empId);
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
 }
