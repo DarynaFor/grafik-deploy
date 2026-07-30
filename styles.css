@@ -294,11 +294,14 @@ body.authed .login-stage{display:none}
 .gr-cell .fh.dev{color:var(--amber-d,#b7791f)}
 .gr-cell .fh.miss{color:var(--red-d)}
 .gr-cell.fut{background:var(--fill-1)}
+.gr-cell.addable::after{content:"+";opacity:.16;font-weight:800;font-size:13px;color:var(--ink-3);line-height:1}
+.gr-cell.addable:hover::after{opacity:.5}
 .gr-cell.fut .iv{opacity:.75}
 .gr-cell.f-ok{background:rgba(52,201,124,.13)}
 .gr-cell.f-dev{background:rgba(242,193,78,.2)}
 .gr-cell.f-miss{background:rgba(255,107,107,.15)}
 .gr-cell.f-rest{background:var(--fill-2)}
+.gr-cell.k-vac{background:rgba(183,155,255,.22);color:var(--violet-d,#6d5bd0)}
 .gr-cell.sc2.ro{cursor:default}
 /* сводка справа: Смен · План · Факт · Δ */
 .gr-day.sum{font-size:9px;letter-spacing:0}

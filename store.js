@@ -45,6 +45,7 @@ export const SHIFT_KINDS = [
   { code: 'night12', label: '12ч ночь',  short: '12н', hours: 12 },
   { code: 'day24',   label: 'Сутки',     short: 'С',  hours: 24 },
   { code: 'off',     label: 'Выходной',  short: 'В',  hours: 0 },
+  { code: 'отпуск',  label: 'Отпуск',    short: 'Отп', hours: 0 },
   { code: 'absent',  label: 'Не вышел',  short: '—',  hours: 0 },
   { code: 'custom',  label: 'Своё время', short: '·', hours: null },
 ];
