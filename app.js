@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=53';
+import { makeStore, lineLabel, sameRate } from './store.js?v=54';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -409,12 +409,42 @@ function openCard(id) {
         <div class="field"><span class="caps">Статус</span><span class="val">${e.status === 'active' ? 'активен' : 'архив'}</span></div>
         <div class="field" style="margin:0"><span class="caps">Карточка создана</span><span class="val small">${esc(fmtDT(e.created_at))}</span></div>
       </div>
-    </div>${partialMonthNote(e)}`;
+    </div>${partialMonthNote(e)}
+    <div class="card cardpad" style="margin-top:16px">
+      <div class="caps" style="margin-bottom:10px">Комментарии</div>
+      <div id="cardNotes"><span class="muted small">загружаем…</span></div>
+      ${isStaff() ? `<div class="me-add" style="margin-top:12px">
+        <input class="input" id="noteInput" placeholder="добавить заметку к карточке…" autocomplete="off" maxlength="4000">
+        <button class="btn btn-primary btn-sm" id="noteAdd">${ICONS.plus}Добавить</button>
+      </div>` : ''}
+    </div>`;
   $('cardBody').dataset.emp = id;      // чья карточка сейчас открыта — чтобы
   applyIcons($('cardBody'));           // поздний ответ по деньгам не лёг в чужую
   const eb = $('editEmpBtn'); if (eb) eb.onclick = () => employeeForm(e);
   go('card');
   loadCardMoney(id);
+  loadCardNotes(id);
+}
+// Лента заметок на карточке (миграция 037). Добавляют owner/operator/ceo/бухгалтер.
+async function loadCardNotes(id) {
+  const box = $('cardNotes'); if (!box) return;
+  try {
+    const notes = await store.listNotes(id);
+    if (+$('cardBody').dataset.emp !== id) return;
+    box.innerHTML = notes.length
+      ? notes.map(n => `<div class="pm-ev"><span>${esc(n.text)}</span><span class="muted small">${esc(n.author_name || '—')} · ${esc(fmtDT(n.created_at))}</span></div>`).join('')
+      : '<span class="muted small">Заметок пока нет</span>';
+  } catch (e) { box.innerHTML = `<span class="muted small">${esc(e.message || e)}</span>`; }
+  const inp = $('noteInput'), add = $('noteAdd');
+  if (add && inp) {
+    inp.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); add.click(); } };
+    add.onclick = async () => {
+      const text = inp.value.trim(); if (!text) return;
+      add.disabled = true;
+      try { await store.addNote(id, text); inp.value = ''; await loadCardNotes(id); }
+      catch (e) { toast(e.message || e, true); } finally { add.disabled = false; }
+    };
+  }
 }
 
 /* «К выдаче» в карточке (требование §1/§13). Цифры берём из того же

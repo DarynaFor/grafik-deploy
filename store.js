@@ -335,6 +335,17 @@ export class MockStore {
     this._log('выручка', 'doctor_month_revenue', row.id, null, null, (target_kop / 100) + ' ₽');
     this._save(); return row;
   }
+  async listNotes(employee_id) {
+    return (this.db.notes || []).filter(n => n.employee_id === employee_id)
+      .slice().sort((a, b) => a.created_at < b.created_at ? 1 : -1)
+      .map(n => ({ ...n, author_name: n.author_name || this.user?.name || '—' }));
+  }
+  async addNote(employee_id, text) {
+    this.db.notes = this.db.notes || [];
+    const row = { id: (this.db.nextId.note = (this.db.nextId.note || 0) + 1), employee_id, text,
+      author_name: this.user?.name || '—', created_at: new Date().toISOString() };
+    this.db.notes.push(row); this._save(); return row;
+  }
   async listMoneyEvents(employee_id, period) {
     return (this.db.money || []).filter(x => x.employee_id === employee_id && x.period === period)
       .map(x => ({ ...x, kind_label: MONEY_KIND_RU[x.kind] || x.kind, entered_by_name: x.entered_by, is_import: false }));
@@ -945,6 +956,20 @@ export class SupabaseStore {
         note: cur ? 'коррекция выручки' : null, entered_by: this.user.id })
       .select().single();
     if (error) throw new Error(moneyError(error));
+    return data;
+  }
+  // Комментарии на карточке (миграция 037): лента заметок, append-only.
+  async listNotes(employee_id) {
+    const { data, error } = await this.sb.from('employee_note')
+      .select('*, author_user:app_user(display_name)').eq('employee_id', employee_id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return (data || []).map(n => ({ ...n, author_name: n.author_user?.display_name || '—' }));
+  }
+  async addNote(employee_id, text) {
+    const { data, error } = await this.sb.from('employee_note')
+      .insert({ employee_id, text, author: this.user.id }).select().single();
+    if (error) throw error;
     return data;
   }
 }
