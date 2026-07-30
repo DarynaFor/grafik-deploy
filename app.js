@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=51';
+import { makeStore, lineLabel, sameRate } from './store.js?v=52';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -184,6 +184,7 @@ const IMPORT_KIND_META = {
 const IMPORT_KINDS_BY_ROLE = {
   owner:    ['otpusk', 'card_avans', 'card_rasch', 'cash_avans', 'cash', 'premia'],
   operator: ['otpusk', 'cash_avans', 'cash'],
+  ceo:      ['otpusk', 'card_avans', 'card_rasch', 'cash_avans', 'cash', 'premia'],
 };
 function importKinds() { return IMPORT_KINDS_BY_ROLE[store.me()?.role] || []; }
 function canImport() { return importKinds().length > 0; }
@@ -208,13 +209,16 @@ function go(screen) {
   renderNav();
   document.querySelector('.main').scrollTop = 0;
 }
-const ROLE_LABELS = { owner: 'владелец', operator: 'оператор', cashier1: 'касса · Бух 1', cashier2: 'карта / 1С · Бух 2' };
-const isStaff = () => ['owner', 'operator'].includes(store.me()?.role);   // кто работает с карточками
+const ROLE_LABELS = { owner: 'владелец', operator: 'оператор', cashier1: 'касса · Бух 1', cashier2: 'карта / 1С · Бух 2', ceo: 'директор' };
+const isStaff = () => ['owner', 'operator', 'ceo'].includes(store.me()?.role);   // кто работает с карточками
 // График ведёт оператор (Алёна) с переданных головами отделений листов. Владелец
 // (Милена) тоже может править — чтобы протестировать и объяснить Алёне, а также
 // поправить как надзор (решение Дарины 27.07: раньше владелец был только-просмотр).
-// Позже добавим роли голов отделений — они будут вносить свой отдел; тогда сюда добавится их роль.
-const canEditSchedule = () => ['operator', 'owner'].includes(store.me()?.role);
+// СЕО ведёт график в этом месяце (Алёна в отпуске); все его правки — в журнал Милене.
+const canEditSchedule = () => ['operator', 'owner', 'ceo'].includes(store.me()?.role);
+// Создание/правка карточек и ставок — владелец и СЕО (RLS emp_insert/update,
+// rate_insert/update, reconcile = owner,ceo; миграция 035). У остальных — просмотр.
+const canEditCards = () => ['owner', 'ceo'].includes(store.me()?.role);
 async function enter() {
   const me = store.me(); if (!me) return;
   document.body.classList.add('authed');
@@ -235,8 +239,8 @@ async function enter() {
     go('soon');
     return;
   }
-  $('addEmpBtn').style.display = isOwner() ? '' : 'none';
-  $('roNote').innerHTML = isOwner() ? '' : `<div class="readonly-note">${ICONS.lock} Карточки, телефоны и ставки заводит и меняет владелец — у вас просмотр.</div>`;
+  $('addEmpBtn').style.display = canEditCards() ? '' : 'none';
+  $('roNote').innerHTML = canEditCards() ? '' : `<div class="readonly-note">${ICONS.lock} Карточки, телефоны и ставки заводит и меняет владелец — у вас просмотр.</div>`;
   await refresh();
   // Владелец начинает с обзора (он для него и создан), остальные — с рабочего экрана.
   go(isOwner() ? 'overview' : 'employees');
@@ -394,7 +398,7 @@ function openCard(id) {
       <div class="emp-ava" style="width:64px;height:64px;border-radius:20px;font-size:20px;background:${palette[id % palette.length]}">${esc(initials(e.fio))}</div>
       <div style="flex:1;min-width:200px"><h1 style="font-size:23px;font-weight:700">${esc(e.fio)}</h1><p class="muted" style="margin-top:2px">${esc(specName(e.specialty_id))}</p></div>
       <div id="cardMoney" class="card-money"></div>
-      ${isOwner() ? `<button class="btn btn-ghost btn-sm" id="editEmpBtn">${ICONS.edit}Редактировать</button>` : `<span class="tag">${ICONS.lock} правит владелец</span>`}
+      ${canEditCards() ? `<button class="btn btn-ghost btn-sm" id="editEmpBtn">${ICONS.edit}Редактировать</button>` : `<span class="tag">${ICONS.lock} правит владелец</span>`}
     </div></div>
     <div class="grid2">
       <div class="card cardpad"><div class="caps" style="margin-bottom:12px">Строки начисления</div>${lines}${oldLines ? `<div class="caps" style="margin:16px 0 6px">История ставок</div>${oldLines}` : ''}</div>

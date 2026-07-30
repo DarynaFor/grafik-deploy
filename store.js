@@ -35,6 +35,7 @@ const rateFrom = () => mskDay().slice(0, 8) + '01';
 const DEMO_USERS = [
   { id: 'u-milena', name: 'Милена', role: 'owner' },
   { id: 'u-alena',  name: 'Алёна',  role: 'operator' },
+  { id: 'u-ceo',    name: 'Директор', role: 'ceo' },
 ];
 
 // Виды смен — соответствуют таблице shift_kind в прод-БД. Клетка графика = время начала + код.
