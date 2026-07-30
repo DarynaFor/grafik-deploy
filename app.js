@@ -1355,12 +1355,11 @@ function drawSchedule() {
   const editable = canEditSchedule();     // оператор ведёт график (для tap по имени / шаблонов)
   const meRole = store.me()?.role;
   const isClosed = d => closedDays.has(cellDate(d));
-  const anyEdit = meRole === 'operator' || meRole === 'owner';   // есть ли право что-то править (для навешивания обработчиков)
-  // клетку дня d правит: оператор — если день ОТКРЫТ; владелец — если ЗАКРЫТ (override, в журнал)
-  // Владелец правит ЛЮБОЙ день (открытый — обычным попапом, закрытый — напрямую,
-  // без СМС, он доверенный). Оператор — только открытые. Закрытый день оператору
-  // идёт через СМС-подтверждение (строка ниже).
-  const canEditDay = d => meRole === 'owner' || (meRole === 'operator' && !isClosed(d));
+  const anyEdit = ['operator', 'owner', 'ceo'].includes(meRole);   // есть ли право что-то править
+  // СМС-подтверждение временно убрано (#70): закрытые дни владелец/Алёна/СЕО правят
+  // НАПРЯМУЮ, каждая правка — в журнал (закрытие ещё показывается, но не блокирует).
+  // Вернём ретро-по-СМС отдельной задачей. Пока — доверенные роли правят любой день.
+  const canEditDay = d => ['owner', 'operator', 'ceo'].includes(meRole);
   const todayD = (nowPeriod() === curPeriod) ? mskNow().getUTCDate() : 0;
   const active = employees.filter(e => e.status !== 'archived');
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
@@ -1432,8 +1431,7 @@ function drawSchedule() {
   if (anyEdit) {
     grid.querySelectorAll('.gr-cell').forEach(cell => cell.onclick = () => {
       const emp = +cell.dataset.emp, d = +cell.dataset.day;
-      if (isClosed(d) && meRole === 'operator') { scheduleRetroDialog(emp, d); return; }   // закрытый день → правка по СМС
-      if (!canEditDay(d)) return;                 // владелец на открытом дне — только просмотр
+      if (!canEditDay(d)) return;                 // #70: СМС убрана — закрытые дни правят напрямую (в журнал)
       pastDay(d) ? scheduleFactPopup(emp, d) : scheduleCellPopup(emp, d);   // прошлое → факт, будущее → план
     });
     grid.querySelectorAll('.gr-day.tapday').forEach(h => h.onclick = () => scheduleDayDialog(+h.dataset.day));
