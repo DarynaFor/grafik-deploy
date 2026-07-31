@@ -162,10 +162,11 @@ const NAV = [
 function isOwner() { return store.me()?.role === 'owner'; }
 function navItems() { return NAV.filter(n => (!n.ownerOnly || isOwner()) && (!n.staffOnly || isStaff()) && (!n.show || n.show())); }
 
-// ── Импорт: какие виды денег доступны роли (зеркало RLS ml_ins, миграция 008) ──
-// Алёна (operator) — отпускные/наличные; Бух 2 (cashier2) — карту/премию;
-// владелец — всё. Касса (cashier1) сюда не заходит: её поверхность узкая (одна
-// выдача по одному человеку), список ведомостей ей не нужен.
+// ── Импорт: какие виды денег доступны роли (зеркало RLS ml_ins, миграция 046) ──
+// Алёна (operator) — отпускные (три вида) и наличные; владелец и СЕО — всё.
+// Кассиров (cashier1/cashier2) в списке НЕТ вообще: экран импорта требует ростер
+// сотрудников для сопоставления ФИО, а его им закрывает emp_select (024 §6) —
+// подробнее в комментарии ниже. Премию, кроме владельца, вносит только СЕО.
 const IMPORT_KIND_META = {
   otpusk:      { label: 'Отпускные на карту',  hint: 'реестр отпускных (ТКБ) — деньги уже у человека, в «к выдаче» не идут' },
   otpusk_cash: { label: 'Отпускные наличными', hint: 'отпускные, которые выдаём из кассы — идут в «к выдаче»' },
@@ -483,6 +484,12 @@ async function loadCardMoney(id) {
         <span class="mini-chip">Начислено: <b>${rub(r.salary_kop)} ₽</b></span>
         ${cardTotal(r) ? `<span class="mini-chip">Карта: <b>${rub(cardTotal(r))} ₽</b></span>` : ''}
         ${r.cash_kop + r.cash_avans_kop ? `<span class="mini-chip">Наличными: <b>${rub(r.cash_kop + r.cash_avans_kop)} ₽</b></span>` : ''}
+        ${/* ОТДЕЛЬНЫЙ чип, а не слагаемое в «Наличными»: тождество
+              «Осталось выдать = Начислено − Карта − Наличными» должно оставаться
+              верным. Без него карточка человека, весь месяц бывшего в отпуске,
+              показывала СПЛОШНЫЕ НУЛИ (оклад за дни отпуска не начисляется — 044,
+              значит Начислено 0 и Δ 0), пока касса должна ему все отпускные. */''}
+        ${r.to_pay_kop ? `<span class="mini-chip">К выдаче наличными: <b>${rub(r.to_pay_kop)} ₽</b></span>` : ''}
         ${r.flag_no_rate ? '<span class="mini-chip warn">нет ставки</span>' : ''}
       </div>`;
   } catch (err) { box.innerHTML = ''; }
@@ -1899,7 +1906,9 @@ const rub = kop => fmt(Math.round((kop || 0) / 100));
 // и подсвечивать её бессмысленно (горела бы у всех весь месяц)
 const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0) + (r.cash_kop || 0) + (r.cash_avans_kop || 0);
 // Всё официальное на карту одной суммой — ровно то, что вычитает delta_kop
-// (аванс + ЗП + расчёт при увольнении). Разбивка — в карточке человека.
+// (аванс + ЗП + расчёт при увольнении). Отпускных на карту здесь НЕТ намеренно:
+// Δ их не вычитает, и чип на карточке человека обязан сходиться с «Осталось
+// выдать». Разбивка по видам — в «Расчёте» (графы) и в окне человека.
 const cardTotal = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
 let payrollRows = [], payrollLines = [], payrollSeq = 0, payrollShown = null;
 
@@ -2047,6 +2056,10 @@ function renderPayrollStat(rows) {
      <span class="mini-chip">Начислено: <b>${rub(s('salary_kop'))} ₽</b></span>
      <span class="mini-chip">Выдано на карту: <b>${rub(s('card_avans_kop') + s('card_rasch_kop') + s('card_uvol_kop'))} ₽</b></span>
      ${s('cash_kop') + s('cash_avans_kop') ? `<span class="mini-chip">Выдано наличными: <b>${rub(s('cash_kop') + s('cash_avans_kop'))} ₽</b></span>` : ''}
+     ${/* Отпускные наличными и премия в «Выдано» не входят — они ещё НЕ выданы,
+           это наряд кассе. Без отдельного чипа сумма жила бы только в 14-й графе
+           таблицы с горизонтальным скроллом. */''}
+     ${s('to_pay_kop') ? `<span class="mini-chip">К выдаче наличными: <b>${rub(s('to_pay_kop'))} ₽</b></span>` : ''}
      ${problems ? `<span class="mini-chip warn">Нужна ставка: <b>${problems}</b></span>` : ''}`;
 }
 
@@ -2099,7 +2112,7 @@ async function payrollDialog(empId) {
       <div class="me-row me-sum"><span>Зарплата</span><b>${rub(r.salary_kop)} ₽</b></div>
       ${r.card_avans_kop ? `<div class="me-row"><span class="muted">Аванс на карту</span><b>${rub(r.card_avans_kop)} ₽</b></div>` : ''}
       ${r.card_rasch_kop ? `<div class="me-row"><span class="muted">ЗП на карту</span><b>${rub(r.card_rasch_kop)} ₽</b></div>` : ''}
-      ${r.card_uvol_kop ? `<div class="me-row"><span class="muted">Расчёт на карту · увольнение</span><b>${rub(r.card_uvol_kop)} ₽</b></div>` : ''}
+      ${r.card_uvol_kop ? `<div class="me-row"><span class="muted">Расчёт на карту (увольнение)</span><b>${rub(r.card_uvol_kop)} ₽</b></div>` : ''}
       ${r.cash_kop ? `<div class="me-row"><span class="muted">Наличными</span><b>${rub(r.cash_kop)} ₽</b></div>` : ''}
       ${r.cash_avans_kop ? `<div class="me-row"><span class="muted">Аванс наличными</span><b>${rub(r.cash_avans_kop)} ₽</b></div>` : ''}
       ${r.premia_kop ? `<div class="me-row"><span class="muted">Премия</span><b>${rub(r.premia_kop)} ₽</b></div>` : ''}
@@ -2251,7 +2264,13 @@ function drawOverview() {
   const { rows, remarks, payouts } = ovData;
   const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
   const delta = sum('delta_kop'), salary = sum('salary_kop');
-  const card = sum('card_rasch_kop') + sum('card_avans_kop') + sum('card_uvol_kop');   // всё официальное на карту, включая расчёт при увольнении
+  // Всё официальное, что ушло на карту: аванс + ЗП + расчёт при увольнении + ОТПУСКНЫЕ
+  // НА КАРТУ. Последние сюда не входили, и плитка «Официально на карту» занижала
+  // сумму ровно на реестр ТКБ (в июле — 635 000 ₽), хотя в «Расчёте» рядом стоит
+  // графа «Отпуск. карта» с этим же числом. Это ИМЕННО ТА цифра, что показывает,
+  // сколько прошло официально, — занижать её нельзя. В Δ отпускные по-прежнему не
+  // входят (033), а подстрочник героя тождеством никогда и не был.
+  const card = sum('card_rasch_kop') + sum('card_avans_kop') + sum('card_uvol_kop') + sum('otpusk_kop');
   const paid = sum('paid_kop');
   const people = rows.filter(r => r.status === 'active').length;
 
