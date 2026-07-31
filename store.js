@@ -224,21 +224,28 @@ export class MockStore {
       const salary = my.reduce((s, l) => s + l.money_kop, 0);
       const mon = (this.db.money || []).filter(x => x.employee_id === e.id && x.period === period);
       const sum = k => mon.filter(x => x.kind === k).reduce((s, x) => s + x.amount_kop, 0);
-      const cash = sum('cash'), premia = sum('premia'), otpusk = sum('otpusk');
-      const ovr = (this.db.salaryOverride || []).find(x => x.employee_id === e.id && x.period === period);
-      const salaryFinal = ovr ? ovr.amount_kop : salary;   // финальная сумма вручную заменяет расчёт
+      // Зеркало v_month_total (migrations/046): в «к выдаче» идут наличные виды —
+      // наличка, премия и отпускные НАЛИЧНЫМИ. Аванс/ЗП/расчёт на карту уже
+      // выплачены и потому стоят в базе сверки Δ. Отпускные НА КАРТУ — особый
+      // случай: они тоже выплачены, но Δ их не вычитает (за дни отпуска оклад не
+      // начисляется, 044 — вычитать было бы не из чего), поэтому они не входят
+      // НИ в «к выдаче», НИ в Δ.
+      const cash = sum('cash'), premia = sum('premia'), otpusk = sum('otpusk'),
+            otpuskCash = sum('otpusk_cash'), cardUvol = sum('card_uvol');
       return { employee_id: e.id, period: period + '-01', fio: e.fio, status: e.status,
         oklad_kop: my.filter(l => l.kind === 'оклад').reduce((s, l) => s + l.money_kop, 0),
         shift_kop: my.filter(l => l.kind !== 'оклад' && l.kind !== 'процент').reduce((s, l) => s + l.money_kop, 0),
-        percent_kop: my.filter(l => l.kind === 'процент').reduce((s, l) => s + l.money_kop, 0), salary_kop: salaryFinal,
+        percent_kop: my.filter(l => l.kind === 'процент').reduce((s, l) => s + l.money_kop, 0), salary_kop: salary,
         cash_kop: cash, cash_avans_kop: sum('cash_avans'), premia_kop: premia, otpusk_kop: otpusk,
+        otpusk_cash_kop: otpuskCash, card_uvol_kop: cardUvol,
+        otpusk_nach_kop: sum('otpusk_nach'),   // начисление, не выплата: ни в to_pay, ни в delta
         card_avans_kop: sum('card_avans'), card_rasch_kop: sum('card_rasch'),
-        to_pay_kop: cash + premia,        // как прод (v_month_total): otpusk НЕ в «к выдаче» (#61)
-        unchecked_kop: premia,
-        delta_kop: salaryFinal - (sum('card_rasch') + sum('card_avans') + cash + sum('cash_avans')),
+        to_pay_kop: cash + premia + otpuskCash,
+        unchecked_kop: premia + otpuskCash,
+        delta_kop: salary - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')),
         norm_days: my.reduce((s, l) => s + l.planned, 0), fact_days: my.reduce((s, l) => s + l.worked, 0),
         flag_no_rate: !(e.lines || []).some(l => !l.valid_to), flag_partial_month: false,
-        flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false, flag_manual_salary: !!ovr };
+        flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false };
     });
   }
   async addMoneyLine({ employee_id, period, kind, amount_kop, note }) {
@@ -337,23 +344,6 @@ export class MockStore {
     this.db.docRevenue.push(row);
     this._log('выручка', 'doctor_month_revenue', row.id, null, null, (target_kop / 100) + ' ₽');
     this._save(); return row;
-  }
-  // Финальная сумма вручную — зеркало прода (миграция 049). Одна на (человек, месяц).
-  async getSalaryOverride(employee_id, period) {
-    const r = (this.db.salaryOverride || []).find(x => x.employee_id === employee_id && x.period === period);
-    return r ? r.amount_kop : null;
-  }
-  async setSalaryOverride(employee_id, period, amount_kop, note) {
-    this.db.salaryOverride = this.db.salaryOverride || [];
-    const i = this.db.salaryOverride.findIndex(x => x.employee_id === employee_id && x.period === period);
-    if (amount_kop == null) {
-      if (i >= 0) { this.db.salaryOverride.splice(i, 1); this._log('финальная сумма', 'salary_override', employee_id, null, null, 'убрана'); this._save(); }
-      return null;
-    }
-    if (i >= 0) { this.db.salaryOverride[i].amount_kop = amount_kop; this.db.salaryOverride[i].note = note || null; }
-    else this.db.salaryOverride.push({ employee_id, period, amount_kop, note: note || null });
-    this._log('финальная сумма', 'salary_override', employee_id, null, null, (amount_kop / 100) + ' ₽' + (note ? ' · ' + note : ''));
-    this._save(); return { employee_id, period, amount_kop };
   }
   async listNotes(employee_id) {
     return (this.db.notes || []).filter(n => n.employee_id === employee_id)
@@ -551,14 +541,21 @@ export function rateError(err) {
 
 /* Ошибки денежных записей → человеческий русский (те же CHECK/RLS, что в
    migrations/008–019). Сырое «violates check constraint» Милена читать не должна. */
-// Подписи видов выплат — те же, что ru_money_kind() в БД (migrations/010).
+// Подписи видов выплат — по смыслу те же, что ru_money_kind() в БД
+// (migrations/046 §3); в БД они строчными, здесь с заглавной. Используются ТОЛЬКО
+// в демо-режиме: на проде подпись приходит из v_money_events (kind_label).
 const MONEY_KIND_RU = { cash: 'Наличные', cash_avans: 'Аванс наличными', premia: 'Премия',
-  otpusk: 'Отпускные', card_avans: 'Аванс на карту', card_rasch: 'Расчёт на карту' };
+  otpusk: 'Отпускные на карту', otpusk_cash: 'Отпускные наличными', otpusk_nach: 'Отпускные начислено',
+  card_avans: 'Аванс на карту', card_rasch: 'ЗП на карту', card_uvol: 'Расчёт на карту (увольнение)' };
 const MONEY_ERRORS = [
   ['money_line_sane_chk',   'Сумма вне разумных границ'],
   ['money_line_sign_chk',   'Сумма должна быть больше 0. Чтобы отменить запись — сделайте сторно'],
   ['money_line_period_chk', 'Период должен быть 1-м числом месяца'],
   ['Денежные записи не правятся', 'Денежные записи не правятся и не удаляются — исправление вносится сторно'],
+  // Клиент может оказаться НОВЕЕ базы (публикация app/ и миграция — разные шаги).
+  // Без этой строки попытка внести новый вид давала бы сырой английский Postgres,
+  // а по старой RLS — «Недостаточно прав», что для владельца прямая ложь.
+  ['money_line_kind_chk', 'Этот вид выплаты база ещё не знает: не применена миграция 046. Обновите базу или выберите другой вид'],
   ['violates row-level security', 'Недостаточно прав для этого вида выплаты'],
   ['без сессии запрещена',  'Сессия истекла — войдите заново'],
 ];
@@ -974,29 +971,6 @@ export class SupabaseStore {
     const { data, error } = await this.sb.from('doctor_month_revenue')
       .insert({ employee_id, period: period + '-01', amount_kop: delta,
         note: cur ? 'коррекция выручки' : null, entered_by: this.user.id })
-      .select().single();
-    if (error) throw new Error(moneyError(error));
-    return data;
-  }
-  // Финальная сумма вручную (миграция 049): для людей без графика — итоговая
-  // зарплата за месяц одной суммой, ЗАМЕНЯЕТ вычисленную в v_month_total. Одна
-  // строка на (сотрудник, месяц), редактируемая; каждое изменение — в журнал.
-  async getSalaryOverride(employee_id, period) {
-    const { data, error } = await this.sb.from('month_salary_override')
-      .select('amount_kop').eq('employee_id', employee_id).eq('period', period + '-01').maybeSingle();
-    if (error) throw error;
-    return data ? data.amount_kop : null;
-  }
-  async setSalaryOverride(employee_id, period, amount_kop, note) {
-    if (amount_kop == null) {                                  // убрать → вернуть расчёт
-      const { error } = await this.sb.from('month_salary_override')
-        .delete().eq('employee_id', employee_id).eq('period', period + '-01');
-      if (error) throw new Error(moneyError(error));
-      return null;
-    }
-    const { data, error } = await this.sb.from('month_salary_override')
-      .upsert({ employee_id, period: period + '-01', amount_kop, note: note || null, entered_by: this.user.id },
-              { onConflict: 'employee_id,period' })
       .select().single();
     if (error) throw new Error(moneyError(error));
     return data;
