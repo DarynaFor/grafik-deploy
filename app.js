@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=55';
+import { makeStore, lineLabel, sameRate } from './store.js?v=56';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -494,7 +494,7 @@ async function loadCardMoney(id) {
     box.innerHTML = `<div class="cm-pay"><span class="caps">Осталось выдать · ${esc(periodLabel(per))}</span>
         <b class="money">${rub(r.delta_kop)} ₽</b></div>
       <div class="cm-chips">
-        <span class="mini-chip">Начислено: <b>${rub(r.salary_kop)} ₽</b></span>
+        <span class="mini-chip">Начислено${r.flag_manual_salary ? ' (вручную)' : ''}: <b>${rub(r.salary_kop)} ₽</b></span>
         ${cardTotal(r) ? `<span class="mini-chip">Карта: <b>${rub(cardTotal(r))} ₽</b></span>` : ''}
         ${r.cash_kop + r.cash_avans_kop ? `<span class="mini-chip">Наличными: <b>${rub(r.cash_kop + r.cash_avans_kop)} ₽</b></span>` : ''}
         ${/* ОТДЕЛЬНЫЙ чип, а не слагаемое в «Наличными»: тождество
@@ -2042,16 +2042,19 @@ function drawPayroll(filter = '') {
 // Флаги — короткими чипами у имени. Это ПОДСКАЗКА «посмотри», а не приговор.
 function payrollFlags(r) {
   const f = [];
-  if (r.flag_money_without_calc) f.push(['деньги без расчёта', 'red']);
-  if (r.flag_no_rate)        f.push(['нет ставки', 'red']);
-  if (r.flag_oklad_no_days)  f.push(['оклад без дней', 'red']);
-  if (r.flag_rate_gap)       f.push(['ставка не на все дни', 'amber']);
-  if (r.flag_no_patient_data)f.push(['нет оплат пациентов', 'amber']);
-  if (r.flag_pct_no_rate)    f.push(['оплата без процента', 'amber']);
-  if (r.flag_partial_month)  f.push(['неполный месяц', 'amber']);
-  if (r.flag_fallback)       f.push(['запасная ставка', 'amber']);
+  if (r.flag_manual_salary) f.push(['сумма вручную', 'info']);
+  if (!r.flag_manual_salary) {            // при ручной финальной сумме расчётные предупреждения не к месту
+    if (r.flag_money_without_calc) f.push(['деньги без расчёта', 'red']);
+    if (r.flag_no_rate)        f.push(['нет ставки', 'red']);
+    if (r.flag_oklad_no_days)  f.push(['оклад без дней', 'red']);
+    if (r.flag_rate_gap)       f.push(['ставка не на все дни', 'amber']);
+    if (r.flag_no_patient_data)f.push(['нет оплат пациентов', 'amber']);
+    if (r.flag_pct_no_rate)    f.push(['оплата без процента', 'amber']);
+    if (r.flag_partial_month)  f.push(['неполный месяц', 'amber']);
+    if (r.flag_fallback)       f.push(['запасная ставка', 'amber']);
+    if (r.flag_ambiguous)      f.push(['две одинаковые ставки', 'amber']);
+  }
   if (r.flag_archived)       f.push(['в архиве', 'amber']);
-  if (r.flag_ambiguous)      f.push(['две одинаковые ставки', 'amber']);
   return f.length ? `<span class="pw-flags">${f.map(([t, c]) => `<span class="pw-flag ${c}">${t}</span>`).join('')}</span>` : '';
 }
 
@@ -2110,6 +2113,8 @@ async function payrollDialog(empId) {
   const pctLine = emp && emp.lines && emp.lines.find(l => l.pay_kind === 'процент');
   let curRev = 0;
   if (pctLine && canEdit) { try { curRev = await store.getDoctorRevenue(empId, payPeriod); } catch (e) {} }
+  let curOverride = null;                                 // финальная сумма вручную (миграция 049)
+  if (canEdit) { try { curOverride = await store.getSalaryOverride(empId, payPeriod); } catch (e) {} }
   const breakdown = my.length
     ? my.map(l => `<div class="me-row"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}</span><b>${rub(l.money_kop)} ₽</b></div>`).join('')
     : `<div class="me-row"><span class="muted">${r.flag_no_rate ? 'Ставка не заведена' : 'Начислений за месяц нет'}</span><b>0 ₽</b></div>`;
@@ -2121,7 +2126,7 @@ async function payrollDialog(empId) {
   showModal(`${personHead({ fio: r.fio, specialty_id: emp?.specialty_id },
       `${esc(periodLabel(payPeriod))} · норма ${r.norm_days} дн · факт ${r.fact_days} дн`)}
     <div class="rc-diff">${breakdown}${pct}
-      <div class="me-row me-sum"><span>Зарплата</span><b>${rub(r.salary_kop)} ₽</b></div>
+      <div class="me-row me-sum"><span>Зарплата${r.flag_manual_salary ? ' · <b class="jact">вручную</b>' : ''}</span><b>${rub(r.salary_kop)} ₽</b></div>
       ${r.card_avans_kop ? `<div class="me-row"><span class="muted">Аванс на карту</span><b>${rub(r.card_avans_kop)} ₽</b></div>` : ''}
       ${r.card_rasch_kop ? `<div class="me-row"><span class="muted">ЗП на карту</span><b>${rub(r.card_rasch_kop)} ₽</b></div>` : ''}
       ${r.card_uvol_kop ? `<div class="me-row"><span class="muted">Расчёт на карту (увольнение)</span><b>${rub(r.card_uvol_kop)} ₽</b></div>` : ''}
@@ -2140,6 +2145,14 @@ async function payrollDialog(empId) {
         <button class="btn btn-primary btn-sm" id="pmRevSave">${ICONS.check}Сохранить</button>
       </div>
       <div class="msub">Для процентников считаем ЗП от введённой выручки (оплаты пациентов пока неполные). Изменение выручки видит владелец в журнале.</div>` : ''}
+    ${canEdit ? `<label class="flbl">Финальная сумма вручную${r.flag_manual_salary ? ' · <span class="jact">задана</span>' : ''}</label>
+      <div class="me-add">
+        <input class="input" id="pmFinal" placeholder="итоговая зарплата ₽" autocomplete="off" inputmode="numeric" value="${curOverride ? fmt(Math.round(curOverride / 100)) : ''}">
+        <button class="btn btn-primary btn-sm" id="pmFinalSave">${ICONS.check}${r.flag_manual_salary ? 'Изменить' : 'Задать'}</button>
+        ${r.flag_manual_salary ? `<button class="btn btn-ghost btn-sm" id="pmFinalClear">Убрать</button>` : ''}
+      </div>
+      <input class="input" id="pmFinalNote" placeholder="причина (необязательно): напр. «по ведомости, без графика»" autocomplete="off" style="margin-top:8px;width:100%">
+      <div class="msub">Для людей без графика: итоговая зарплата за месяц одной суммой. Заменяет расчёт → «осталось» = эта сумма − выданное на карту/наличными. Причина и каждое изменение видны владельцу — в журнале и в «Требует внимания».</div>` : ''}
     ${canEdit ? `<label class="flbl">Внести деньги</label>
       <div class="me-add">
         <select class="input" id="pmKind">${moneyKindsFor(store.me()?.role).map(k => `<option value="${k[0]}">${k[1]}</option>`).join('')}</select>
@@ -2220,6 +2233,34 @@ async function payrollDialog(empId) {
       closeModal(); payrollDialog(empId);
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
+  // Финальная сумма вручную: задать/изменить (миграция 049). Заменяет «заработал».
+  if (canEdit) $('pmFinal').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('pmFinalSave').click(); } };
+  if (canEdit) $('pmFinalSave').onclick = async () => {
+    const btn = $('pmFinalSave'); if (btn.disabled) return;
+    let val;
+    try { val = parseNum($('pmFinal').value, { thousands: true, field: 'сумму', max: RATE_ABSURD }); }
+    catch (err) { toast(err.message, true); return; }
+    if (val == null || val <= 0) { toast('Укажите сумму больше 0 (или «Убрать»)', true); return; }
+    if (val > RATE_CONFIRM && !(await confirmBigAmounts([val]))) return;
+    btn.disabled = true;
+    try {
+      const note = $('pmFinalNote')?.value.trim() || null;   // причина (необязательно) → в журнал
+      await store.setSalaryOverride(empId, payPeriod, Math.round(val * 100), note);
+      await renderPayroll($('payrollSearch')?.value || '');
+      toast(ICONS.check + 'Финальная сумма задана — «осталось» пересчитано');
+      closeModal(); payrollDialog(empId);
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
+  if (canEdit && r.flag_manual_salary) $('pmFinalClear').onclick = async () => {
+    const btn = $('pmFinalClear'); if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      await store.setSalaryOverride(empId, payPeriod, null);
+      await renderPayroll($('payrollSearch')?.value || '');
+      toast(ICONS.check + 'Финальная сумма убрана — вернулся расчёт по графику');
+      closeModal(); payrollDialog(empId);
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
 }
 
 /* ── Обзор владельца ─────────────────────────────────────────────────────
@@ -2247,6 +2288,11 @@ const OV_ALERTS = [
   // только когда запись НАЧАЛАСЬ, а свести не сходится. Красным — это скрытая
   // недоплата, а не рабочая недозаполненность.
   { key: r => recorded(r) > 0 && Math.abs(r.delta_kop || 0) > 10000, red: true, t: 'Расхождение: начислено ≠ записано', d: 'записанные деньги не сходятся с расчётом' },
+  // Ручная финальная сумма — прямой рычаг на «осталось выдать» в обход графика.
+  // Не красная (это законный способ для людей без графика), но владелец ДОЛЖЕН её
+  // видеть: иначе оператор мог бы ручной суммой погасить красный флаг незаметно
+  // (находка аудита F2). Каждая правка ещё и в журнале (миграция 052, fail-closed).
+  { key: 'flag_manual_salary', red: false, t: 'Сумма задана вручную', d: 'зарплата вписана рукой, не из графика — сверьте с выданным' },
   { key: 'flag_no_data', red: false, t: 'График есть, а денег ноль', d: 'человек работал, но ничего не начислено' },
   { key: 'flag_oklad_no_days', red: false, t: 'Оклад есть, отработанных дней ноль', d: 'оклад не на что начислить' },
   { key: 'flag_pct_no_rate', red: false, t: 'Процент без ставки', d: 'оплаты пациентов есть, а ставки процента нет' },

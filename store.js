@@ -232,20 +232,22 @@ export class MockStore {
       // НИ в «к выдаче», НИ в Δ.
       const cash = sum('cash'), premia = sum('premia'), otpusk = sum('otpusk'),
             otpuskCash = sum('otpusk_cash'), cardUvol = sum('card_uvol');
+      const ovr = (this.db.salaryOverride || []).find(x => x.employee_id === e.id && x.period === period);
+      const salaryFinal = ovr ? ovr.amount_kop : salary;   // финальная сумма вручную заменяет расчёт
       return { employee_id: e.id, period: period + '-01', fio: e.fio, status: e.status,
         oklad_kop: my.filter(l => l.kind === 'оклад').reduce((s, l) => s + l.money_kop, 0),
         shift_kop: my.filter(l => l.kind !== 'оклад' && l.kind !== 'процент').reduce((s, l) => s + l.money_kop, 0),
-        percent_kop: my.filter(l => l.kind === 'процент').reduce((s, l) => s + l.money_kop, 0), salary_kop: salary,
+        percent_kop: my.filter(l => l.kind === 'процент').reduce((s, l) => s + l.money_kop, 0), salary_kop: salaryFinal,
         cash_kop: cash, cash_avans_kop: sum('cash_avans'), premia_kop: premia, otpusk_kop: otpusk,
         otpusk_cash_kop: otpuskCash, card_uvol_kop: cardUvol,
         otpusk_nach_kop: sum('otpusk_nach'),   // начисление, не выплата: ни в to_pay, ни в delta
         card_avans_kop: sum('card_avans'), card_rasch_kop: sum('card_rasch'),
         to_pay_kop: cash + premia + otpuskCash,
         unchecked_kop: premia + otpuskCash,
-        delta_kop: salary - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')),
+        delta_kop: salaryFinal - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')),
         norm_days: my.reduce((s, l) => s + l.planned, 0), fact_days: my.reduce((s, l) => s + l.worked, 0),
         flag_no_rate: !(e.lines || []).some(l => !l.valid_to), flag_partial_month: false,
-        flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false };
+        flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false, flag_manual_salary: !!ovr };
     });
   }
   async addMoneyLine({ employee_id, period, kind, amount_kop, note }) {
@@ -344,6 +346,23 @@ export class MockStore {
     this.db.docRevenue.push(row);
     this._log('выручка', 'doctor_month_revenue', row.id, null, null, (target_kop / 100) + ' ₽');
     this._save(); return row;
+  }
+  // Финальная сумма вручную — зеркало прода (миграция 049). Одна на (человек, месяц).
+  async getSalaryOverride(employee_id, period) {
+    const r = (this.db.salaryOverride || []).find(x => x.employee_id === employee_id && x.period === period);
+    return r ? r.amount_kop : null;
+  }
+  async setSalaryOverride(employee_id, period, amount_kop, note) {
+    this.db.salaryOverride = this.db.salaryOverride || [];
+    const i = this.db.salaryOverride.findIndex(x => x.employee_id === employee_id && x.period === period);
+    if (amount_kop == null) {
+      if (i >= 0) { this.db.salaryOverride.splice(i, 1); this._log('финальная сумма', 'salary_override', employee_id, null, null, 'убрана'); this._save(); }
+      return null;
+    }
+    if (i >= 0) { this.db.salaryOverride[i].amount_kop = amount_kop; this.db.salaryOverride[i].note = note || null; }
+    else this.db.salaryOverride.push({ employee_id, period, amount_kop, note: note || null });
+    this._log('финальная сумма', 'salary_override', employee_id, null, null, (amount_kop / 100) + ' ₽' + (note ? ' · ' + note : ''));
+    this._save(); return { employee_id, period, amount_kop };
   }
   async listNotes(employee_id) {
     return (this.db.notes || []).filter(n => n.employee_id === employee_id)
@@ -971,6 +990,29 @@ export class SupabaseStore {
     const { data, error } = await this.sb.from('doctor_month_revenue')
       .insert({ employee_id, period: period + '-01', amount_kop: delta,
         note: cur ? 'коррекция выручки' : null, entered_by: this.user.id })
+      .select().single();
+    if (error) throw new Error(moneyError(error));
+    return data;
+  }
+  // Финальная сумма вручную (миграция 049): для людей без графика — итоговая
+  // зарплата за месяц одной суммой, ЗАМЕНЯЕТ вычисленную в v_month_total. Одна
+  // строка на (сотрудник, месяц), редактируемая; каждое изменение — в журнал.
+  async getSalaryOverride(employee_id, period) {
+    const { data, error } = await this.sb.from('month_salary_override')
+      .select('amount_kop').eq('employee_id', employee_id).eq('period', period + '-01').maybeSingle();
+    if (error) throw error;
+    return data ? data.amount_kop : null;
+  }
+  async setSalaryOverride(employee_id, period, amount_kop, note) {
+    if (amount_kop == null) {                                  // убрать → вернуть расчёт
+      const { error } = await this.sb.from('month_salary_override')
+        .delete().eq('employee_id', employee_id).eq('period', period + '-01');
+      if (error) throw new Error(moneyError(error));
+      return null;
+    }
+    const { data, error } = await this.sb.from('month_salary_override')
+      .upsert({ employee_id, period: period + '-01', amount_kop, note: note || null, entered_by: this.user.id },
+              { onConflict: 'employee_id,period' })
       .select().single();
     if (error) throw new Error(moneyError(error));
     return data;
