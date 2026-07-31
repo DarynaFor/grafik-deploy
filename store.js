@@ -224,16 +224,22 @@ export class MockStore {
       const salary = my.reduce((s, l) => s + l.money_kop, 0);
       const mon = (this.db.money || []).filter(x => x.employee_id === e.id && x.period === period);
       const sum = k => mon.filter(x => x.kind === k).reduce((s, x) => s + x.amount_kop, 0);
-      const cash = sum('cash'), premia = sum('premia'), otpusk = sum('otpusk');
+      // Зеркало v_month_total (migrations/046): в «к выдаче» идут наличные виды —
+      // наличка, премия и отпускные НАЛИЧНЫМИ. Карточные (в т.ч. отпускные на
+      // карту и расчёт при увольнении) — уже выплачены, они в базе сверки Δ.
+      const cash = sum('cash'), premia = sum('premia'), otpusk = sum('otpusk'),
+            otpuskCash = sum('otpusk_cash'), cardUvol = sum('card_uvol');
       return { employee_id: e.id, period: period + '-01', fio: e.fio, status: e.status,
         oklad_kop: my.filter(l => l.kind === 'оклад').reduce((s, l) => s + l.money_kop, 0),
         shift_kop: my.filter(l => l.kind !== 'оклад' && l.kind !== 'процент').reduce((s, l) => s + l.money_kop, 0),
         percent_kop: my.filter(l => l.kind === 'процент').reduce((s, l) => s + l.money_kop, 0), salary_kop: salary,
         cash_kop: cash, cash_avans_kop: sum('cash_avans'), premia_kop: premia, otpusk_kop: otpusk,
+        otpusk_cash_kop: otpuskCash, card_uvol_kop: cardUvol,
+        otpusk_nach_kop: sum('otpusk_nach'),   // начисление, не выплата: ни в to_pay, ни в delta
         card_avans_kop: sum('card_avans'), card_rasch_kop: sum('card_rasch'),
-        to_pay_kop: cash + premia + otpusk,
-        unchecked_kop: premia + otpusk,
-        delta_kop: salary - (sum('card_rasch') + sum('card_avans') + cash + sum('cash_avans')),
+        to_pay_kop: cash + premia + otpuskCash,
+        unchecked_kop: premia + otpuskCash,
+        delta_kop: salary - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')),
         norm_days: my.reduce((s, l) => s + l.planned, 0), fact_days: my.reduce((s, l) => s + l.worked, 0),
         flag_no_rate: !(e.lines || []).some(l => !l.valid_to), flag_partial_month: false,
         flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false };
@@ -532,9 +538,10 @@ export function rateError(err) {
 
 /* Ошибки денежных записей → человеческий русский (те же CHECK/RLS, что в
    migrations/008–019). Сырое «violates check constraint» Милена читать не должна. */
-// Подписи видов выплат — те же, что ru_money_kind() в БД (migrations/010).
+// Подписи видов выплат — те же, что ru_money_kind() в БД (migrations/046).
 const MONEY_KIND_RU = { cash: 'Наличные', cash_avans: 'Аванс наличными', premia: 'Премия',
-  otpusk: 'Отпускные', card_avans: 'Аванс на карту', card_rasch: 'Расчёт на карту' };
+  otpusk: 'Отпускные на карту', otpusk_cash: 'Отпускные наличными', otpusk_nach: 'Отпускные начислено',
+  card_avans: 'Аванс на карту', card_rasch: 'ЗП на карту', card_uvol: 'Расчёт на карту (увольнение)' };
 const MONEY_ERRORS = [
   ['money_line_sane_chk',   'Сумма вне разумных границ'],
   ['money_line_sign_chk',   'Сумма должна быть больше 0. Чтобы отменить запись — сделайте сторно'],

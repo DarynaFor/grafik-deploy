@@ -167,12 +167,15 @@ function navItems() { return NAV.filter(n => (!n.ownerOnly || isOwner()) && (!n.
 // владелец — всё. Касса (cashier1) сюда не заходит: её поверхность узкая (одна
 // выдача по одному человеку), список ведомостей ей не нужен.
 const IMPORT_KIND_META = {
-  otpusk:     { label: 'Отпускные',       hint: 'уже выплаченные отпускные, в отдельную графу' },
-  card_avans: { label: 'Аванс на карту',  hint: 'реестр аванса (ТКБ), официальная часть' },
-  card_rasch: { label: 'Расчёт на карту', hint: 'окончательный расчёт по 1С' },
-  cash_avans: { label: 'Аванс наличными', hint: 'выданный наличными аванс' },
-  cash:       { label: 'Наличные',        hint: 'выданные наличными' },
-  premia:     { label: 'Премия',          hint: 'разовая премия, попадёт в журнал' },
+  otpusk:      { label: 'Отпускные на карту',  hint: 'реестр отпускных (ТКБ) — деньги уже у человека, в «к выдаче» не идут' },
+  otpusk_cash: { label: 'Отпускные наличными', hint: 'отпускные, которые выдаём из кассы — идут в «к выдаче»' },
+  otpusk_nach: { label: 'Отпускные начислено', hint: 'НЕ выплата: сколько начислили. Справочно — ни в «к выдаче», ни в остаток не входит' },
+  card_avans:  { label: 'Аванс на карту',      hint: 'реестр аванса (ТКБ), официальная часть' },
+  card_rasch:  { label: 'ЗП на карту',         hint: 'ежемесячная зарплата на карту по 1С' },
+  card_uvol:   { label: 'Расчёт на карту',     hint: 'окончательный расчёт при увольнении' },
+  cash_avans:  { label: 'Аванс наличными',     hint: 'выданный наличными аванс' },
+  cash:        { label: 'Наличные',            hint: 'выданные наличными' },
+  premia:      { label: 'Премия',              hint: 'разовая премия, попадёт в журнал' },
 };
 // ⚠ Только owner+operator: сопоставление ФИО идёт на КЛИЕНТЕ по всему ростеру,
 // а читать employee (emp_select) могут лишь owner и operator. Бух (cashier1/2)
@@ -182,9 +185,9 @@ const IMPORT_KIND_META = {
 // его импорт карты сделаем через СЕРВЕРНЫЙ матч-RPC (SECURITY DEFINER вернёт
 // employee_id по списку, не раскрывая ростер) — тогда добавится cashier2.
 const IMPORT_KINDS_BY_ROLE = {
-  owner:    ['otpusk', 'card_avans', 'card_rasch', 'cash_avans', 'cash', 'premia'],
-  operator: ['otpusk', 'cash_avans', 'cash'],
-  ceo:      ['otpusk', 'card_avans', 'card_rasch', 'cash_avans', 'cash', 'premia'],
+  owner:    ['otpusk', 'otpusk_cash', 'otpusk_nach', 'card_avans', 'card_rasch', 'card_uvol', 'cash_avans', 'cash', 'premia'],
+  operator: ['otpusk', 'otpusk_cash', 'otpusk_nach', 'cash_avans', 'cash'],
+  ceo:      ['otpusk', 'otpusk_cash', 'otpusk_nach', 'card_avans', 'card_rasch', 'card_uvol', 'cash_avans', 'cash', 'premia'],
 };
 function importKinds() { return IMPORT_KINDS_BY_ROLE[store.me()?.role] || []; }
 function canImport() { return importKinds().length > 0; }
@@ -470,7 +473,7 @@ async function loadCardMoney(id) {
         <b class="money">${rub(r.delta_kop)} ₽</b></div>
       <div class="cm-chips">
         <span class="mini-chip">Начислено: <b>${rub(r.salary_kop)} ₽</b></span>
-        ${r.card_rasch_kop + r.card_avans_kop ? `<span class="mini-chip">Карта: <b>${rub(r.card_rasch_kop + r.card_avans_kop)} ₽</b></span>` : ''}
+        ${cardTotal(r) ? `<span class="mini-chip">Карта: <b>${rub(cardTotal(r))} ₽</b></span>` : ''}
         ${r.cash_kop + r.cash_avans_kop ? `<span class="mini-chip">Наличными: <b>${rub(r.cash_kop + r.cash_avans_kop)} ₽</b></span>` : ''}
         ${r.flag_no_rate ? '<span class="mini-chip warn">нет ставки</span>' : ''}
       </div>`;
@@ -1840,9 +1843,19 @@ const J_ACTION = { 'сторно': 'СТОРНО', 'правило расчёт�
    потому что аванс/наличка/премия — это деньги за месяц, а не за строку.
    Все цифры приходят готовыми из v_month_total (migrations/019) — браузер
    ничего денежного не считает. */
+// Порядок = как человек думает: сначала наличные (их выдаёт касса), потом карта.
+// Отпускные и «расчёт» разведены по способу выплаты (migrations/046): деньги на
+// карте у человека УЖЕ есть, наличные ему ещё предстоит выдать — это разные
+// строки в жизни, а не оттенок одной.
+// «Отпускные начислено» стоит последним и подписан «не выплата» НАМЕРЕННО: это
+// единственный вид в списке, который денег никому не двигает, и перепутать его
+// с выплатой — значит записать человеку выданное, чего не выдавали.
 const MONEY_KINDS = [
-  ['cash', 'Наличные'], ['cash_avans', 'Аванс наличными'], ['premia', 'Премия'],
-  ['otpusk', 'Отпускные'], ['card_avans', 'Аванс на карту'], ['card_rasch', 'Расчёт на карту'],
+  ['cash', 'Наличные'], ['cash_avans', 'Аванс наличными'], ['otpusk_cash', 'Отпускные наличными'],
+  ['premia', 'Премия'],
+  ['card_avans', 'Аванс на карту'], ['card_rasch', 'ЗП на карту'],
+  ['otpusk', 'Отпускные на карту'], ['card_uvol', 'Расчёт на карту (увольнение)'],
+  ['otpusk_nach', 'Отпускные начислено (не выплата)'],
 ];
 const moneyKindLabel = k => (MONEY_KINDS.find(x => x[0] === k) || [k, k])[1];
 // Показываем только то, что роль реально может записать: политика ml_ins
@@ -1851,15 +1864,20 @@ const moneyKindLabel = k => (MONEY_KINDS.find(x => x[0] === k) || [k, k])[1];
 // С migrations/022 §1 премия — ТОЛЬКО владелец: премия поднимает «к выдаче»
 // и не входит в Δ, поэтому у бухгалтера это был единственный рычаг на сумму,
 // которую она сама же и выдаёт (себе в том числе).
+// СЕО (035) вправе вносить всё, включая премию, — раньше он проваливался в
+// `return []` и получал ПУСТОЙ список видов при видимой форме «Внести деньги».
 function moneyKindsFor(role) {
-  if (role === 'owner') return MONEY_KINDS;
+  if (role === 'owner' || role === 'ceo') return MONEY_KINDS;
   if (role === 'operator') return MONEY_KINDS.filter(k => k[0] !== 'premia');
   return [];
 }
 const rub = kop => fmt(Math.round((kop || 0) / 100));
 // сколько денег уже расписано по выплатам — до этого дельта равна всей зарплате
 // и подсвечивать её бессмысленно (горела бы у всех весь месяц)
-const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.cash_kop || 0) + (r.cash_avans_kop || 0);
+const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0) + (r.cash_kop || 0) + (r.cash_avans_kop || 0);
+// Всё официальное на карту одной суммой — ровно то, что вычитает delta_kop
+// (аванс + ЗП + расчёт при увольнении). Разбивка — в карточке человека.
+const cardTotal = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
 let payrollRows = [], payrollLines = [], payrollSeq = 0, payrollShown = null;
 
 async function renderPayroll(filter = '') {
@@ -1907,10 +1925,16 @@ function drawPayroll(filter = '') {
     && (!cat || specCat(employees.find(e => e.id === r.employee_id)?.specialty_id) === cat));
   if (!rows.length) { $('payrollTable').innerHTML = `<div class="empty">${payrollRows.length ? 'Никого не найдено' : 'За ' + esc(periodLabel(payPeriod)) + ' данных нет'}</div>`; renderPayrollStat([]); return; }
 
+  // Каждый вид выплаты — своя графа (решение Дарины 31.07). Раньше «Карта» была
+  // одним числом на аванс+ЗП+расчёт, и по ведомости нельзя было понять, ЧТО
+  // именно человеку перечислили. Порядок сохранён прежний: наличный аванс →
+  // карта → наличка → отпускные → премия → остаток.
+  // «Отпуск. начисл.» — НЕ выплата, а начисление: справочно, ни в одну сумму
+  // не входит (migrations/046).
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
-    <th class="num sep">Зарплата</th><th class="num">Аванс нал.</th><th class="num">Карта</th><th class="num">Наличка</th>
-    <th class="num">Отпускные</th><th class="num">Премия</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
+    <th class="num sep">Зарплата</th><th class="num">Аванс нал.</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num">Расчёт на карту</th><th class="num">Наличка</th>
+    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по категории,
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
@@ -1923,7 +1947,7 @@ function drawPayroll(filter = '') {
       curCat = cat;
       const inCat = rows.filter(x => catOf(x) === cat);
       const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="12"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="16"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
@@ -1932,9 +1956,13 @@ function drawPayroll(filter = '') {
     const right = `
       <td class="num sep fin"><b>${rub(r.salary_kop)}</b></td>
       <td class="num fin">${rub(r.cash_avans_kop)}</td>
-      <td class="num fin">${rub(r.card_rasch_kop + r.card_avans_kop)}</td>
+      <td class="num fin">${rub(r.card_avans_kop)}</td>
+      <td class="num fin">${rub(r.card_rasch_kop)}</td>
+      <td class="num fin">${rub(r.card_uvol_kop)}</td>
       <td class="num fin">${rub(r.cash_kop)}</td>
+      <td class="num fin">${rub(r.otpusk_nach_kop)}</td>
       <td class="num fin">${rub(r.otpusk_kop)}</td>
+      <td class="num fin">${rub(r.otpusk_cash_kop)}</td>
       <td class="num fin">${rub(r.premia_kop)}</td>
       <td class="num pw-pay fin"><b class="money">${rub(r.delta_kop)}</b></td>`;
     if (!my.length) {
@@ -1957,8 +1985,10 @@ function drawPayroll(filter = '') {
     <td class="num">${sum('norm_days')} дн</td><td class="num">${sum('fact_days')} дн</td><td></td>
     <td class="num sep fin"><b>${rub(sum('salary_kop'))}</b></td>
     <td class="num fin">${rub(sum('cash_avans_kop'))}</td>
-    <td class="num fin">${rub(sum('card_rasch_kop') + sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
-    <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
+    <td class="num fin">${rub(sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('card_rasch_kop'))}</td>
+    <td class="num fin">${rub(sum('card_uvol_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
+    <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
+    <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('otpusk_cash_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
     <td class="num pw-pay fin"><b class="money">${rub(sum('delta_kop'))}</b></td></tr></tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
@@ -1992,7 +2022,7 @@ function renderPayrollStat(rows) {
   $('payrollStat').innerHTML =
     `<span class="mini-chip strong">Осталось выдать: <b class="money">${rub(s('delta_kop'))} ₽</b></span>
      <span class="mini-chip">Начислено: <b>${rub(s('salary_kop'))} ₽</b></span>
-     <span class="mini-chip">Выдано на карту: <b>${rub(s('card_avans_kop') + s('card_rasch_kop'))} ₽</b></span>
+     <span class="mini-chip">Выдано на карту: <b>${rub(s('card_avans_kop') + s('card_rasch_kop') + s('card_uvol_kop'))} ₽</b></span>
      ${s('cash_kop') + s('cash_avans_kop') ? `<span class="mini-chip">Выдано наличными: <b>${rub(s('cash_kop') + s('cash_avans_kop'))} ₽</b></span>` : ''}
      ${problems ? `<span class="mini-chip warn">Нужна ставка: <b>${problems}</b></span>` : ''}`;
 }
@@ -2016,6 +2046,20 @@ function confirmStorno(row) {
   });
 }
 
+/* Отпускные: начислено − выплаченное (карта + наличные). Показываем ТОЛЬКО когда
+   начисление есть: без него разность равнялась бы «минус выплаченное» и читалась
+   бы как долг человека клинике. Отрицательный остаток (выплатили больше, чем
+   начислили) не прячем — ради этого сравнения графу «начислено» и заводили.
+   Считает браузер, а не база, потому что это ВЫЧИТАНИЕ ДВУХ ПОКАЗАННЫХ ЧИСЕЛ,
+   а не денежная формула: в «к выдаче» и в Δ начисление не входит (migrations/046). */
+function otpuskLeftRow(r) {
+  const nach = r.otpusk_nach_kop || 0;
+  if (!nach) return '';
+  const left = nach - (r.otpusk_kop || 0) - (r.otpusk_cash_kop || 0);
+  return `<div class="me-row"><span class="muted">${left < 0 ? 'Отпускных выплачено больше начисленного' : 'Отпускных осталось выплатить'}</span>
+    <b${left < 0 ? ' style="color:var(--red-d)"' : ''}>${rub(Math.abs(left))} ₽</b></div>`;
+}
+
 async function payrollDialog(empId) {
   const r = payrollRows.find(x => x.employee_id === empId); if (!r) return;
   const my = payrollLines.filter(l => l.employee_id === empId);
@@ -2035,13 +2079,18 @@ async function payrollDialog(empId) {
     <div class="msub">${esc(periodLabel(payPeriod))} · норма ${r.norm_days} дн · факт ${r.fact_days} дн</div>
     <div class="rc-diff">${breakdown}${pct}
       <div class="me-row me-sum"><span>Зарплата</span><b>${rub(r.salary_kop)} ₽</b></div>
-      ${r.card_rasch_kop || r.card_avans_kop ? `<div class="me-row"><span class="muted">На карту (офиц.)</span><b>${rub(r.card_rasch_kop + r.card_avans_kop)} ₽</b></div>` : ''}
+      ${r.card_avans_kop ? `<div class="me-row"><span class="muted">Аванс на карту</span><b>${rub(r.card_avans_kop)} ₽</b></div>` : ''}
+      ${r.card_rasch_kop ? `<div class="me-row"><span class="muted">ЗП на карту</span><b>${rub(r.card_rasch_kop)} ₽</b></div>` : ''}
+      ${r.card_uvol_kop ? `<div class="me-row"><span class="muted">Расчёт на карту · увольнение</span><b>${rub(r.card_uvol_kop)} ₽</b></div>` : ''}
       ${r.cash_kop ? `<div class="me-row"><span class="muted">Наличными</span><b>${rub(r.cash_kop)} ₽</b></div>` : ''}
       ${r.cash_avans_kop ? `<div class="me-row"><span class="muted">Аванс наличными</span><b>${rub(r.cash_avans_kop)} ₽</b></div>` : ''}
       ${r.premia_kop ? `<div class="me-row"><span class="muted">Премия</span><b>${rub(r.premia_kop)} ₽</b></div>` : ''}
-      ${r.otpusk_kop ? `<div class="me-row"><span class="muted">Отпускные</span><b>${rub(r.otpusk_kop)} ₽</b></div>` : ''}
+      ${r.otpusk_nach_kop ? `<div class="me-row"><span class="muted">Отпускные начислено</span><b>${rub(r.otpusk_nach_kop)} ₽</b></div>` : ''}
+      ${r.otpusk_kop ? `<div class="me-row"><span class="muted">Отпускные на карту</span><b>${rub(r.otpusk_kop)} ₽</b></div>` : ''}
+      ${r.otpusk_cash_kop ? `<div class="me-row"><span class="muted">Отпускные наличными</span><b>${rub(r.otpusk_cash_kop)} ₽</b></div>` : ''}
+      ${otpuskLeftRow(r)}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money">${rub(r.delta_kop)} ₽</b></div>
-      <div class="me-row"><span class="muted small">Зарплата минус уже выданное (карта/наличные). Столько ещё раздать — в основном наличными. Отпускные сюда не входят (выплачены отдельно на карту).</span></div>
+      <div class="me-row"><span class="muted small">Зарплата минус уже выданное (карта/наличные). Столько ещё раздать — в основном наличными. Отпускные в эту разницу не входят: на карту они уже выплачены, а наличные идут отдельной строкой в кассу.</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
     ${pctLine && canEdit ? `<label class="flbl">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё</label>
       <div class="me-add">
@@ -2185,7 +2234,7 @@ function drawOverview() {
   const { rows, remarks, payouts } = ovData;
   const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
   const delta = sum('delta_kop'), salary = sum('salary_kop');
-  const card = sum('card_rasch_kop') + sum('card_avans_kop');
+  const card = sum('card_rasch_kop') + sum('card_avans_kop') + sum('card_uvol_kop');   // всё официальное на карту, включая расчёт при увольнении
   const paid = sum('paid_kop');
   const people = rows.filter(r => r.status === 'active').length;
 
