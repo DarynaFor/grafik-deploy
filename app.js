@@ -352,7 +352,9 @@ function renderEmployees(filter = '') {
   const gapF = isOwner() ? ($('empList').dataset.gap || '') : '';
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
   const catF = $('empCat')?.dataset.value || '';   // дропдаун заполняет fillCatSelects при загрузке
-  let html = '';
+  const arch = canEditCards() ? employees.filter(e => e.status === 'archived' && String(e.fio || '').toLowerCase().includes(f)) : [];   // архив показываем только тем, кто правит карточки
+  const showArch = $('empList').dataset.showArch === '1';
+  let html = arch.length ? `<div style="margin:0 0 10px"><button class="btn btn-ghost btn-sm" id="archToggle">${showArch ? 'Скрыть архив' : 'Архив · ' + arch.length}</button></div>` : '';
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
     let list = all.filter(e => specCat(e.specialty_id) === cat && String(e.fio || "").toLowerCase().includes(f));
@@ -367,8 +369,13 @@ function renderEmployees(filter = '') {
       html += `<div class="emp-row${isOwner() && isIncomplete(e) ? ' incomplete' : ''}" data-id="${e.id}"><div class="emp-ava" style="background:${catTint(cat)}">${esc(initials(e.fio))}</div><div class="emp-name">${esc(e.fio)}${gap}<div class="sub">${esc(specName(e.specialty_id))}</div></div><div class="emp-pay">${pays}</div><div class="chev">${ICONS.chevR}</div></div>`;
     }
   }
+  if (showArch && arch.length) {
+    html += `<div class="group-label"><span class="caps">В архиве · ${arch.length}</span><span class="line"></span></div>`;
+    for (const e of arch) html += `<div class="emp-row" data-id="${e.id}" style="opacity:.55"><div class="emp-ava" style="background:var(--fill-2)">${esc(initials(e.fio))}</div><div class="emp-name">${esc(e.fio)}<div class="sub">в архиве · ${esc(specName(e.specialty_id))}</div></div><div class="emp-pay"></div><div class="chev">${ICONS.chevR}</div></div>`;
+  }
   $('empList').innerHTML = html || `<div class="empty">${all.length ? 'Никого не найдено' : 'Пока нет сотрудников.' + (isOwner() ? '<br><span class="small">Нажмите «Карточка», чтобы создать первую.</span>' : '')}</div>`;
   applyIcons($('empList'));
+  const at = $('archToggle'); if (at) at.onclick = () => { $('empList').dataset.showArch = showArch ? '' : '1'; renderEmployees($('empSearch').value || ''); };
   $('empList').querySelectorAll('.emp-row').forEach(r => r.onclick = () => openCard(+r.dataset.id));
 }
 // Точный признак неполного месяца — из дат приёма/увольнения, а не из эвристики
@@ -398,7 +405,7 @@ function openCard(id) {
       <div class="emp-ava" style="width:64px;height:64px;border-radius:20px;font-size:20px;background:${palette[id % palette.length]}">${esc(initials(e.fio))}</div>
       <div style="flex:1;min-width:200px"><h1 style="font-size:23px;font-weight:700">${esc(e.fio)}</h1><p class="muted" style="margin-top:2px">${esc(specName(e.specialty_id))}</p></div>
       <div id="cardMoney" class="card-money"></div>
-      ${canEditCards() ? `<button class="btn btn-ghost btn-sm" id="editEmpBtn">${ICONS.edit}Редактировать</button>` : `<span class="tag">${ICONS.lock} правит владелец</span>`}
+      ${canEditCards() ? `<button class="btn btn-ghost btn-sm" id="editEmpBtn">${ICONS.edit}Редактировать</button><button class="btn btn-ghost btn-sm" id="archiveEmpBtn">${e.status === 'active' ? 'В архив' : 'Из архива'}</button>` : `<span class="tag">${ICONS.lock} правит владелец</span>`}
     </div></div>
     <div class="grid2">
       <div class="card cardpad"><div class="caps" style="margin-bottom:12px">Строки начисления</div>${lines}${oldLines ? `<div class="caps" style="margin:16px 0 6px">История ставок</div>${oldLines}` : ''}</div>
@@ -422,6 +429,7 @@ function openCard(id) {
   $('cardBody').dataset.emp = id;      // чья карточка сейчас открыта — чтобы
   applyIcons($('cardBody'));           // поздний ответ по деньгам не лёг в чужую
   const eb = $('editEmpBtn'); if (eb) eb.onclick = () => employeeForm(e);
+  const ab = $('archiveEmpBtn'); if (ab) ab.onclick = () => toggleArchive(e);
   go('card');
   loadCardMoney(id);
   loadCardNotes(id);
@@ -1155,6 +1163,29 @@ function collectLines(box) {
   // после частично применённых изменений.
   if (out.filter(l => l.line_type === 'основной').length > 1) throw new Error('Основная строка может быть только одна — лишние сделайте «Совместитель»');
   return out;
+}
+// Архив карточки. Архивный уходит из активного списка и из «Расчёта» (keys в
+// v_month_total берут только status='active') — ему перестаёт что-либо начисляться.
+// История сохраняется, смена статуса пишется в журнал. Для случайно занесённых
+// старых людей: «В архив» → пропадают из расчёта; вернуть — из «Архив · N».
+function toggleArchive(e) {
+  const toArch = e.status === 'active';
+  showModal2(`<h3>${toArch ? 'В архив' : 'Вернуть из архива'}?</h3>
+    <div class="msub">${esc(e.fio)}</div>
+    <div class="rc-warn">${toArch
+      ? 'Уйдёт из списка сотрудников и из «Расчёта» — ему перестанет что-либо начисляться. История сохранится, можно вернуть.'
+      : 'Снова станет активным и попадёт в расчёт.'}</div>
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="arNo">Отмена</button><button class="btn btn-primary btn-sm" id="arYes">${toArch ? 'В архив' : 'Вернуть'}</button></div>`);
+  $('arNo').onclick = closeModal2;
+  $('arYes').onclick = async () => {
+    const b = $('arYes'); if (b.disabled) return; b.disabled = true;
+    try {
+      await store.updateEmployee(e.id, { status: toArch ? 'archived' : 'active' });
+      closeModal2(); await refresh();
+      toast(ICONS.check + (toArch ? 'В архиве' : 'Возвращён'));
+      toArch ? go('employees') : openCard(e.id);
+    } catch (err) { b.disabled = false; toast(err.message || err, true); }
+  };
 }
 function employeeForm(e) {
   const so = specialties.map(s => `<option value="${s.id}" ${e?.specialty_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
