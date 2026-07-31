@@ -403,6 +403,7 @@ function openCard(id) {
     <div class="grid2">
       <div class="card cardpad"><div class="caps" style="margin-bottom:12px">Строки начисления</div>${lines}${oldLines ? `<div class="caps" style="margin:16px 0 6px">История ставок</div>${oldLines}` : ''}</div>
       <div class="card cardpad">
+        <div class="field"><span class="caps">Специальность</span><span class="val">${esc(specName(e.specialty_id))}</span></div>
         <div class="field"><span class="caps">Должность</span><span class="val">${esc(e.position === FIO_SENTINEL ? '—' : (e.position || '—'))}</span></div>
         <div class="field"><span class="caps">Телефон (для СМС)</span><span class="val num">${esc(fmtPhone(e.phone) || '—')}</span></div>
         <div class="field"><span class="caps">Принят / уволен</span><span class="val small">${e.hired_on || e.left_on ? esc(dm(e.hired_on) || '—') + ' — ' + esc(dm(e.left_on) || '…') : '—'}</span></div>
