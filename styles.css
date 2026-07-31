@@ -362,7 +362,13 @@ body.authed .login-stage{display:none}
 .modal{width:480px;max-width:94vw;max-height:92vh;overflow:auto;border-radius:24px;background:var(--modal-grad);border:1px solid var(--glass-bd);box-shadow:var(--sh-pop);padding:26px;animation:fade .25s ease-out}
 .modal h3{font-size:20px;font-weight:700;letter-spacing:-.02em}
 .modal .msub{color:var(--ink-2);font-size:13px;margin-top:3px}
-.modal-foot{display:flex;gap:10px;justify-content:flex-end;margin-top:22px}
+/* «Закрыть» и кнопки действий ВСЕГДА видны внизу длинной модалки: липнут к низу
+   прокручиваемой .modal, а не тонут в конце контента (Дарина 31.07). Растянуты на
+   всю ширину (отриц. поля компенсируют padding .modal), непрозрачный фон + верхняя
+   грань отделяют от прокручиваемого контента, низ скруглён как у модалки. */
+.modal-foot{display:flex;gap:10px;justify-content:flex-end;position:sticky;bottom:0;
+  margin:22px -26px -26px;padding:15px 26px;background:var(--modal-grad);
+  border-top:1px solid var(--glass-bd);border-radius:0 0 24px 24px}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--toast-bg);backdrop-filter:var(--blur);color:var(--toast-ink);border-radius:var(--r-pill);padding:12px 21px;font-size:14px;font-weight:600;box-shadow:var(--sh-pop);opacity:0;pointer-events:none;transition:.26s;z-index:200;display:flex;align-items:center;gap:9px}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.err{background:#c8443f;color:#fff}
@@ -393,6 +399,7 @@ body.authed .login-stage{display:none}
   .pill{white-space:normal}
   .page-head .right .btn{width:100%;justify-content:center}
   .modal{padding:22px 18px}
+  .modal-foot{margin:18px -18px -22px;padding:13px 18px}   /* поля под мобильный padding .modal (22/18) */
   .frow{flex-wrap:wrap}
 }
 .mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:30;background:var(--bar);backdrop-filter:var(--blur);border-top:1px solid var(--glass-bd);padding:7px 10px calc(7px + env(safe-area-inset-bottom))}
