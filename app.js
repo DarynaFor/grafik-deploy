@@ -304,6 +304,19 @@ async function refresh() {
 /* ── сотрудники ── */
 const specName = id => specialties.find(s => s.id === id)?.name || '—';
 const specCat = id => specialties.find(s => s.id === id)?.category || 'Прочие';
+/* Шапка ЛЮБОГО окна про человека — одна на все окна, чтобы везде было одинаково:
+   ФИО ЦЕЛИКОМ (с отчеством) + специальность + строка контекста. «Фамилия Имя»
+   не показывает отчества, а однофамильцы различаются только им — в «Расчёте»
+   этим подписывают выдачу денег, в графике так же легко отметить смену не тому.
+   sub — ГОТОВЫЙ html (даты, <b>), экранирует его вызывающий; title — слово
+   перед именем («Отпуск · …»). Специальности нет → specName даёт «—», такую
+   строку не рисуем совсем, чтобы не занимать место прочерком. */
+function personHead(e, sub, title = '') {
+  const spec = e ? specName(e.specialty_id) : '—';
+  return `<h3>${title ? esc(title) + ' · ' : ''}${esc((e && e.fio) || '')}</h3>
+    ${spec !== '—' ? `<div class="msub">${esc(spec)}</div>` : ''}
+    ${sub ? `<div class="msub">${sub}</div>` : ''}`;
+}
 function activeLines(e) { return (e.lines || []).filter(l => !l.valid_to).sort((a, b) => (a.line_type === 'основной' ? 0 : 1) - (b.line_type === 'основной' ? 0 : 1)); }
 /* Телефон. Зеркало phone_norm() из migrations/023 — держать в согласии с базой.
    Расхождение здесь означает, что форма примет то, что база отвергнет; либо, что
@@ -1528,7 +1541,7 @@ function scheduleCellPopup(empId, day) {
   const e = employees.find(x => x.id === empId); if (!e) return;
   const date = cellDate(day), c = cellOf(empId, day);
   const opts = shiftKinds.filter(k => k.code !== 'custom').map(k => `<option value="${k.code}" ${c && c.plan_kind === k.code ? 'selected' : ''}>${esc(k.label)}</option>`).join('');   // custom без конца смены = 0ч → исключаем (как в шаблоне)
-  showModal(`<h3>${esc(e.fio.split(' ').slice(0, 2).join(' '))}</h3><div class="msub">${day} ${esc(periodLabel(curPeriod))} · смена = тип + время начала</div>
+  showModal(`${personHead(e, `${day} ${esc(periodLabel(curPeriod))} · смена = тип + время начала`)}
     <label class="flbl">Тип смены</label><select class="input" id="scKind"><option value="">— пусто —</option>${opts}</select>
     <label class="flbl">Время начала</label><input class="input" id="scStart" type="time" value="${c && c.plan_start ? esc(String(c.plan_start).slice(0, 5)) : ''}">
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="scVac">Отпуск…</button><button class="btn btn-ghost btn-sm" id="scClear">Очистить</button><button class="btn btn-primary btn-sm" id="scSave">${ICONS.check}Сохранить</button></div>`);
@@ -1550,8 +1563,7 @@ function scheduleCellPopup(empId, day) {
 function vacationDialog(empId, startDay) {
   const e = employees.find(x => x.id === empId); if (!e) return;
   const startDate = cellDate(startDay);
-  showModal(`<h3>Отпуск · ${esc(e.fio.split(' ').slice(0, 2).join(' '))}</h3>
-    <div class="msub">с <b>${esc(startDate)}</b> по какое число (включительно)</div>
+  showModal(`${personHead(e, `с <b>${esc(startDate)}</b> по какое число (включительно)`, 'Отпуск')}
     <label class="flbl">По дату</label>
     <input class="input" id="vacEnd" type="date" value="${esc(startDate)}" min="${esc(startDate)}">
     <div class="msub" style="margin-top:8px">Все дни периода станут «Отпуск». Зарплата за них не начисляется — отпускные вносятся отдельной суммой. Правка — в журнал.</div>
@@ -1588,8 +1600,7 @@ function scheduleFactPopup(empId, day) {
   const hVal = (cur != null && cur !== '' && cur !== 'x') ? esc(String(cur)) : '';
   const workKinds = shiftKinds.filter(k => !isRest(k.code) && k.code !== 'custom');   // смены-замены: только рабочие типы
   const kindOpts = workKinds.map(k => `<option value="${k.code}">${esc(k.label)}</option>`).join('');
-  showModal(`<h3>${esc(e.fio.split(' ').slice(0, 2).join(' '))}</h3>
-    <div class="msub">${day} ${esc(periodLabel(curPeriod))} · факт · ${planLine}</div>
+  showModal(`${personHead(e, `${day} ${esc(periodLabel(curPeriod))} · факт · ${planLine}`)}
     <div class="fact-opts">
       ${isWork ? `<button class="btn btn-ghost fact-btn" data-f="plan">${ICONS.check}Вышел по плану · ${fmtH(planHoursOf(c))}</button>` : ''}
       ${isWork ? `<button class="btn btn-ghost fact-btn fact-miss" data-f="x">— Не вышел</button>` : ''}
@@ -1629,8 +1640,7 @@ function scheduleRetroDialog(empId, day) {
   const e = employees.find(x => x.id === empId); if (!e) return;
   const date = cellDate(day), c = cellOf(empId, day);
   const p = c && c.plan_kind, isWork = p && !isRest(p);
-  showModal(`<h3>${esc(e.fio.split(' ').slice(0, 2).join(' '))}</h3>
-    <div class="msub">${day} ${esc(periodLabel(curPeriod))} · день закрыт</div>
+  showModal(`${personHead(e, `${day} ${esc(periodLabel(curPeriod))} · день закрыт`)}
     <div class="lockmsg">${ICONS.lock} Исправление закрытого дня — по коду из СМС на ваш телефон. Правка уйдёт владельцу в «замечания».</div>
     <label class="flbl">Новый факт</label>
     <div class="fact-opts">
@@ -1688,8 +1698,7 @@ function scheduleTemplateDialog(empId) {
   const kinds = shiftKinds.filter(k => !isRest(k.code) && k.code !== 'custom');
   const kopts = kinds.map(k => `<option value="${k.code}"${k.code === 'day' ? ' selected' : ''}>${esc(k.label)}</option>`).join('');
   const pats = [['5/2', '5/2 — Пн-Пт работа, Сб-Вс выходные'], ['2/2', '2/2 — два через два'], ['3/3', '3/3 — три через три'], ['sutki3', 'Сутки/3 — сутки, потом 3 выходных'], ['every', 'Каждый день одинаково']];
-  showModal(`<h3>${esc(e.fio.split(' ').slice(0, 2).join(' '))}</h3>
-    <div class="msub">Заполнить весь ${esc(periodLabel(curPeriod))} по шаблону · потом можно поправить руками</div>
+  showModal(`${personHead(e, `Заполнить весь ${esc(periodLabel(curPeriod))} по шаблону · потом можно поправить руками`)}
     <label class="flbl">Шаблон</label><select class="input" id="tpPat">${pats.map(p => `<option value="${p[0]}">${esc(p[1])}</option>`).join('')}</select>
     <div class="frow"><div><label class="flbl">Тип смены</label><select class="input" id="tpKind">${kopts}</select></div>
       <div><label class="flbl">Время начала</label><input class="input" id="tpStart" type="time" value="08:00"></div></div>
@@ -2106,8 +2115,11 @@ async function payrollDialog(empId) {
     : `<div class="me-row"><span class="muted">${r.flag_no_rate ? 'Ставка не заведена' : 'Начислений за месяц нет'}</span><b>0 ₽</b></div>`;
   const pct = '';   // процент теперь приходит строкой из linesFor()
 
-  showModal(`<h3>${esc((r.fio || '').split(' ').slice(0, 2).join(' '))}</h3>
-    <div class="msub">${esc(periodLabel(payPeriod))} · норма ${r.norm_days} дн · факт ${r.fact_days} дн</div>
+  // ФИО берём из строки расчёта (v_month_total) — это имя, под которым человек
+  // идёт в ведомости; специальность из карточки. emp может не найтись (список
+  // карточек урезан ролью) — тогда останется одно ФИО, без строки специальности.
+  showModal(`${personHead({ fio: r.fio, specialty_id: emp?.specialty_id },
+      `${esc(periodLabel(payPeriod))} · норма ${r.norm_days} дн · факт ${r.fact_days} дн`)}
     <div class="rc-diff">${breakdown}${pct}
       <div class="me-row me-sum"><span>Зарплата</span><b>${rub(r.salary_kop)} ₽</b></div>
       ${r.card_avans_kop ? `<div class="me-row"><span class="muted">Аванс на карту</span><b>${rub(r.card_avans_kop)} ₽</b></div>` : ''}
