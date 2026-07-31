@@ -189,6 +189,14 @@ const IMPORT_KINDS_BY_ROLE = {
   operator: ['otpusk', 'otpusk_cash', 'otpusk_nach', 'cash_avans', 'cash'],
   ceo:      ['otpusk', 'otpusk_cash', 'otpusk_nach', 'card_avans', 'card_rasch', 'card_uvol', 'cash_avans', 'cash', 'premia'],
 };
+// СИНОНИМИЧНЫЕ виды: один и тот же документ можно залить дважды под разными
+// видами, и дедуп базы этого НЕ поймает — он ключуется по виду (migrations/046 §6).
+// Для отпускных это опаснее всего: ОБЕ графы проходят мимо Δ, поэтому сверка
+// владельца тоже промолчит, а «к выдаче» вырастет на всю сумму реестра, который
+// банк УЖЕ перечислил. Запрещать нельзя — часть отпускных законно платят на карту,
+// часть наличными одному и тому же человеку. Поэтому предупреждаем перед записью.
+// Карточную пару сюда не берём: card_* входят в Δ, и задвоение там видно расхождением.
+const IMPORT_SIBLINGS = { otpusk: ['otpusk_cash'], otpusk_cash: ['otpusk'] };
 function importKinds() { return IMPORT_KINDS_BY_ROLE[store.me()?.role] || []; }
 function canImport() { return importKinds().length > 0; }
 function renderNav() {
@@ -953,6 +961,14 @@ async function importLoadExisting() {
   importState.existing = new Set();
   try { importState.existing = await store.existingMoneyIds(importState.period, importState.kind); }
   catch (e) { /* дубль-подсветка не критична — база всё равно append-only */ }
+  // Тот же документ, залитый под «родственным» видом: база его не считает дублем.
+  importState.sibling = new Set(); importState.siblingKind = null;
+  for (const sk of (IMPORT_SIBLINGS[importState.kind] || [])) {
+    try {
+      const s = await store.existingMoneyIds(importState.period, sk);
+      if (s.size) { importState.siblingKind = sk; s.forEach(id => importState.sibling.add(id)); }
+    } catch (e) { /* подсказка, а не гейт */ }
+  }
   for (const r of importState.rows) {
     r.dup = !!(r.chosenId && importState.existing.has(r.chosenId));
     r.include = importCanInclude(r) && (r.userSet ? r.include : r.autoOk);
@@ -1096,7 +1112,14 @@ async function doImportLoad() {
   const meta = IMPORT_KIND_META[importState.kind];
   const bigList = incl.filter(r => r.amount_kop > MONEY_BIG_KOP);
   const warns = [];
-  if (extra) warns.push(`Один и тот же человек в списке несколько раз (${extra} ${extra === 1 ? 'лишняя строка' : 'лишних строк'}) — суммы сложатся. Если это ошибка, снимите галочки.`);
+  // Текст был «суммы сложатся» — это НЕПРАВДА и опасная: import_money_batch
+  // (migrations/046 §6) дедуплицирует по (человек, период, вид) и видит строки,
+  // вставленные ранее в этой же партии. Значит ляжет ТОЛЬКО первая, остальные
+  // уйдут в «пропущено (уже внесено)» — то есть отчёт назовёт потерю денег
+  // успешным дедупом. Две отпускные за месяц одному человеку так и не попадут.
+  if (extra) warns.push(`Один и тот же человек в списке несколько раз (${extra} ${extra === 1 ? 'лишняя строка' : 'лишних строк'}) — база запишет ТОЛЬКО ПЕРВУЮ, остальные пропустит как дубль. Если суммы разные и нужны обе — внесите вторую вручную в «Расчёте».`);
+  const sibN = incl.filter(r => importState.sibling?.has(r.chosenId)).length;
+  if (sibN) warns.push(`У ${sibN} чел. за этот месяц уже внесено «${IMPORT_KIND_META[importState.siblingKind].label}». Если это тот же документ — отпускные удвоятся, и сверка (Δ) этого НЕ покажет: обе графы в неё не входят.`);
   if (bigList.length) warns.push('Крупные суммы: ' + bigList.slice(0, 6).map(r => {
     const e = employees.find(x => x.id === r.chosenId); return `${e ? e.fio.split(' ')[0] : '?'} ${rub(r.amount_kop)} ₽`;
   }).join(', ') + (bigList.length > 6 ? '…' : '') + ' — проверьте, не опечатка ли.');
