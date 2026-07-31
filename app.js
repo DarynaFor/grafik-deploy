@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=55';
+import { makeStore, lineLabel, sameRate } from './store.js?v=56';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -162,21 +162,17 @@ const NAV = [
 function isOwner() { return store.me()?.role === 'owner'; }
 function navItems() { return NAV.filter(n => (!n.ownerOnly || isOwner()) && (!n.staffOnly || isStaff()) && (!n.show || n.show())); }
 
-// ── Импорт: какие виды денег доступны роли (зеркало RLS ml_ins, миграция 046) ──
-// Алёна (operator) — отпускные (три вида) и наличные; владелец и СЕО — всё.
-// Кассиров (cashier1/cashier2) в списке НЕТ вообще: экран импорта требует ростер
-// сотрудников для сопоставления ФИО, а его им закрывает emp_select (024 §6) —
-// подробнее в комментарии ниже. Премию, кроме владельца, вносит только СЕО.
+// ── Импорт: какие виды денег доступны роли (зеркало RLS ml_ins, миграция 008) ──
+// Алёна (operator) — отпускные/наличные; Бух 2 (cashier2) — карту/премию;
+// владелец — всё. Касса (cashier1) сюда не заходит: её поверхность узкая (одна
+// выдача по одному человеку), список ведомостей ей не нужен.
 const IMPORT_KIND_META = {
-  otpusk:      { label: 'Отпускные на карту',  hint: 'реестр отпускных (ТКБ) — деньги уже у человека, в «к выдаче» не идут' },
-  otpusk_cash: { label: 'Отпускные наличными', hint: 'отпускные, которые выдаём из кассы — идут в «к выдаче»' },
-  otpusk_nach: { label: 'Отпускные начислено', hint: 'НЕ выплата: сколько начислили. Справочно — ни в «к выдаче», ни в остаток не входит' },
-  card_avans:  { label: 'Аванс на карту',      hint: 'реестр аванса (ТКБ), официальная часть' },
-  card_rasch:  { label: 'ЗП на карту',         hint: 'ежемесячная зарплата на карту по 1С' },
-  card_uvol:   { label: 'Расчёт на карту',     hint: 'окончательный расчёт при увольнении' },
-  cash_avans:  { label: 'Аванс наличными',     hint: 'выданный наличными аванс' },
-  cash:        { label: 'Наличные',            hint: 'выданные наличными' },
-  premia:      { label: 'Премия',              hint: 'разовая премия, попадёт в журнал' },
+  otpusk:     { label: 'Отпускные',       hint: 'уже выплаченные отпускные, в отдельную графу' },
+  card_avans: { label: 'Аванс на карту',  hint: 'реестр аванса (ТКБ), официальная часть' },
+  card_rasch: { label: 'Расчёт на карту', hint: 'окончательный расчёт по 1С' },
+  cash_avans: { label: 'Аванс наличными', hint: 'выданный наличными аванс' },
+  cash:       { label: 'Наличные',        hint: 'выданные наличными' },
+  premia:     { label: 'Премия',          hint: 'разовая премия, попадёт в журнал' },
 };
 // ⚠ Только owner+operator: сопоставление ФИО идёт на КЛИЕНТЕ по всему ростеру,
 // а читать employee (emp_select) могут лишь owner и operator. Бух (cashier1/2)
@@ -186,18 +182,10 @@ const IMPORT_KIND_META = {
 // его импорт карты сделаем через СЕРВЕРНЫЙ матч-RPC (SECURITY DEFINER вернёт
 // employee_id по списку, не раскрывая ростер) — тогда добавится cashier2.
 const IMPORT_KINDS_BY_ROLE = {
-  owner:    ['otpusk', 'otpusk_cash', 'otpusk_nach', 'card_avans', 'card_rasch', 'card_uvol', 'cash_avans', 'cash', 'premia'],
-  operator: ['otpusk', 'otpusk_cash', 'otpusk_nach', 'cash_avans', 'cash'],
-  ceo:      ['otpusk', 'otpusk_cash', 'otpusk_nach', 'card_avans', 'card_rasch', 'card_uvol', 'cash_avans', 'cash', 'premia'],
+  owner:    ['otpusk', 'card_avans', 'card_rasch', 'cash_avans', 'cash', 'premia'],
+  operator: ['otpusk', 'cash_avans', 'cash'],
+  ceo:      ['otpusk', 'card_avans', 'card_rasch', 'cash_avans', 'cash', 'premia'],
 };
-// СИНОНИМИЧНЫЕ виды: один и тот же документ можно залить дважды под разными
-// видами, и дедуп базы этого НЕ поймает — он ключуется по виду (migrations/046 §6).
-// Для отпускных это опаснее всего: ОБЕ графы проходят мимо Δ, поэтому сверка
-// владельца тоже промолчит, а «к выдаче» вырастет на всю сумму реестра, который
-// банк УЖЕ перечислил. Запрещать нельзя — часть отпускных законно платят на карту,
-// часть наличными одному и тому же человеку. Поэтому предупреждаем перед записью.
-// Карточную пару сюда не берём: card_* входят в Δ, и задвоение там видно расхождением.
-const IMPORT_SIBLINGS = { otpusk: ['otpusk_cash'], otpusk_cash: ['otpusk'] };
 function importKinds() { return IMPORT_KINDS_BY_ROLE[store.me()?.role] || []; }
 function canImport() { return importKinds().length > 0; }
 function renderNav() {
@@ -481,15 +469,9 @@ async function loadCardMoney(id) {
     box.innerHTML = `<div class="cm-pay"><span class="caps">Осталось выдать · ${esc(periodLabel(per))}</span>
         <b class="money">${rub(r.delta_kop)} ₽</b></div>
       <div class="cm-chips">
-        <span class="mini-chip">Начислено: <b>${rub(r.salary_kop)} ₽</b></span>
-        ${cardTotal(r) ? `<span class="mini-chip">Карта: <b>${rub(cardTotal(r))} ₽</b></span>` : ''}
+        <span class="mini-chip">Начислено${r.flag_manual_salary ? ' (вручную)' : ''}: <b>${rub(r.salary_kop)} ₽</b></span>
+        ${r.card_rasch_kop + r.card_avans_kop ? `<span class="mini-chip">Карта: <b>${rub(r.card_rasch_kop + r.card_avans_kop)} ₽</b></span>` : ''}
         ${r.cash_kop + r.cash_avans_kop ? `<span class="mini-chip">Наличными: <b>${rub(r.cash_kop + r.cash_avans_kop)} ₽</b></span>` : ''}
-        ${/* ОТДЕЛЬНЫЙ чип, а не слагаемое в «Наличными»: тождество
-              «Осталось выдать = Начислено − Карта − Наличными» должно оставаться
-              верным. Без него карточка человека, весь месяц бывшего в отпуске,
-              показывала СПЛОШНЫЕ НУЛИ (оклад за дни отпуска не начисляется — 044,
-              значит Начислено 0 и Δ 0), пока касса должна ему все отпускные. */''}
-        ${r.to_pay_kop ? `<span class="mini-chip">К выдаче наличными: <b>${rub(r.to_pay_kop)} ₽</b></span>` : ''}
         ${r.flag_no_rate ? '<span class="mini-chip warn">нет ставки</span>' : ''}
       </div>`;
   } catch (err) { box.innerHTML = ''; }
@@ -968,14 +950,6 @@ async function importLoadExisting() {
   importState.existing = new Set();
   try { importState.existing = await store.existingMoneyIds(importState.period, importState.kind); }
   catch (e) { /* дубль-подсветка не критична — база всё равно append-only */ }
-  // Тот же документ, залитый под «родственным» видом: база его не считает дублем.
-  importState.sibling = new Set(); importState.siblingKind = null;
-  for (const sk of (IMPORT_SIBLINGS[importState.kind] || [])) {
-    try {
-      const s = await store.existingMoneyIds(importState.period, sk);
-      if (s.size) { importState.siblingKind = sk; s.forEach(id => importState.sibling.add(id)); }
-    } catch (e) { /* подсказка, а не гейт */ }
-  }
   for (const r of importState.rows) {
     r.dup = !!(r.chosenId && importState.existing.has(r.chosenId));
     r.include = importCanInclude(r) && (r.userSet ? r.include : r.autoOk);
@@ -1119,14 +1093,7 @@ async function doImportLoad() {
   const meta = IMPORT_KIND_META[importState.kind];
   const bigList = incl.filter(r => r.amount_kop > MONEY_BIG_KOP);
   const warns = [];
-  // Текст был «суммы сложатся» — это НЕПРАВДА и опасная: import_money_batch
-  // (migrations/046 §6) дедуплицирует по (человек, период, вид) и видит строки,
-  // вставленные ранее в этой же партии. Значит ляжет ТОЛЬКО первая, остальные
-  // уйдут в «пропущено (уже внесено)» — то есть отчёт назовёт потерю денег
-  // успешным дедупом. Две отпускные за месяц одному человеку так и не попадут.
-  if (extra) warns.push(`Один и тот же человек в списке несколько раз (${extra} ${extra === 1 ? 'лишняя строка' : 'лишних строк'}) — база запишет ТОЛЬКО ПЕРВУЮ, остальные пропустит как дубль. Если суммы разные и нужны обе — внесите вторую вручную в «Расчёте».`);
-  const sibN = incl.filter(r => importState.sibling?.has(r.chosenId)).length;
-  if (sibN) warns.push(`У ${sibN} чел. за этот месяц уже внесено «${IMPORT_KIND_META[importState.siblingKind].label}». Если это тот же документ — отпускные удвоятся, и сверка (Δ) этого НЕ покажет: обе графы в неё не входят.`);
+  if (extra) warns.push(`Один и тот же человек в списке несколько раз (${extra} ${extra === 1 ? 'лишняя строка' : 'лишних строк'}) — суммы сложатся. Если это ошибка, снимите галочки.`);
   if (bigList.length) warns.push('Крупные суммы: ' + bigList.slice(0, 6).map(r => {
     const e = employees.find(x => x.id === r.chosenId); return `${e ? e.fio.split(' ')[0] : '?'} ${rub(r.amount_kop)} ₽`;
   }).join(', ') + (bigList.length > 6 ? '…' : '') + ' — проверьте, не опечатка ли.');
@@ -1873,19 +1840,9 @@ const J_ACTION = { 'сторно': 'СТОРНО', 'правило расчёт�
    потому что аванс/наличка/премия — это деньги за месяц, а не за строку.
    Все цифры приходят готовыми из v_month_total (migrations/019) — браузер
    ничего денежного не считает. */
-// Порядок = как человек думает: сначала наличные (их выдаёт касса), потом карта.
-// Отпускные и «расчёт» разведены по способу выплаты (migrations/046): деньги на
-// карте у человека УЖЕ есть, наличные ему ещё предстоит выдать — это разные
-// строки в жизни, а не оттенок одной.
-// «Отпускные начислено» стоит последним и подписан «не выплата» НАМЕРЕННО: это
-// единственный вид в списке, который денег никому не двигает, и перепутать его
-// с выплатой — значит записать человеку выданное, чего не выдавали.
 const MONEY_KINDS = [
-  ['cash', 'Наличные'], ['cash_avans', 'Аванс наличными'], ['otpusk_cash', 'Отпускные наличными'],
-  ['premia', 'Премия'],
-  ['card_avans', 'Аванс на карту'], ['card_rasch', 'ЗП на карту'],
-  ['otpusk', 'Отпускные на карту'], ['card_uvol', 'Расчёт на карту (увольнение)'],
-  ['otpusk_nach', 'Отпускные начислено (не выплата)'],
+  ['cash', 'Наличные'], ['cash_avans', 'Аванс наличными'], ['premia', 'Премия'],
+  ['otpusk', 'Отпускные'], ['card_avans', 'Аванс на карту'], ['card_rasch', 'Расчёт на карту'],
 ];
 const moneyKindLabel = k => (MONEY_KINDS.find(x => x[0] === k) || [k, k])[1];
 // Показываем только то, что роль реально может записать: политика ml_ins
@@ -1894,22 +1851,15 @@ const moneyKindLabel = k => (MONEY_KINDS.find(x => x[0] === k) || [k, k])[1];
 // С migrations/022 §1 премия — ТОЛЬКО владелец: премия поднимает «к выдаче»
 // и не входит в Δ, поэтому у бухгалтера это был единственный рычаг на сумму,
 // которую она сама же и выдаёт (себе в том числе).
-// СЕО (035) вправе вносить всё, включая премию, — раньше он проваливался в
-// `return []` и получал ПУСТОЙ список видов при видимой форме «Внести деньги».
 function moneyKindsFor(role) {
-  if (role === 'owner' || role === 'ceo') return MONEY_KINDS;
+  if (role === 'owner') return MONEY_KINDS;
   if (role === 'operator') return MONEY_KINDS.filter(k => k[0] !== 'premia');
   return [];
 }
 const rub = kop => fmt(Math.round((kop || 0) / 100));
 // сколько денег уже расписано по выплатам — до этого дельта равна всей зарплате
 // и подсвечивать её бессмысленно (горела бы у всех весь месяц)
-const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0) + (r.cash_kop || 0) + (r.cash_avans_kop || 0);
-// Всё официальное на карту одной суммой — ровно то, что вычитает delta_kop
-// (аванс + ЗП + расчёт при увольнении). Отпускных на карту здесь НЕТ намеренно:
-// Δ их не вычитает, и чип на карточке человека обязан сходиться с «Осталось
-// выдать». Разбивка по видам — в «Расчёте» (графы) и в окне человека.
-const cardTotal = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
+const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.cash_kop || 0) + (r.cash_avans_kop || 0);
 let payrollRows = [], payrollLines = [], payrollSeq = 0, payrollShown = null;
 
 async function renderPayroll(filter = '') {
@@ -1957,16 +1907,10 @@ function drawPayroll(filter = '') {
     && (!cat || specCat(employees.find(e => e.id === r.employee_id)?.specialty_id) === cat));
   if (!rows.length) { $('payrollTable').innerHTML = `<div class="empty">${payrollRows.length ? 'Никого не найдено' : 'За ' + esc(periodLabel(payPeriod)) + ' данных нет'}</div>`; renderPayrollStat([]); return; }
 
-  // Каждый вид выплаты — своя графа (решение Дарины 31.07). Раньше «Карта» была
-  // одним числом на аванс+ЗП+расчёт, и по ведомости нельзя было понять, ЧТО
-  // именно человеку перечислили. Порядок сохранён прежний: наличный аванс →
-  // карта → наличка → отпускные → премия → остаток.
-  // «Отпуск. начисл.» — НЕ выплата, а начисление: справочно, ни в одну сумму
-  // не входит (migrations/046).
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
-    <th class="num sep">Зарплата</th><th class="num">Аванс нал.</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num">Расчёт на карту</th><th class="num">Наличка</th>
-    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
+    <th class="num sep">Зарплата</th><th class="num">Аванс нал.</th><th class="num">Карта</th><th class="num">Наличка</th>
+    <th class="num">Отпускные</th><th class="num">Премия</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по категории,
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
@@ -1979,7 +1923,7 @@ function drawPayroll(filter = '') {
       curCat = cat;
       const inCat = rows.filter(x => catOf(x) === cat);
       const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="16"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="12"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
@@ -1988,13 +1932,9 @@ function drawPayroll(filter = '') {
     const right = `
       <td class="num sep fin"><b>${rub(r.salary_kop)}</b></td>
       <td class="num fin">${rub(r.cash_avans_kop)}</td>
-      <td class="num fin">${rub(r.card_avans_kop)}</td>
-      <td class="num fin">${rub(r.card_rasch_kop)}</td>
-      <td class="num fin">${rub(r.card_uvol_kop)}</td>
+      <td class="num fin">${rub(r.card_rasch_kop + r.card_avans_kop)}</td>
       <td class="num fin">${rub(r.cash_kop)}</td>
-      <td class="num fin">${rub(r.otpusk_nach_kop)}</td>
       <td class="num fin">${rub(r.otpusk_kop)}</td>
-      <td class="num fin">${rub(r.otpusk_cash_kop)}</td>
       <td class="num fin">${rub(r.premia_kop)}</td>
       <td class="num pw-pay fin"><b class="money">${rub(r.delta_kop)}</b></td>`;
     if (!my.length) {
@@ -2017,10 +1957,8 @@ function drawPayroll(filter = '') {
     <td class="num">${sum('norm_days')} дн</td><td class="num">${sum('fact_days')} дн</td><td></td>
     <td class="num sep fin"><b>${rub(sum('salary_kop'))}</b></td>
     <td class="num fin">${rub(sum('cash_avans_kop'))}</td>
-    <td class="num fin">${rub(sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('card_rasch_kop'))}</td>
-    <td class="num fin">${rub(sum('card_uvol_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
-    <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
-    <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('otpusk_cash_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
+    <td class="num fin">${rub(sum('card_rasch_kop') + sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
+    <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
     <td class="num pw-pay fin"><b class="money">${rub(sum('delta_kop'))}</b></td></tr></tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
@@ -2033,16 +1971,19 @@ function drawPayroll(filter = '') {
 // Флаги — короткими чипами у имени. Это ПОДСКАЗКА «посмотри», а не приговор.
 function payrollFlags(r) {
   const f = [];
-  if (r.flag_money_without_calc) f.push(['деньги без расчёта', 'red']);
-  if (r.flag_no_rate)        f.push(['нет ставки', 'red']);
-  if (r.flag_oklad_no_days)  f.push(['оклад без дней', 'red']);
-  if (r.flag_rate_gap)       f.push(['ставка не на все дни', 'amber']);
-  if (r.flag_no_patient_data)f.push(['нет оплат пациентов', 'amber']);
-  if (r.flag_pct_no_rate)    f.push(['оплата без процента', 'amber']);
-  if (r.flag_partial_month)  f.push(['неполный месяц', 'amber']);
-  if (r.flag_fallback)       f.push(['запасная ставка', 'amber']);
+  if (r.flag_manual_salary) f.push(['сумма вручную', 'info']);
+  if (!r.flag_manual_salary) {            // при ручной финальной сумме расчётные предупреждения не к месту
+    if (r.flag_money_without_calc) f.push(['деньги без расчёта', 'red']);
+    if (r.flag_no_rate)        f.push(['нет ставки', 'red']);
+    if (r.flag_oklad_no_days)  f.push(['оклад без дней', 'red']);
+    if (r.flag_rate_gap)       f.push(['ставка не на все дни', 'amber']);
+    if (r.flag_no_patient_data)f.push(['нет оплат пациентов', 'amber']);
+    if (r.flag_pct_no_rate)    f.push(['оплата без процента', 'amber']);
+    if (r.flag_partial_month)  f.push(['неполный месяц', 'amber']);
+    if (r.flag_fallback)       f.push(['запасная ставка', 'amber']);
+    if (r.flag_ambiguous)      f.push(['две одинаковые ставки', 'amber']);
+  }
   if (r.flag_archived)       f.push(['в архиве', 'amber']);
-  if (r.flag_ambiguous)      f.push(['две одинаковые ставки', 'amber']);
   return f.length ? `<span class="pw-flags">${f.map(([t, c]) => `<span class="pw-flag ${c}">${t}</span>`).join('')}</span>` : '';
 }
 
@@ -2054,12 +1995,8 @@ function renderPayrollStat(rows) {
   $('payrollStat').innerHTML =
     `<span class="mini-chip strong">Осталось выдать: <b class="money">${rub(s('delta_kop'))} ₽</b></span>
      <span class="mini-chip">Начислено: <b>${rub(s('salary_kop'))} ₽</b></span>
-     <span class="mini-chip">Выдано на карту: <b>${rub(s('card_avans_kop') + s('card_rasch_kop') + s('card_uvol_kop'))} ₽</b></span>
+     <span class="mini-chip">Выдано на карту: <b>${rub(s('card_avans_kop') + s('card_rasch_kop'))} ₽</b></span>
      ${s('cash_kop') + s('cash_avans_kop') ? `<span class="mini-chip">Выдано наличными: <b>${rub(s('cash_kop') + s('cash_avans_kop'))} ₽</b></span>` : ''}
-     ${/* Отпускные наличными и премия в «Выдано» не входят — они ещё НЕ выданы,
-           это наряд кассе. Без отдельного чипа сумма жила бы только в 14-й графе
-           таблицы с горизонтальным скроллом. */''}
-     ${s('to_pay_kop') ? `<span class="mini-chip">К выдаче наличными: <b>${rub(s('to_pay_kop'))} ₽</b></span>` : ''}
      ${problems ? `<span class="mini-chip warn">Нужна ставка: <b>${problems}</b></span>` : ''}`;
 }
 
@@ -2082,15 +2019,6 @@ function confirmStorno(row) {
   });
 }
 
-/* Здесь был автоматический «Отпускных осталось выплатить» = начислено − карта −
-   наличные. УБРАН НАМЕРЕННО: обе суммы брались из ОДНОГО месяца, а весь смысл
-   отдельной графы «начислено» в том, что начислить могут в июле, а выплатить в
-   августе. На таких данных строка врала дважды — июль навсегда показывал бы
-   «осталось 40 000» уже после выплаты, а август не показывал бы ничего.
-   Настоящий остаток по отпускным — это НАКОПИТЕЛЬНЫЙ баланс по всем периодам,
-   т.е. отдельная задача (запрос за все месяцы, а не за текущий). Пока три числа
-   стоят рядом отдельными строками, и разность видно глазами. */
-
 async function payrollDialog(empId) {
   const r = payrollRows.find(x => x.employee_id === empId); if (!r) return;
   const my = payrollLines.filter(l => l.employee_id === empId);
@@ -2101,6 +2029,8 @@ async function payrollDialog(empId) {
   const pctLine = emp && emp.lines && emp.lines.find(l => l.pay_kind === 'процент');
   let curRev = 0;
   if (pctLine && canEdit) { try { curRev = await store.getDoctorRevenue(empId, payPeriod); } catch (e) {} }
+  let curOverride = null;                                 // финальная сумма вручную (миграция 049)
+  if (canEdit) { try { curOverride = await store.getSalaryOverride(empId, payPeriod); } catch (e) {} }
   const breakdown = my.length
     ? my.map(l => `<div class="me-row"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}</span><b>${rub(l.money_kop)} ₽</b></div>`).join('')
     : `<div class="me-row"><span class="muted">${r.flag_no_rate ? 'Ставка не заведена' : 'Начислений за месяц нет'}</span><b>0 ₽</b></div>`;
@@ -2109,18 +2039,14 @@ async function payrollDialog(empId) {
   showModal(`<h3>${esc((r.fio || '').split(' ').slice(0, 2).join(' '))}</h3>
     <div class="msub">${esc(periodLabel(payPeriod))} · норма ${r.norm_days} дн · факт ${r.fact_days} дн</div>
     <div class="rc-diff">${breakdown}${pct}
-      <div class="me-row me-sum"><span>Зарплата</span><b>${rub(r.salary_kop)} ₽</b></div>
-      ${r.card_avans_kop ? `<div class="me-row"><span class="muted">Аванс на карту</span><b>${rub(r.card_avans_kop)} ₽</b></div>` : ''}
-      ${r.card_rasch_kop ? `<div class="me-row"><span class="muted">ЗП на карту</span><b>${rub(r.card_rasch_kop)} ₽</b></div>` : ''}
-      ${r.card_uvol_kop ? `<div class="me-row"><span class="muted">Расчёт на карту (увольнение)</span><b>${rub(r.card_uvol_kop)} ₽</b></div>` : ''}
+      <div class="me-row me-sum"><span>Зарплата${r.flag_manual_salary ? ' · <b class="jact">вручную</b>' : ''}</span><b>${rub(r.salary_kop)} ₽</b></div>
+      ${r.card_rasch_kop || r.card_avans_kop ? `<div class="me-row"><span class="muted">На карту (офиц.)</span><b>${rub(r.card_rasch_kop + r.card_avans_kop)} ₽</b></div>` : ''}
       ${r.cash_kop ? `<div class="me-row"><span class="muted">Наличными</span><b>${rub(r.cash_kop)} ₽</b></div>` : ''}
       ${r.cash_avans_kop ? `<div class="me-row"><span class="muted">Аванс наличными</span><b>${rub(r.cash_avans_kop)} ₽</b></div>` : ''}
       ${r.premia_kop ? `<div class="me-row"><span class="muted">Премия</span><b>${rub(r.premia_kop)} ₽</b></div>` : ''}
-      ${r.otpusk_nach_kop ? `<div class="me-row"><span class="muted">Отпускные начислено</span><b>${rub(r.otpusk_nach_kop)} ₽</b></div>` : ''}
-      ${r.otpusk_kop ? `<div class="me-row"><span class="muted">Отпускные на карту</span><b>${rub(r.otpusk_kop)} ₽</b></div>` : ''}
-      ${r.otpusk_cash_kop ? `<div class="me-row"><span class="muted">Отпускные наличными</span><b>${rub(r.otpusk_cash_kop)} ₽</b></div>` : ''}
+      ${r.otpusk_kop ? `<div class="me-row"><span class="muted">Отпускные</span><b>${rub(r.otpusk_kop)} ₽</b></div>` : ''}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money">${rub(r.delta_kop)} ₽</b></div>
-      <div class="me-row"><span class="muted small">Зарплата минус уже выданное (карта/наличные). Столько ещё раздать — в основном наличными. Отпускные в эту разницу не входят: на карту они уже выплачены, а наличные идут отдельной строкой в кассу.</span></div>
+      <div class="me-row"><span class="muted small">Зарплата минус уже выданное (карта/наличные). Столько ещё раздать — в основном наличными. Отпускные сюда не входят (выплачены отдельно на карту).</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
     ${pctLine && canEdit ? `<label class="flbl">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё</label>
       <div class="me-add">
@@ -2128,6 +2054,14 @@ async function payrollDialog(empId) {
         <button class="btn btn-primary btn-sm" id="pmRevSave">${ICONS.check}Сохранить</button>
       </div>
       <div class="msub">Для процентников считаем ЗП от введённой выручки (оплаты пациентов пока неполные). Изменение выручки видит владелец в журнале.</div>` : ''}
+    ${canEdit ? `<label class="flbl">Финальная сумма вручную${r.flag_manual_salary ? ' · <span class="jact">задана</span>' : ''}</label>
+      <div class="me-add">
+        <input class="input" id="pmFinal" placeholder="итоговая зарплата ₽" autocomplete="off" inputmode="numeric" value="${curOverride ? fmt(Math.round(curOverride / 100)) : ''}">
+        <button class="btn btn-primary btn-sm" id="pmFinalSave">${ICONS.check}${r.flag_manual_salary ? 'Изменить' : 'Задать'}</button>
+        ${r.flag_manual_salary ? `<button class="btn btn-ghost btn-sm" id="pmFinalClear">Убрать</button>` : ''}
+      </div>
+      <input class="input" id="pmFinalNote" placeholder="причина (необязательно): напр. «по ведомости, без графика»" autocomplete="off" style="margin-top:8px;width:100%">
+      <div class="msub">Для людей без графика: итоговая зарплата за месяц одной суммой. Заменяет расчёт → «осталось» = эта сумма − выданное на карту/наличными. Причина и каждое изменение видны владельцу — в журнале и в «Требует внимания».</div>` : ''}
     ${canEdit ? `<label class="flbl">Внести деньги</label>
       <div class="me-add">
         <select class="input" id="pmKind">${moneyKindsFor(store.me()?.role).map(k => `<option value="${k[0]}">${k[1]}</option>`).join('')}</select>
@@ -2208,6 +2142,34 @@ async function payrollDialog(empId) {
       closeModal(); payrollDialog(empId);
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
+  // Финальная сумма вручную: задать/изменить (миграция 049). Заменяет «заработал».
+  if (canEdit) $('pmFinal').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('pmFinalSave').click(); } };
+  if (canEdit) $('pmFinalSave').onclick = async () => {
+    const btn = $('pmFinalSave'); if (btn.disabled) return;
+    let val;
+    try { val = parseNum($('pmFinal').value, { thousands: true, field: 'сумму', max: RATE_ABSURD }); }
+    catch (err) { toast(err.message, true); return; }
+    if (val == null || val <= 0) { toast('Укажите сумму больше 0 (или «Убрать»)', true); return; }
+    if (val > RATE_CONFIRM && !(await confirmBigAmounts([val]))) return;
+    btn.disabled = true;
+    try {
+      const note = $('pmFinalNote')?.value.trim() || null;   // причина (необязательно) → в журнал
+      await store.setSalaryOverride(empId, payPeriod, Math.round(val * 100), note);
+      await renderPayroll($('payrollSearch')?.value || '');
+      toast(ICONS.check + 'Финальная сумма задана — «осталось» пересчитано');
+      closeModal(); payrollDialog(empId);
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
+  if (canEdit && r.flag_manual_salary) $('pmFinalClear').onclick = async () => {
+    const btn = $('pmFinalClear'); if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      await store.setSalaryOverride(empId, payPeriod, null);
+      await renderPayroll($('payrollSearch')?.value || '');
+      toast(ICONS.check + 'Финальная сумма убрана — вернулся расчёт по графику');
+      closeModal(); payrollDialog(empId);
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
 }
 
 /* ── Обзор владельца ─────────────────────────────────────────────────────
@@ -2235,6 +2197,11 @@ const OV_ALERTS = [
   // только когда запись НАЧАЛАСЬ, а свести не сходится. Красным — это скрытая
   // недоплата, а не рабочая недозаполненность.
   { key: r => recorded(r) > 0 && Math.abs(r.delta_kop || 0) > 10000, red: true, t: 'Расхождение: начислено ≠ записано', d: 'записанные деньги не сходятся с расчётом' },
+  // Ручная финальная сумма — прямой рычаг на «осталось выдать» в обход графика.
+  // Не красная (это законный способ для людей без графика), но владелец ДОЛЖЕН её
+  // видеть: иначе оператор мог бы ручной суммой погасить красный флаг незаметно
+  // (находка аудита F2). Каждая правка ещё и в журнале (миграция 052, fail-closed).
+  { key: 'flag_manual_salary', red: false, t: 'Сумма задана вручную', d: 'зарплата вписана рукой, не из графика — сверьте с выданным' },
   { key: 'flag_no_data', red: false, t: 'График есть, а денег ноль', d: 'человек работал, но ничего не начислено' },
   { key: 'flag_oklad_no_days', red: false, t: 'Оклад есть, отработанных дней ноль', d: 'оклад не на что начислить' },
   { key: 'flag_pct_no_rate', red: false, t: 'Процент без ставки', d: 'оплаты пациентов есть, а ставки процента нет' },
@@ -2264,13 +2231,7 @@ function drawOverview() {
   const { rows, remarks, payouts } = ovData;
   const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
   const delta = sum('delta_kop'), salary = sum('salary_kop');
-  // Всё официальное, что ушло на карту: аванс + ЗП + расчёт при увольнении + ОТПУСКНЫЕ
-  // НА КАРТУ. Последние сюда не входили, и плитка «Официально на карту» занижала
-  // сумму ровно на реестр ТКБ (в июле — 635 000 ₽), хотя в «Расчёте» рядом стоит
-  // графа «Отпуск. карта» с этим же числом. Это ИМЕННО ТА цифра, что показывает,
-  // сколько прошло официально, — занижать её нельзя. В Δ отпускные по-прежнему не
-  // входят (033), а подстрочник героя тождеством никогда и не был.
-  const card = sum('card_rasch_kop') + sum('card_avans_kop') + sum('card_uvol_kop') + sum('otpusk_kop');
+  const card = sum('card_rasch_kop') + sum('card_avans_kop');
   const paid = sum('paid_kop');
   const people = rows.filter(r => r.status === 'active').length;
 
