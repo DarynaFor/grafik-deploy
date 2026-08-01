@@ -95,6 +95,9 @@ body.authed .login-stage{display:none}
 .rolepill.operator{background:rgba(98,166,255,.14);color:var(--blue-d)}
 .iconbtn{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--fill-2);border:1px solid var(--glass-bd);transition:.13s;color:var(--ink-2)}
 .iconbtn:hover{color:var(--ink)}
+/* «назад» — первым в шапке, слева от логотипа */
+.iconbtn.topback{margin-right:4px}
+.iconbtn.topback[hidden]{display:none}
 .side{grid-area:side;padding:16px 12px;background:var(--fill-1);border-right:1px solid var(--glass-bd)}
 .nav-item{display:flex;align-items:center;gap:11px;padding:11px 13px;border-radius:var(--r-ctl);color:var(--ink-2);font-size:14.5px;font-weight:600;transition:.13s;width:100%;text-align:left}
 .nav-item:hover{background:var(--fill-2)}

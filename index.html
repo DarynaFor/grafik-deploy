@@ -19,7 +19,7 @@
 <meta name="theme-color" content="#0C0D10" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#EBE6DD" media="(prefers-color-scheme: light)">
 <script>(function(){try{var t=localStorage.getItem('milena-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-<link rel="stylesheet" href="styles.css?v=68">
+<link rel="stylesheet" href="styles.css?v=69">
 </head>
 <body>
 
@@ -37,6 +37,7 @@
 <!-- приложение -->
 <div class="app" id="app">
   <div class="topbar">
+    <button class="iconbtn topback" id="topBack" title="Назад" aria-label="Назад" hidden></button>
     <div class="logo"><span class="mark">M</span> Табель <small id="modeTag">спринт 1</small></div>
     <div class="top-spacer"></div>
     <div class="whoami"><span id="whoName"></span><span class="rolepill" id="whoRole"></span></div>
@@ -172,7 +173,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=82"></script>
+<script type="module" src="app.js?v=83"></script>
 <!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
      без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
      index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —
