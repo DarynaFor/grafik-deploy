@@ -863,7 +863,7 @@ function openCard(id, replace) {
         <div class="field"><span class="caps">Должность</span><span class="val">${esc(e.position === FIO_SENTINEL ? '—' : (e.position || '—'))}</span></div>
         <div class="field"><span class="caps">Телефон (для СМС)</span><span class="val num">${esc(fmtPhone(e.phone) || '—')}</span></div>
         <div class="field"><span class="caps">Принят / уволен</span><span class="val small">${e.hired_on || e.left_on ? esc(dm(e.hired_on) || '—') + ' — ' + esc(dm(e.left_on) || '…') : '—'}</span></div>
-        <div class="field"><span class="caps">Статус</span><span class="val">${e.status === 'active' ? 'активен' : 'архив'}</span></div>
+        <div class="field"><span class="caps">Статус</span><span class="val">${e.status === 'active' ? 'работает' : 'уволен'}</span></div>
         <div class="field" style="margin:0"><span class="caps">Карточка создана</span><span class="val small">${esc(fmtDT(e.created_at))}</span></div>
       </div>
     </div>${partialMonthNote(e)}
@@ -1718,8 +1718,13 @@ function employeeForm(e) {
       // Крупная ставка в карточке → тоже переспросить, не опечатка ли.
       const big = bigAmounts(lines);
       if (big.length && !(await confirmBigAmounts(big))) { btn.disabled = false; return; }
-      if (e) { await store.updateEmployee(e.id, patch, lines); toast(ICONS.check + 'Карточка обновлена — изменения в журнале'); }
-      else { await store.createEmployee({ ...patch, lines }); toast(ICONS.check + 'Карточка создана: ' + esc(fio.split(' ')[0])); }
+      // Появились НОВЫЕ строки ставки — спрашиваем, с какого месяца они действуют.
+      // Существующие (_keep) не трогаем: у них своя дата начала.
+      const fresh = (lines || []).filter(l => !l._keep);
+      let vfrom = null;
+      if (fresh.length) { vfrom = await rateStartDialog(fresh); if (!vfrom) { btn.disabled = false; return; } }
+      if (e) { await store.updateEmployee(e.id, patch, lines, vfrom); toast(ICONS.check + 'Карточка обновлена — изменения в журнале'); }
+      else { await store.createEmployee({ ...patch, lines, valid_from: vfrom }); toast(ICONS.check + 'Карточка создана: ' + esc(fio.split(' ')[0])); }
       closeModal(); await refresh(); if (e) openCard(e.id);
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
@@ -2020,7 +2025,10 @@ function drawSchedule() {
   // вправо. innerHTML ниже сбрасывает scrollLeft, и после каждого сохранения
   // норму пришлось бы искать заново — на 119 людях это неработоспособно.
   const wrap = grid.closest('.gridwrap'), keepL = wrap ? wrap.scrollLeft : 0, keepT = wrap ? wrap.scrollTop : 0;
-  grid.style.gridTemplateColumns = `150px repeat(${nd}, minmax(44px, 1fr)) repeat(4, minmax(46px, auto))`;
+  // Ширину первой колонки берём из CSS (--gr-name-w), а не числом здесь: когда
+  // имена расширили до 190px ради ФИО в две строки, эта строка осталась на 150px,
+  // и колонка с именами наезжала на первое число месяца.
+  grid.style.gridTemplateColumns = `var(--gr-name-w) repeat(${nd}, minmax(44px, 1fr)) repeat(4, minmax(46px, auto))`;
   grid.innerHTML = shown ? head + rows : `<div class="empty" style="padding:40px">${active.length ? 'Никого не найдено' : 'Нет сотрудников'}</div>`;
   if (wrap) { wrap.scrollLeft = keepL; wrap.scrollTop = keepT; }
   if (anyEdit) {
@@ -2354,6 +2362,23 @@ function rtCollect(row) {
    заключает договор, а записывает то, что человек уже получает (с 1-го числа). */
 const RU_MONTHS = ['январь','февраль','март','апрель','май','июнь','июль','август','сентябрь','октябрь','ноябрь','декабрь'];
 const monthStartMSK = () => new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 8) + '01';
+/* С какого числа начинает действовать ставка. Берём месяц, ОТКРЫТЫЙ В ПРОГРАММЕ:
+   человек считает июль — значит и ставку заводит на июль, какое бы сегодня ни было
+   число. От сегодняшнего месяца это отвязано намеренно: 1 августа 2026 все ставки,
+   заведённые для июля, молча легли в август, и у Хуцишвили за 12 отработанных дней
+   вышло 0 ₽ — в июле ставки «ещё не было». monthStartMSK остаётся запасным. */
+const rateStartDefault = () => (/^\d{4}-\d{2}$/.test(workPeriod || '') ? workPeriod + '-01' : monthStartMSK());
+/* Предупреждение под полем даты: если ставка стартует ПОЗЖЕ открытого месяца,
+   за этот месяц не начислится ничего — ровно тот случай, что мы разбирали. */
+function rateStartWarn(d) {
+  const open = /^\d{4}-\d{2}$/.test(workPeriod || '') ? workPeriod : null;
+  if (!open || !/^\d{4}-\d{2}-\d{2}$/.test(String(d))) return '';
+  const [y, m] = open.split('-').map(Number);
+  return d.slice(0, 7) > open
+    ? `<div class="rc-warn">${ICONS.lock} За <b>${RU_MONTHS[m - 1]} ${y}</b> по этой ставке
+       <b>не начислится ничего</b> — она начинает действовать позже.</div>`
+    : '';
+}
 function ratePreviewText(d) {
   const [y, m, day] = String(d).split('-').map(Number);
   if (!y || !m || !day) return '';
@@ -2362,9 +2387,33 @@ function ratePreviewText(d) {
     ? `Весь <b>${mn}</b> — по новой ставке.`
     : `<b>${mn}</b> поделится: 1–${day - 1} числа по старой ставке, ${day}-е и дальше — по новой.`;
 }
+/* Новые строки ставки в карточке заводились БЕЗ вопроса о дате: она бралась от
+   сегодняшнего числа. Именно так ставки Хуцишвили и Круглова попали в август,
+   хотя заводили их для июля. Теперь спрашиваем — с подсказкой о последствии. */
+function rateStartDialog(fresh) {
+  return new Promise(resolve => {
+    const def = rateStartDefault();
+    const list = fresh.map(l => `<div><b>${esc(lineLabel(l))}</b></div>`).join('');
+    showModal2(`<h3>С какого месяца действует ставка?</h3>
+      <div class="rc-diff">${list}</div>
+      <label class="flbl">Действует с</label>
+      <input class="input" type="date" id="rsFrom" value="${def}">
+      <div class="msub" id="rsPrev"></div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="rsNo">Отмена</button>
+        <button class="btn btn-primary btn-sm" id="rsYes">${ICONS.check}Сохранить</button></div>`);
+    const inp = $('rsFrom');
+    const draw = () => { $('rsPrev').innerHTML = ratePreviewText(inp.value) + rateStartWarn(inp.value); };
+    draw(); inp.oninput = draw;
+    $('rsNo').onclick = () => { closeModal2(); resolve(null); };
+    $('rsYes').onclick = () => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(inp.value)) { toast('Укажите дату', true); return; }
+      closeModal2(); resolve(inp.value);
+    };
+  });
+}
 function rateChangeDialog(emp, oldLine, newLine) {
   return new Promise(resolve => {
-    const def = monthStartMSK();
+    const def = rateStartDefault();
     // ВИД оплаты меняется — это не «поправить сумму», а замена способа начисления:
     // старая строка перестаёт действовать целиком. Особенно больно с процентом:
     // добавляя врачу-процентнику сменную ставку через этот экран, владелец
@@ -2392,7 +2441,8 @@ function rateChangeDialog(emp, oldLine, newLine) {
         <button class="btn btn-primary btn-sm" id="rcYes">${ICONS.check}Применить</button></div>`);
     $('modalBox').dataset.guard = '1';                       // деньги/ставки — не закрывать случайным кликом
     const inp = $('rcFrom');
-    inp.oninput = () => { $('rcPrev').innerHTML = ratePreviewText(inp.value); };
+    inp.oninput = () => { $('rcPrev').innerHTML = ratePreviewText(inp.value) + rateStartWarn(inp.value); };
+    $('rcPrev').innerHTML = ratePreviewText(def) + rateStartWarn(def);
     $('rcNo').onclick = () => { closeModal(); resolve(null); };
     $('rcYes').onclick = () => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(inp.value)) { toast('Укажите дату', true); return; }
@@ -3565,7 +3615,12 @@ function drawJournal() {
 }
 
 /* ── модалка / тост ── */
-function showModal(html) { $('modalBox').innerHTML = html; $('modalOv').classList.add('show'); applyIcons($('modalBox')); const f = $('modalBox').querySelector('input'); if (f) setTimeout(() => f.focus(), 60); }
+/* Крестик добавляем ВСЕМ окнам разом, а не по одному: пять диалогов (смена,
+   факт, ретро-правка, шаблон месяца, сумма в панели) закрывались только кликом
+   по пустому месту, а это, по словам Дарины, понятно не всем. Так и новые окна
+   получат выход сами собой, без отдельной правки. */
+const MODAL_X = '<div class="modal-xwrap"><button class="modal-x" type="button" aria-label="Закрыть">\u2715</button></div>';
+function showModal(html) { $('modalBox').innerHTML = MODAL_X + html; $('modalOv').classList.add('show'); applyIcons($('modalBox')); const f = $('modalBox').querySelector('input'); if (f) setTimeout(() => f.focus(), 60); }
 // ⚠ Никакого syncHash здесь. Пробовали — closeModal зовётся и из applyHash (закрыть
 // неохраняемую форму и идти дальше), и syncHash успевал вернуть адрес на СТАРЫЙ
 // экран ДО того, как applyHash прочитает новый: переход просто исчезал, а запись
@@ -3583,7 +3638,7 @@ const modalOpen = () => $('modalOv').classList.contains('show') || $('modalOv2')
 const guardedModal = () => ($('modalOv').classList.contains('show') && !!$('modalBox').dataset.guard) || $('modalOv2').classList.contains('show');
 // Второй слой — диалог ПОВЕРХ уже открытой формы. Без него confirmBigAmounts
 // затирал бы карточку (оба писали в общий #modalBox), и «Исправить» терял ввод.
-function showModal2(html) { $('modalBox2').innerHTML = html; $('modalOv2').classList.add('show'); applyIcons($('modalBox2')); }
+function showModal2(html) { $('modalBox2').innerHTML = MODAL_X + html; $('modalOv2').classList.add('show'); applyIcons($('modalBox2')); }
 function closeModal2() { $('modalOv2').classList.remove('show'); }
 /* Ошибки выводим как текст (без innerHTML) — в них попадают сообщения БД/сети;
    успех может содержать доверенную иконку из ICONS. */
@@ -3596,6 +3651,10 @@ function toast(msg, isErr) {
 
 /* ── init ── */
 $('modalOv').onclick = e => { if (e.target.id === 'modalOv' && !$('modalBox').dataset.guard) closeModal(); };
+/* Крестик закрывает и защищённые окна тоже: это осознанное нажатие, а не
+   случайный клик мимо, — ровно как кнопка «Отмена», которая там уже есть. */
+$('modalBox').addEventListener('click', e => { if (e.target.closest('.modal-x')) closeModal(); });
+$('modalBox2').addEventListener('click', e => { if (e.target.closest('.modal-x')) closeModal2(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('modalBox').dataset.guard) closeModal(); });
 $('empSearch').oninput = e => renderEmployees(e.target.value);
 { const rs = $('rateSearch'); if (rs) rs.oninput = e => renderRates(e.target.value); }

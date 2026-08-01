@@ -145,8 +145,8 @@ export class MockStore {
   }
 
   async listEmployees() { return structuredClone(this.db.employees); }
-  async createEmployee({ fio, position, phone, specialty_id, hired_on, left_on, lines }) {
-    const vfrom = rateFrom();
+  async createEmployee({ fio, position, phone, specialty_id, hired_on, left_on, lines, valid_from }) {
+    const vfrom = valid_from || rateFrom();
     const e = {
       id: this.db.nextId.employee++, fio, position: position || '', phone: phone || '',
       specialty_id: specialty_id || null, status: 'active',
@@ -158,7 +158,7 @@ export class MockStore {
     this._log('created', 'employee', e.id, null, null, fio);
     this._save(); return structuredClone(e);
   }
-  async updateEmployee(id, patch, newLines) {
+  async updateEmployee(id, patch, newLines, validFrom) {
     const e = this.db.employees.find(x => x.id === id);
     if (!e) throw new Error('Карточка не найдена');
     for (const f of ['fio', 'position', 'phone', 'specialty_id', 'status', 'hired_on', 'left_on', 'week_hours']) {
@@ -168,7 +168,7 @@ export class MockStore {
       }
     }
     if (newLines) {
-      const vfrom = rateFrom();
+      const vfrom = validFrom || rateFrom();
       const active = e.lines.filter(l => !l.valid_to);
       // закрываем строки, которых больше нет / которые изменились; добавляем новые
       for (const ol of active) {
@@ -734,12 +734,12 @@ export class SupabaseStore {
     if (error) throw error;
     return data.map(e => ({ ...e, lines: e.lines || [] }));
   }
-  async createEmployee({ fio, position, phone, specialty_id, hired_on, left_on, lines }) {
+  async createEmployee({ fio, position, phone, specialty_id, hired_on, left_on, lines, valid_from }) {
     const { data: e, error } = await this.sb.from('employee')
       .insert({ fio, position, phone, specialty_id, hired_on: hired_on || null, left_on: left_on || null, created_by: this.user.id }).select().single();
     if (error) throw new Error(employeeError(error));
     if (lines?.length) {
-      const vfrom = rateFrom();
+      const vfrom = valid_from || rateFrom();
       const rows = lines.map(l => ({ employee_id: e.id, line_type: l.line_type, pay_kind: l.pay_kind,
         amount: l.amount ?? null, amount_night: l.amount_night ?? null, percent: l.percent ?? null,
         valid_from: vfrom, created_by: this.user.id }));
@@ -751,7 +751,7 @@ export class SupabaseStore {
     }
     return e;
   }
-  async updateEmployee(id, patch, newLines) {
+  async updateEmployee(id, patch, newLines, validFrom) {
     // .select() возвращает изменённые ряды: если RLS не пустил — массив пустой,
     // и мы это заметим (иначе PostgREST молча вернёт success на 0 строк).
     const { data: upd, error } = await this.sb.from('employee').update(patch).eq('id', id).select();
@@ -769,7 +769,7 @@ export class SupabaseStore {
         amount: l.amount ?? null, amount_night: l.amount_night ?? null, percent: l.percent ?? null,
       }));
       const { error: eR } = await this.sb.rpc('reconcile_employee_rates',
-        { p_employee_id: id, p_keep_ids, p_new_lines, p_valid_from: null });
+        { p_employee_id: id, p_keep_ids, p_new_lines, p_valid_from: validFrom || null });
       if (eR) throw new Error(rateError(eR));
     }
   }

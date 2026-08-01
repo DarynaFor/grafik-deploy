@@ -1,5 +1,5 @@
 /* Milena · Спринт 1 — стиль из утверждаемого прототипа. Две темы: тёмная (база) и светлая. */
-:root{
+:root{--gr-name-w:190px;
   color-scheme:dark;
   --bg:#0C0D10; --ink:#F3F2EE; --ink-2:#9C9C95; --ink-3:#6A6A62;
   --green:#33C97C; --green-d:#86FFBE; --on-green:#0e1a12;
@@ -265,7 +265,7 @@ body.authed .login-stage{display:none}
 .gridwrap{overflow-y:auto;max-height:max(320px, calc(100vh - 250px))}
 @media (max-width:900px){ .gridwrap{max-height:max(280px, calc(100vh - 210px))} }
 #scheduleGrid{display:grid;min-width:max-content;font-size:12px}
-.gr-corner{position:sticky;left:0;z-index:3;background:var(--surf-1);padding:10px 12px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;font-size:10px;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
+.gr-corner{position:sticky;left:0;z-index:3;min-width:var(--gr-name-w);max-width:var(--gr-name-w);box-sizing:border-box;background:var(--surf-1);padding:10px 12px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;font-size:10px;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
 .gr-day{padding:9px 4px;text-align:center;font-weight:700;color:var(--ink-3);border-bottom:1px solid var(--hair);border-right:1px solid var(--hair);font-variant-numeric:tabular-nums}
 /* выходные и гос.праздники — ТОЛЬКО пометка для понимания, на расчёт не влияет.
    Стоят ДО .today/.dlock ниже, поэтому те перебивают фон (сегодня/закрытый важнее). */
@@ -276,7 +276,7 @@ body.authed .login-stage{display:none}
 /* ФИО показываем ЦЕЛИКОМ, в две строки (решение Дарины 01.08): обрезка
    многоточием прятала отчество, а по одной фамилии однофамильцев не различить —
    в клинике их хватает. Ширину подняли до 190px, перенос по словам. */
-.gr-name{position:sticky;left:0;z-index:2;background:var(--surf-2);padding:8px 12px;font-weight:600;white-space:normal;overflow-wrap:anywhere;line-height:1.25;max-width:190px;min-width:190px;display:flex;align-items:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
+.gr-name{position:sticky;left:0;z-index:2;background:var(--surf-2);padding:8px 12px;font-weight:600;white-space:normal;overflow-wrap:anywhere;line-height:1.25;max-width:var(--gr-name-w);min-width:var(--gr-name-w);display:flex;align-items:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
 .gr-name.tap{cursor:pointer;transition:.12s}
 .gr-name.tap:hover{background:var(--fill-hi);color:var(--green)}
 .gr-cell{padding:7px 3px;text-align:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--hair);cursor:pointer;min-height:38px;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;transition:.1s;font-weight:600;color:var(--ink-3)}
@@ -394,9 +394,11 @@ body.authed .login-stage{display:none}
 /* z-index и СПЛОШНОЙ фон обязательны: --modal-grad полупрозрачный (.95–.97),
    и содержимое просвечивало сквозь прилипшую панель с кнопками. Кладём градиент
    поверх непрозрачного --surface и поднимаем над прокручиваемым содержимым. */
-.modal-foot{display:flex;gap:10px;justify-content:flex-end;position:sticky;bottom:0;z-index:3;
+.modal-foot{display:flex;gap:10px;justify-content:flex-end;position:sticky;bottom:0;z-index:3;box-shadow:0 -10px 14px -10px rgba(0,0,0,.16);
   margin:22px -26px -26px;padding:15px 26px;background:var(--modal-grad),var(--surface);
-  border-top:1px solid var(--glass-bd);border-radius:0 0 24px 24px}
+  border-top:1px solid var(--glass-bd);border-radius:0 0 24px 24px;scroll-margin-bottom:0}
+/* запас, чтобы последний ряд контента можно было выкрутить из-под футера */
+.modal-foot::before{content:'';position:absolute;left:0;right:0;top:-22px;height:22px;pointer-events:none}
 /* кнопки перехода «по одному человеку»: карточка / график без поиска по имени */
 .me-jump{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
 
@@ -418,6 +420,14 @@ body.authed .login-stage{display:none}
   padding:11px 20px;font-size:14px;font-weight:600;box-shadow:var(--sh-pop);
   display:flex;align-items:center;gap:6px;animation:updIn .3s ease}
 .upd-bar b{text-decoration:underline}
+
+/* крестик окна: нулевой высоты sticky-слой в самом верху — не занимает места,
+   не двигает вёрстку и остаётся на виду, когда длинное окно прокручивают */
+.modal-xwrap{position:sticky;top:0;height:0;z-index:4;display:flex;justify-content:flex-end;pointer-events:none}
+.modal-x{pointer-events:auto;width:32px;height:32px;flex:0 0 32px;margin:-4px -4px 0 0;border:0;border-radius:50%;
+  background:var(--fill-1);color:var(--ink-2);font-size:15px;line-height:1;cursor:pointer;
+  display:grid;place-items:center;transition:background .15s,color .15s}
+.modal-x:hover{background:var(--fill-2);color:var(--ink)}
 @keyframes updIn{from{opacity:0;transform:translateX(-50%) translateY(12px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 /* Полоса дней: узкие клетки в ряд, перенос по ширине карточки. Это не табель на
    119 человек, а один месяц одного — сетка с прокруткой была бы тут лишней. */
@@ -549,6 +559,7 @@ body.authed .login-stage{display:none}
 /* Телефон владельца — главный сценарий: две примороженные колонки НЕ должны
    съедать экран. 130+78 = 208 из ~350, середина остаётся достижимой скроллом. */
 @media (max-width:720px){
+  :root{--gr-name-w:165px}
   .me-add{grid-template-columns:1fr}
   .pw{font-size:12.5px}
   .pw td,.pw th{padding:7px 8px}
@@ -557,7 +568,8 @@ body.authed .login-stage{display:none}
   .pw .pw-name{width:158px;max-width:158px}
   /* В «Графике» на телефоне 190px съедали половину экрана и оставляли ~3 дня.
      165 хватает на две строки самого длинного ФИО и возвращает день видимости. */
-  .gr-name{max-width:165px;min-width:165px;padding:8px 9px;font-size:13px}
+  .gr-name{padding:8px 9px;font-size:13px}
+  .gr-corner{padding:10px 9px}
   .pw .pw-pay{max-width:78px}
   .pw-flag{font-size:9px;padding:1px 5px}
 }
