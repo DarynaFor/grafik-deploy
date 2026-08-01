@@ -216,6 +216,10 @@ function renderNav() {
 // назад было нельзя вообще. Клики внутри программы — наоборот, push.
 function go(screen, replace) {
   curScreen = screen;
+  // Месяц переносим ДО перерисовки, чтобы экран сразу нарисовался нужным — иначе
+  // между показом и перерисовкой он моргал бы чужим месяцем, а клик по клетке в
+  // эту щель ушёл бы не туда (тот самый баг, из-за которого месяцы разносили).
+  const movedMonth = adoptPeriod(screen);
   if (screen === 'overview') renderOverview();
   if (screen === 'payroll') renderPayroll($('payrollSearch')?.value || '');
   // Грузим ВСЕГДА, как renderPayroll выше. Условие `patShown !== patPeriod` было
@@ -225,6 +229,10 @@ function go(screen, replace) {
   // не сбрасывается, отменяет сам себя.
   if (screen === 'patients') renderPatients();
   if (screen === 'import') renderImport();
+  // «График» — единственный, кого go() сам не рисует (его рисует refresh при
+  // входе). Значит перенесённый месяц дорисовываем здесь, иначе сетка осталась бы
+  // от прошлого месяца, а cellDate() уже отдавал бы новый.
+  if (screen === 'schedule' && movedMonth) renderSchedule();
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
   $('s-' + screen).classList.add('show');
   renderNav();
@@ -285,11 +293,35 @@ const ROUTES = [
 // ⚠ Список обязан совпадать с теми, у кого в ROUTES стоит arg: 'period'. Забыть
 // здесь — тихо: адрес просто перестанет называть месяц, и никто не заметит.
 const PERIOD_OF = {
-  schedule: { get: () => curPeriod, set: v => { curPeriod = v; } },
-  payroll:  { get: () => payPeriod, set: v => { payPeriod = v; } },
-  patients: { get: () => patPeriod, set: v => { patPeriod = v; } },
-  overview: { get: () => ovPeriod,  set: v => { ovPeriod = v; } },
+  schedule: { get: () => curPeriod, set: v => { curPeriod = v; workPeriod = v; } },
+  payroll:  { get: () => payPeriod, set: v => { payPeriod = v; workPeriod = v; } },
+  patients: { get: () => patPeriod, set: v => { patPeriod = v; workPeriod = v; } },
+  overview: { get: () => ovPeriod,  set: v => { ovPeriod = v; workPeriod = v; } },
 };
+/* ── Выбранный месяц — ОБЩИЙ для экранов ────────────────────────────────
+   Выбрал июль на «Расчёте» — «График», «Оплаты» и «Обзор» тоже показывают июль,
+   пока не сменишь. Раньше у каждого экрана был свой месяц, и человек, разбирая
+   июль в августе, листал назад заново на каждой вкладке (Дарина, 01.08).
+
+   ⚠ Общий месяц однажды УЖЕ ломал программу — см. комментарий у payPeriod:
+   «Расчёт» двигал общий curPeriod, «График» при этом не перерисовывался и
+   показывал июльские клетки, а клик писал факт в август. Именно поэтому месяцы
+   и разнесли. Возвращаем общий выбор ТОЛЬКО потому, что теперь та беда
+   невозможна конструктивно:
+     · перенос месяца и перерисовка экрана идут ОДНИМ шагом, в go();
+     · пока новый месяц грузится, сетка и таблица гаснут, кликать не по чему;
+     · у каждого экрана есть пара «хотели / показано» (schedShown, payrollShown,
+       patShown, ovData.period), и при сбое загрузки месяц откатывается.
+   Если хоть одно из трёх уберут — общий месяц придётся разносить обратно. */
+let workPeriod = null;
+// Переносит общий месяц на экран, куда заходим. true = месяц сменился, экран
+// нужно перерисовать (тот, кого go() не рисует сам, — «График»).
+function adoptPeriod(screen) {
+  const p = PERIOD_OF[screen];
+  if (!p || !workPeriod || p.get() === workPeriod) return false;
+  p.set(workPeriod);
+  return true;
+}
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 let firstNav = true;
 // Вошли по живой сессии (страница перезагрузилась под тем же человеком) или
@@ -1614,8 +1646,8 @@ function dayMark(day) {
    График: тот показывал июль с июльскими клетками, а клик писал в август —
    факты уходили не в тот месяц молча. */
 let payPeriod = null;
-function shiftPayMonth(delta) { let [y, m] = payPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } payPeriod = y + '-' + String(m).padStart(2, '0'); syncHash(false); }
-function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = y + '-' + String(m).padStart(2, '0'); syncHash(false); renderSchedule(); }
+function shiftPayMonth(delta) { let [y, m] = payPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } payPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = payPeriod; syncHash(false); }
+function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = curPeriod; syncHash(false); renderSchedule(); }
 const REST_KINDS = ['off', 'absent', 'отпуск'];   // нерабочие виды: НЕ в норму, НЕ «прогул», без оплаты смены
 const isRest = k => REST_KINDS.includes(k);
 function cellText(c) {
@@ -1715,7 +1747,7 @@ async function renderSchedule() {
     // факт В ДРУГОЙ МЕСЯЦ молча (cellDate() берёт именно curPeriod). Это тот самый
     // случай, ради которого у «Расчёта» когда-то завели отдельный период. Заодно
     // перестаёт врать адрес: он теперь называет месяц вслух и его пересылают.
-    if (schedShown && schedShown !== curPeriod) { curPeriod = schedShown; drawSchedule(); syncHash(false); }
+    if (schedShown && schedShown !== curPeriod) { curPeriod = schedShown; workPeriod = curPeriod; drawSchedule(); syncHash(false); }
   }
 }
 function drawSchedule() {
@@ -2346,7 +2378,7 @@ async function renderPayroll(filter = '') {
   catch (e) {
     if (seq !== payrollSeq) return;
     if (prevShown && prevShown !== payPeriod) {
-      payPeriod = prevShown;
+      payPeriod = prevShown; workPeriod = payPeriod;
       $('pLabel').textContent = periodLabel(payPeriod);
       syncHash(false);
       toast('Не удалось загрузить: ' + (e.message || e), true);
@@ -2733,7 +2765,7 @@ async function payrollDialog(empId) {
    каждый пункт КЛИКАБЕЛЕН на нужный экран. График «Наличка по дням» отложен —
    он пуст до первого дня выдач (3b-6), рисовать диаграмму нулевого ряда рано. */
 let ovPeriod = null, ovData = null, ovSeq = 0;
-function shiftOvMonth(d) { if (!ovPeriod) ovPeriod = nowPeriod(); let [y, m] = ovPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } ovPeriod = y + '-' + String(m).padStart(2, '0'); syncHash(false); renderOverview(); }
+function shiftOvMonth(d) { if (!ovPeriod) ovPeriod = nowPeriod(); let [y, m] = ovPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } ovPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = ovPeriod; syncHash(false); renderOverview(); }
 
 // Флаги v_month_total → человеческие строки «Требует внимания». Красные — сверху.
 // Порядок массива = порядок показа. Клик ведёт на «Расчёт», где это видно построчно.
@@ -2776,7 +2808,7 @@ async function renderOverview(reset = true) {
   // только заголовок. Иначе расходятся три вещи: данные (старый месяц), ‹/› (шагали
   // бы от несостоявшегося) и адрес, который теперь называет месяц вслух и который
   // человек перешлёт — получатель уехал бы в месяц, которого отправитель не видел.
-  } catch (e) { if (seq === ovSeq) { toast(e.message || e, true); ovPeriod = ovData?.period || want; $('oLabel').textContent = periodLabel(ovPeriod); syncHash(false); } return; }
+  } catch (e) { if (seq === ovSeq) { toast(e.message || e, true); ovPeriod = ovData?.period || want; workPeriod = ovPeriod; $('oLabel').textContent = periodLabel(ovPeriod); syncHash(false); } return; }
   if (seq !== ovSeq) return;                       // месяц сменили, пока грузили
   ovData = { rows, remarks, payouts, period: want };
   $('oLabel').textContent = periodLabel(want);
@@ -2853,7 +2885,7 @@ function drawOverview() {
    контроль. Итоги берём ГОТОВЫМИ из v_patient_month: список постраничный, и
    сумма по загруженной странице врала бы. */
 let patPeriod = null, patRows = [], patLastId = null, patHasMore = false, patMonth = [], patShown = null, patSeq = 0;
-function shiftPatMonth(d) { if (!patPeriod) patPeriod = nowPeriod(); let [y, m] = patPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } patPeriod = y + '-' + String(m).padStart(2, '0'); syncHash(false); renderPatients(); }
+function shiftPatMonth(d) { if (!patPeriod) patPeriod = nowPeriod(); let [y, m] = patPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } patPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = patPeriod; syncHash(false); renderPatients(); }
 
 async function renderPatients(reset = true) {
   if (!isStaff()) { $('patList').innerHTML = ''; return; }
@@ -2878,7 +2910,7 @@ async function renderPatients(reset = true) {
     // нового месяца над данными старого. Откатываем и сам patPeriod с адресом:
     // адрес называет месяц вслух, и такую ссылку перешлют — получатель уехал бы в
     // месяц, которого отправитель не видел, на экране, созданном ловить накрутку.
-    patPeriod = patShown || want;
+    patPeriod = patShown || want; workPeriod = patPeriod;
     $('qLabel').textContent = periodLabel(patPeriod);
     syncHash(false);
     return;
