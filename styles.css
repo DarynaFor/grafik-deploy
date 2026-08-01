@@ -403,6 +403,13 @@ body.authed .login-stage{display:none}
 /* ── панель человека: расчёт и график месяца прямо в карточке ────────────── */
 .cp-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}
 .cp-head .month-nav{margin-left:auto}
+/* предупреждения в панели — теми же чипами, что в ведомости: человек привык к
+   их виду, и «нет ставки» здесь значит то же самое, что там */
+#cardPanel .pw-flags{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+/* переплата на главном экране — отдельной строкой под главным числом, приглушённо:
+   это не деньги к выдаче, их нельзя ставить в один ряд с «осталось выдать» */
+.ov-over{margin-top:6px;font-size:13.5px;color:var(--red-d)}
+.ov-over b{font-weight:700}
 /* Полоса дней: узкие клетки в ряд, перенос по ширине карточки. Это не табель на
    119 человек, а один месяц одного — сетка с прокруткой была бы тут лишней. */
 .cp-strip{display:flex;flex-wrap:wrap;gap:4px}

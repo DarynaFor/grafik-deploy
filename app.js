@@ -724,6 +724,15 @@ async function loadCardPanel(id) {
   if (!r) { box.innerHTML = ''; return; }
 
   const my = linesForRow(r, (lines || []).filter(l => l.employee_id === id));
+  // процентник: ЗП = % × выручка. Выручку вводят руками, и именно её Дарина
+  // заполняет по вечерам — поле должно быть здесь, а не только в окне «Расчёта».
+  const emp0 = employees.find(x => x.id === id);
+  const p1 = per + '-01', pNext = nextPeriodStart(per);
+  const pctLine = ((emp0 && emp0.lines) || []).find(l => l.pay_kind === 'процент'
+    && l.valid_from < pNext && (!l.valid_to || l.valid_to > p1));
+  let curRev = 0;
+  if (pctLine) { try { curRev = await store.getDoctorRevenue(id, per); } catch (e) {} }
+  if (+$('cardBody').dataset.emp !== id) return;
   const nrm = (norms || []).find(n => n.employee_id === id);
   const nh = nrm && nrm.hours != null ? parseFloat(nrm.hours) : null;
   const canEdit = isStaff();
@@ -753,7 +762,14 @@ async function loadCardPanel(id) {
         <button class="mn-btn" id="cpNext" aria-label="След. месяц">›</button></div>
     </div>
     <div class="msub" style="margin:-4px 0 10px">${nh != null ? `норма ${fmtH(nh)} · факт ${fmtH(Number(r.fact_hours) || 0)}` : `норма ${r.norm_days} дн · факт ${r.fact_days} дн`}</div>
+    ${payrollFlags(r) || ''}
     <div class="cp-strip">${strip}</div>
+    ${pctLine && canEdit ? `<div class="cp-rev">
+      <label class="flbl" style="margin-top:12px">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё</label>
+      <div class="me-add">
+        <input class="input" id="cpRev" placeholder="выручка ₽" autocomplete="off" inputmode="numeric" value="${curRev ? fmt(Math.round(curRev / 100)) : ''}">
+        <button class="btn btn-primary btn-sm" id="cpRevSave">${ICONS.check}Сохранить</button>
+      </div></div>` : ''}
     <div class="rc-diff" style="margin-top:14px">${breakdown}
       <div class="me-row me-sum${canEdit ? ' me-tap' : ''}"${canEdit ? ' id="cpSalary" title="Задать итоговую зарплату вручную"' : ''}><span>Зарплата${r.flag_manual_salary ? ' · <b class="jact">вручную</b>' : ''}</span><b>${rub(r.salary_kop)} ₽</b>${canEdit ? `<span class="me-pen">✎</span>` : ''}</div>
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
@@ -775,6 +791,20 @@ async function loadCardPanel(id) {
   box.querySelectorAll('.me-row.me-tap[data-kind]').forEach(el => el.onclick = () => editPayout(id, per, el.dataset.kind, redraw));
   if ($('cpSalary')) $('cpSalary').onclick = () => editSalary(id, per, r, redraw);
   if ($('cpAdd')) $('cpAdd').onclick = () => { payrollDialog(id); };
+  if ($('cpRevSave')) $('cpRevSave').onclick = async () => {
+    const btn = $('cpRevSave'); if (btn.disabled) return;
+    let rev;
+    try { rev = parseNum($('cpRev').value, { thousands: true, field: 'выручку', max: RATE_ABSURD }); }
+    catch (err) { toast(err.message, true); return; }
+    if (rev == null || rev < 0) { toast('Укажите выручку (0 — убрать)', true); return; }
+    btn.disabled = true;
+    try {
+      const res = await store.setDoctorRevenue(id, per, Math.round(rev * 100));
+      toast(ICONS.check + (res ? 'Выручка внесена — зарплата пересчитана' : 'Без изменений'));
+      redraw();
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
+  if ($('cpRev')) $('cpRev').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('cpRevSave').click(); } };
   $('cpPrev').onclick = () => { shiftCardMonth(-1, id); };
   $('cpNext').onclick = () => { shiftCardMonth(1, id); };
   // клетка графика: прошлое — факт, будущее — план, ровно как на экране «График».
@@ -2550,13 +2580,13 @@ async function renderPayroll(filter = '') {
 function linesFor(r) { return linesForRow(r, payrollLines.filter(l => l.employee_id === r.employee_id)); }
 function linesForRow(r, raw) {
   const out = raw.map(l => l.kind === 'оклад' ? { ...l, money_kop: r.oklad_kop } : l);   // оклад — помесячно
-  if (r.percent_kop || r.pct_rate != null)
+  const has = k => raw.some(l => l.kind === k);
+  if ((r.percent_kop || r.pct_rate != null) && !has('процент'))
     out.push({ kind: 'процент', planned: null, worked: null, money_kop: r.percent_kop, isPct: true });
   // «Фикс/мес» к графику не привязан, дневных строк у него нет вовсе — без этой
   // строки человек с надбавкой видел только оклад, а сумма в итоге была больше:
   // ровно то, из-за чего у Бардаковой не было разбивки «оклад + надбавка».
-  // has() — страховка от дубля, если v_payroll_lines когда-нибудь начнёт отдавать этот вид.
-  const has = k => raw.some(l => l.kind === k);
+  // has() — страховка от дубля, если v_payroll_lines начнёт отдавать этот вид.
   if (r.fix_kop && !has('фикс'))
     out.push({ kind: 'фикс', planned: null, worked: null, money_kop: r.fix_kop, isPct: true });
   return out;
@@ -3150,7 +3180,15 @@ function drawOverview() {
   if (!ovData) return;
   const { rows, remarks, payouts } = ovData;
   const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
-  const delta = sum('delta_kop'), salary = sum('salary_kop');
+  const salary = sum('salary_kop');
+  // Плюсы и минусы НЕ складываем (решение Дарины 01.08). Раньше главное число
+  // было суммой всех разниц: переплата одному тихо гасила недоплату другому, и
+  // владелец видел меньше, чем предстоит раздать на руки. Теперь «Осталось
+  // выдать» — только положительные, а переплата вперёд — своей строкой: это не
+  // деньги к выдаче, а остаток, уезжающий в следующий месяц.
+  const toGive = rows.reduce((a, r) => a + Math.max(0, r.delta_kop || 0), 0);
+  const overpaid = rows.reduce((a, r) => a + Math.min(0, r.delta_kop || 0), 0);
+  const overCnt = rows.filter(r => (r.delta_kop || 0) < 0).length;
   // Всё официальное, что ушло на карту: аванс + ЗП + расчёт при увольнении + ОТПУСКНЫЕ
   // НА КАРТУ. Последние сюда не входили, и плитка «Официально на карту» занижала
   // сумму ровно на реестр ТКБ (в июле — 635 000 ₽), хотя в «Расчёте» рядом стоит
@@ -3165,7 +3203,9 @@ function drawOverview() {
   // т.е. сколько ещё раздать людям (в осн. наличными), если все вышли по графику.
   const metric = (l, v, cls, gc) => `<div class="ov-metric${cls ? ' ' + cls : ''}"${gc ? ` style="--gc:${gc}"` : ''}><div class="l">${l}</div><div class="v">${v}</div></div>`;
   const hero = `<div class="ov-hero"><div class="l">Осталось выдать · ${esc(periodLabel(ovData.period))}</div>`
-    + `<div class="v">${rub(delta)} <small>₽</small></div>`
+    + `<div class="v">${rub(toGive)} <small>₽</small></div>`
+    + (overpaid ? `<div class="ov-over">Переплата вперёд: <b>−${rub(Math.abs(overpaid))} ₽</b>`
+        + `<span class="muted small"> · ${overCnt} чел · выдано больше начисленного, перейдёт на следующий месяц</span></div>` : '')
     + `<div class="ov-sub">начислено <b>${rub(salary)} ₽</b> · уже на карту <b>${rub(card)} ₽</b></div></div>`;
   const bento = `<div class="ov-bento">`
     + metric('Начислено всего', rub(salary) + ' ₽', '', 'rgba(139,123,232,.34)')
