@@ -202,6 +202,9 @@ body.authed .login-stage{display:none}
 .ov-alert .oa-t{font-size:13.5px;font-weight:700}
 .ov-alert .oa-d{font-size:12px;color:var(--ink-2);margin-top:2px}
 .ov-note{justify-content:center;margin-top:18px}
+/* Пробелы: список фамилий под строкой проблемы. Приглушён и мельче текста
+   самой проблемы — сначала читаешь ЧТО не заполнено, потом У КОГО. */
+.ov-alert .gap-who{margin-top:5px;color:var(--ink-3);font-size:11.5px;line-height:1.55}
 @media(max-width:560px){ .ov-bento{grid-template-columns:1fr 1fr} .ov-hero .v{font-size:28px} }
 .empty{text-align:center;padding:46px 20px;color:var(--ink-2)}
 .readonly-note{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-3);background:var(--fill-1);border:1px dashed var(--glass-bd);border-radius:12px;padding:9px 13px;margin-bottom:16px}
@@ -270,7 +273,10 @@ body.authed .login-stage{display:none}
 .gr-day.gr-hol{color:var(--red-d);background:rgba(255,107,107,.10)}   /* гос.праздник — тёплая метка + точка + подсказка */
 .holdot{display:block;width:4px;height:4px;border-radius:50%;background:var(--red);margin:2px auto 0}
 .gr-day.today{color:var(--on-green);background:var(--green);border-radius:8px 8px 0 0}
-.gr-name{position:sticky;left:0;z-index:2;background:var(--surf-2);padding:9px 12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
+/* ФИО показываем ЦЕЛИКОМ, в две строки (решение Дарины 01.08): обрезка
+   многоточием прятала отчество, а по одной фамилии однофамильцев не различить —
+   в клинике их хватает. Ширину подняли до 190px, перенос по словам. */
+.gr-name{position:sticky;left:0;z-index:2;background:var(--surf-2);padding:8px 12px;font-weight:600;white-space:normal;overflow-wrap:anywhere;line-height:1.25;max-width:190px;min-width:190px;display:flex;align-items:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
 .gr-name.tap{cursor:pointer;transition:.12s}
 .gr-name.tap:hover{background:var(--fill-hi);color:var(--green)}
 .gr-cell{padding:7px 3px;text-align:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--hair);cursor:pointer;min-height:38px;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;transition:.1s;font-weight:600;color:var(--ink-3)}
@@ -486,7 +492,9 @@ body.authed .login-stage{display:none}
 /* Имя не должно распирать колонку: длинное ФИО обрезаем, чипы уходят на 2-ю
    строку. Иначе у человека с 3–4 флагами имя занимало почти весь экран — чем
    больше проблем, тем меньше видно его денег. */
-.pw-fio{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Целиком, в две строки — как в «Графике» (решение Дарины 01.08). Раньше тут
+   было nowrap+ellipsis, и отчество не читалось. */
+.pw-fio{display:block;white-space:normal;overflow-wrap:anywhere;line-height:1.25}
 .pw-flags{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
 .pw-row{cursor:pointer;transition:.1s}
 /* Подсветку строки кладём ДВУМЯ слоями: полупрозрачный поверх сплошного. Иначе
@@ -528,7 +536,12 @@ body.authed .login-stage{display:none}
   .me-add{grid-template-columns:1fr}
   .pw{font-size:12.5px}
   .pw td,.pw th{padding:7px 8px}
-  .pw .pw-name{width:130px;max-width:130px}
+  /* 130px хватало обрезанному имени; целому нужно шире, иначе ФИО встанет
+     в 4 строки и таблица растянется по высоте. */
+  .pw .pw-name{width:158px;max-width:158px}
+  /* В «Графике» на телефоне 190px съедали половину экрана и оставляли ~3 дня.
+     165 хватает на две строки самого длинного ФИО и возвращает день видимости. */
+  .gr-name{max-width:165px;min-width:165px;padding:8px 9px;font-size:13px}
   .pw .pw-pay{max-width:78px}
   .pw-flag{font-size:9px;padding:1px 5px}
 }

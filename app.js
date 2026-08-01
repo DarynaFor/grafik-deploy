@@ -150,6 +150,15 @@ const NAV = [
   // Обзор — только владельцу и первым: с него Милена начинает, оттуда видит,
   // не залезая в экраны, всё ли в порядке. Остальные роли работают, а не смотрят.
   { s: 'overview', i: 'chart', l: 'Обзор', ownerOnly: true },
+  // Пробелы — рабочий список «что дозаполнить». Обзор показывает флаги счётчиками
+  // и уводит на Расчёт; здесь те же флаги развёрнуты пофамильно, плюс то, чего в
+  // v_month_total нет вовсе (нет графика за месяц, дыры в карточке).
+  // staffOnly, а не ownerOnly: заполняет пробелы Алёна, ей и нужен список
+  // (решение 30.07). Утечки скрытой зарплаты это не даёт — v_month_total
+  // ВЫБРАСЫВАЕТ строку целиком: `NOT (hidden_salary AND current_app_role() IN
+  // ('operator','cashier1','cashier2'))`, миграции 040/041. То есть у Алёны
+  // спрятанный человек просто не появится ни в одной денежной группе.
+  { s: 'gaps', i: 'alert', l: 'Пробелы', staffOnly: true },
   { s: 'employees', i: 'users', l: 'Сотрудники', staffOnly: true },
   { s: 'schedule', i: 'cal', l: 'График', staffOnly: true },
   { s: 'payroll', i: 'coin', l: 'Расчёт', staffOnly: true },
@@ -222,6 +231,7 @@ function go(screen, replace) {
   // эту щель ушёл бы не туда (тот самый баг, из-за которого месяцы разносили).
   const movedMonth = adoptPeriod(screen);
   if (screen === 'overview') renderOverview();
+  if (screen === 'gaps') renderGaps();
   if (screen === 'payroll') renderPayroll($('payrollSearch')?.value || '');
   // Грузим ВСЕГДА, как renderPayroll выше. Условие `patShown !== patPeriod` было
   // сломано дважды: при обоих null оно давало false и экран не открывался НИКОГДА;
@@ -3198,6 +3208,170 @@ function drawOverview() {
   });
 }
 
+/* ── Пробелы ────────────────────────────────────────────────────────────
+   Рабочий список «что дозаполнить». Обзор даёт те же флаги счётчиками и уводит
+   на Расчёт — там их надо ещё найти глазами среди сотни строк. Здесь каждый
+   флаг развёрнут пофамильно и ведёт на экран, где это чинится.
+
+   Две проверки живут только тут, в v_month_total их нет:
+   · «нет графика за месяц» — norm_days и fact_days оба пустые. На июль это
+     30 человек из 102, то есть самая большая дыра, а на Обзоре её не видно;
+   · дыры в карточке (фамилия-заглушка, телефон, специальность) — они не
+     денежные, но без телефона не отправить код подтверждения выдачи.
+
+   Считает по-прежнему база: берём готовый v_month_total, здесь только
+   раскладка. Фильтр скрытой зарплаты (миграции 040/041) сидит внутри вьюхи,
+   поэтому этот экран его не обходит. */
+let gapsPeriod = null, gapsData = null, gapsSeq = 0;
+// «Богданова Лариса Викторовна» → «Богданова Л.В.»: в строке пробела фамилий
+// бывает три десятка, полными они не помещаются.
+const shortFio = f => {
+  const p = String(f || '').trim().split(/\s+/).filter(Boolean);
+  if (!p.length) return '—';                      // пустое ФИО — иначе в списке остаётся « · · »
+  return p.length < 2 ? p[0] : p[0] + ' ' + p.slice(1).map(w => w[0].toUpperCase() + '.').join('');
+};
+function shiftGapsMonth(d) {
+  if (!gapsPeriod) gapsPeriod = nowPeriod();
+  let [y, m] = gapsPeriod.split('-').map(Number); m += d;
+  if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
+  gapsPeriod = y + '-' + String(m).padStart(2, '0'); renderGaps();
+}
+
+// Проверки идут ПО РОСТЕРУ (активные сотрудники), а расчётная строка из
+// v_month_total подтягивается к человеку. Наоборот — фильтровать сам
+// v_month_total — нельзя: его CTE periods содержит только месяцы, где уже
+// есть клетки или деньги. На пустом месяце вьюха вернула бы НОЛЬ строк, и
+// экран бодро сказал бы «всё заполнено» там, где не заведено вообще ничего.
+//
+// go — куда ведёт клик. Функцией там, где экран владельческий: «Ставки»
+// renderRates гасит для не-owner, и Алёна уехала бы на пустую страницу.
+//
+// Группы: 0 — мешает расчёту (красное), 1 — не хватает данных (жёлтое).
+const RATES_GO = () => (isOwner() ? 'rates' : 'employees');
+const GAP_CHECKS = [
+  // Ростерная, а не flag_no_rate: тот считается по дням графика (миграция 044),
+  // и у человека БЕЗ единой клетки строки в v_month_salary нет вовсе — флаг
+  // молча false. То есть ровно те, кого экран и должен ловить, выпадали бы.
+  { g: 0, t: 'Не заведена ставка', d: 'без ставки зарплата не считается вовсе', go: RATES_GO, test: e => cardGaps(e).rate },
+  { g: 0, t: 'Ставка обрывается посреди месяца', d: 'часть дней не по чему считать', go: RATES_GO, test: (e, r) => !!r?.flag_rate_gap },
+  { g: 0, t: 'Отрицательная зарплата', d: 'начислено меньше нуля — так быть не должно', go: 'payroll', test: (e, r) => (r?.salary_kop || 0) < 0 },
+  { g: 0, t: 'Переплата: выдано больше начисленного', d: 'проверьте кассу', go: 'payroll', test: (e, r) => !!r?.flag_overpaid },
+  { g: 0, t: 'Деньги есть, а расчёта нет', d: 'выплата без начисления под ней', go: 'payroll', test: (e, r) => !!r?.flag_money_without_calc },
+  // Порог тот же, что на Обзоре и в payrollDialog: сигналим, только когда
+  // запись уже началась, иначе Δ ненулевая весь месяц по построению.
+  // TODO(MED, не мой коммит): recorded() складывает r.card_uvol_kop, которого в
+  // РАЗВЁРНУТОЙ v_month_total нет (проверено на живой базе) — undefined → 0. То
+  // есть у уволенных с расчётом на карту порог этой проверки считается не от той
+  // суммы. Чинится вьюхой параллельной сессии, которая ещё не на проде; трогать
+  // её здесь нельзя, иначе разъедемся с ними ещё сильнее.
+  { g: 0, t: 'Начислено ≠ записано', d: 'записанные деньги не сходятся с расчётом', go: 'payroll', test: (e, r) => !!r && recorded(r) > 0 && Math.abs(r.delta_kop || 0) > 10000 },
+  // По РЕАЛЬНЫМ клеткам, а не по norm_days: с миграции 043 отпуск в норму не
+  // входит, поэтому у отпускника norm_days и fact_days нулевые — по ним он
+  // неотличим от того, кому график не заводили. Случаи противоположные.
+  { g: 1, t: 'Нет графика за месяц', d: 'ни одной клетки, график не заводили', go: 'schedule', test: (e, r, x) => !x.hasCell.has(e.id) },
+  // Без клеток про это уже сказано строкой выше — не дублируем человека.
+  { g: 1, t: 'Оклад есть, отработанных дней ноль', d: 'оклад не на что начислить', go: 'schedule', test: (e, r, x) => !!r?.flag_oklad_no_days && x.hasCell.has(e.id) },
+  // Именно flag_no_data, а не своя формула: у вьюхи пять условий (в т.ч. «месяц
+  // не будущий» и «денег тоже нет»). Своя проверка на живом июле давала 11
+  // человек против 1 у флага — то есть 10 ложных, и Обзор с Пробелами
+  // показывали бы разное про одно и то же.
+  { g: 1, t: 'Начислено ноль', d: 'рабочие дни в графике есть, а зарплаты нет', go: 'payroll', test: (e, r) => !!r?.flag_no_data },
+  { g: 1, t: 'Процент без ставки', d: 'оплаты пациентов есть, а процента нет', go: RATES_GO, test: (e, r) => !!r?.flag_pct_no_rate },
+  { g: 1, t: 'Нет оплат пациентов', d: 'процент считать не от чего', go: 'patients', test: (e, r) => !!r?.flag_no_patient_data },
+];
+// Дыры в карточке — не про деньги за месяц, месяц на них не влияет.
+// Предикаты берём из cardGaps(), общего с экраном «Сотрудники»: там телефон
+// проверяется тем же инвариантом, что CHECK в базе (миграция 023), а фамилия —
+// по содержимому, а не только по импортной заглушке. Свои формулы разъезжались
+// с чипами на «Сотрудниках»: два экрана показывали бы разные числа.
+const CARD_CHECKS = [
+  { t: 'Фамилия не уточнена', d: 'в карточке нет фамилии или стоит заглушка', test: e => cardGaps(e).fio },
+  { t: 'Нет телефона', d: 'некуда отправить код подтверждения выдачи', test: e => cardGaps(e).phone },
+  { t: 'Не указана специальность', d: 'человек выпадет из разрезов по специальностям', test: e => cardGaps(e).spec },
+];
+
+async function renderGaps() {
+  if (!isStaff()) { $('gapsBody').innerHTML = ''; return; }
+  if (!gapsPeriod) gapsPeriod = nowPeriod();
+  const want = gapsPeriod, seq = ++gapsSeq;
+  $('gLabel').textContent = periodLabel(want);
+  let rows, emps, cells;
+  try {
+    [rows, emps, cells] = await Promise.all([
+      store.listPayroll(want), store.listEmployees(), store.listSchedule(want),
+    ]);
+  } catch (e) {
+    // Гасим тело, а не только тостим: выход из программы не перезагружает
+    // страницу, поэтому иначе на общем компьютере разбор ПРЕДЫДУЩЕГО
+    // пользователя остался бы висеть у следующего до конца сессии.
+    if (seq === gapsSeq) { gapsData = null; $('gapsBody').innerHTML = ''; toast(e.message || e, true); }
+    return;
+  }
+  if (seq !== gapsSeq) return;                     // месяц сменили, пока грузили
+  // Клетка считается заведённой, если в ней есть план ИЛИ факт. Пустые строки
+  // (обе колонки null) оба стора умеют создавать — «вышел без плана» и остатки
+  // импорта; без этой проверки один такой артефакт прятал бы человека из
+  // «нет графика», и он исчезал бы с экрана совсем.
+  const hasCell = new Set();
+  for (const c of (cells || [])) if (c.plan_kind || c.fact) hasCell.add(c.employee_id);
+  gapsData = { rows, emps, period: want, hasCell };
+  $('gLabel').textContent = periodLabel(want);
+  drawGaps();
+}
+
+function drawGaps() {
+  if (!gapsData) return;
+  const { rows, emps, hasCell } = gapsData;
+  const active = (emps || []).filter(e => e.status === 'active');
+  const ctx = { hasCell };
+  // Расчётную строку подтягиваем К человеку. Её может не быть вовсе (пустой
+  // месяц), поэтому все денежные проверки написаны через r?. — без строки они
+  // просто молчат, а ростерные (график, ставка, карточка) работают всегда.
+  const byId = new Map(rows.map(r => [r.employee_id, r]));
+
+  const found = GAP_CHECKS.map(c => ({ ...c, who: active.filter(e => c.test(e, byId.get(e.id), ctx)) })).filter(c => c.who.length);
+  const cards = CARD_CHECKS.map(c => ({ ...c, who: active.filter(c.test) })).filter(c => c.who.length);
+  // Считаем ЛЮДЕЙ, а не строк: один человек может попасть в несколько проверок
+  // (нет ставки → и зарплата ноль), и сумма строк завышала бы масштаб.
+  const people = new Set();
+  for (const c of [...found, ...cards]) for (const e of c.who) people.add(e.id);
+  const total = people.size;
+
+  if (!total) {
+    $('gapsBody').innerHTML = `<div class="ov-alerts"><div class="ov-alert ok"><span class="oa-ic">${ICONS.check}</span>`
+      + `<div><div class="oa-t">Пробелов нет</div><div class="oa-d">за ${esc(periodLabel(gapsData.period))} всё заполнено</div></div></div></div>`;
+    return;
+  }
+
+  // Одна строка = одна проблема. Фамилии сразу под ней, чтобы не пришлось
+  // открывать: смысл экрана — увидеть, кого именно дозаполнить.
+  const block = (c, red) => {
+    const names = c.who.map(x => esc(shortFio(x.fio))).join(' · ');
+    return `<button class="ov-alert${red ? ' red' : ''}" data-go="${esc(typeof c.go === 'function' ? c.go() : (c.go || ''))}">`
+      + `<span class="oa-ic">${red ? ICONS.alert : ICONS.info}</span>`
+      + `<div><div class="oa-t">${esc(c.t)} · ${c.who.length}</div>`
+      + `<div class="oa-d">${esc(c.d)}</div>`
+      + `<div class="oa-d gap-who">${names}</div></div></button>`;
+  };
+
+  const sec = (title, list, red) => list.length
+    ? `<div class="ov-sec">${esc(title)}</div><div class="ov-alerts">${list.map(c => block(c, red)).join('')}</div>` : '';
+
+  $('gapsBody').innerHTML =
+    `<div class="ov-hero"><div class="l">Людей с пробелами · ${esc(periodLabel(gapsData.period))}</div>`
+    + `<div class="v">${fmt(total)}</div>`
+    + `<div class="ov-sub">из <b>${fmt(active.length)}</b> активных в штате</div></div>`
+    + sec('Мешает расчёту', found.filter(c => c.g === 0), true)
+    + sec('Не хватает данных', found.filter(c => c.g === 1), false)
+    + sec('Неполные карточки', cards, false)
+    + `<div class="note ov-note">${ICONS.info}Нажмите на строку — откроется экран, где это заполняется</div>`;
+
+  $('gapsBody').querySelectorAll('[data-go]').forEach(b => {
+    if (b.dataset.go) b.onclick = () => go(b.dataset.go);
+    else b.onclick = () => go('employees');
+  });
+}
+
 /* ── Оплаты пациентов ───────────────────────────────────────────────────
    ТОЛЬКО ЧТЕНИЕ. Оплаты приходят импортом (задача #44), руками их не вводят —
    экран нужен, чтобы зайти и СВЕРИТЬ, что импорт лёг верно. Это единственный
@@ -3384,6 +3558,9 @@ $('empSearch').oninput = e => renderEmployees(e.target.value);
 { const op = $('oPrev'), on = $('oNext');
   if (op) op.onclick = () => shiftOvMonth(-1);
   if (on) on.onclick = () => shiftOvMonth(1); }
+{ const gp = $('gPrev'), gn = $('gNext');
+  if (gp) gp.onclick = () => shiftGapsMonth(-1);
+  if (gn) gn.onclick = () => shiftGapsMonth(1); }
 // Оплаты пациентов: поиск фильтрует УЖЕ загруженное (drawPatients), месяц — перезагружает
 { const qs = $('patSearch'); if (qs) qs.oninput = () => drawPatients(); }
 { const qp = $('qPrev'), qn = $('qNext');
@@ -3422,6 +3599,21 @@ $('topBack').innerHTML = ICONS.chevL || '‹';
 $('logoutBtn').innerHTML = ICONS.out;
 // finally: выход должен ВЫГЛЯДЕТЬ выходом даже если signOut упал по сети. Иначе экран
 // остаётся «внутри программы», хотя store.logout() уже снял пользователя и ключ дня.
+// Выход НЕ перезагружает страницу (и не должен: если signOut упал по сети,
+// перезагрузка подняла бы сессию обратно из localStorage, а форма входа при
+// этом уже нарисована). Значит разобранные экраны остаются в DOM как есть.
+// На общем компьютере это видно следующему вошедшему: он жмёт вкладку, экран
+// показан синхронно, а перерисовка асинхронная — до ответа сервера висит
+// разбор предыдущего пользователя, а при ошибке запроса и вовсе бессрочно.
+// Больнее всего «Расчёт» (там суммы) и «Пробелы» (там пофамильно видно тех,
+// кого от оператора прячет вьюха). Поэтому гасим руками.
+const DATA_PANES = ['overviewBody', 'gapsBody', 'payrollTable', 'payrollNote', 'scheduleGrid',
+  'schedNote', 'empList', 'roNote', 'cardBody', 'ratesList', 'ratesTools', 'importBody',
+  'patByDoc', 'journalTools'];
+function clearDataPanes() {
+  for (const id of DATA_PANES) { const el = $(id); if (el) el.innerHTML = ''; }
+  ovData = null; gapsData = null;          // чтобы отложенная перерисовка не вернула чужое
+}
 $('logoutBtn').onclick = async () => {
   try { await store.logout(); }
   finally {
@@ -3439,6 +3631,10 @@ $('logoutBtn').onclick = async () => {
     // всё равно опознаются как чужие. restoredSession — по той же причине.
     try { sessionStorage.removeItem(SID_KEY); } catch (e) {}
     restoredSession = false;
+    // Ровно для случая «reload не случится», который оговорён строкой ниже:
+    // тогда разметка предыдущего человека осталась бы в DOM, а её как раз и
+    // прячет перезагрузка. Гасим панели явно — это дёшево и не мешает reload.
+    clearDataPanes();
     renderLogin();          // если reload не случится (бросок/офлайн) — форма входа всё равно на месте
     location.reload();
   }
