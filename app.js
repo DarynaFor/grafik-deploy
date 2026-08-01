@@ -2450,6 +2450,26 @@ const monthStartMSK = () => new Date(Date.now() + 3 * 3600e3).toISOString().slic
 const openPeriod = () => [workPeriod, payPeriod, curPeriod, ovPeriod]
   .find(p => /^\d{4}-\d{2}$/.test(p || '')) || null;
 const rateStartDefault = () => { const p = openPeriod(); return p ? p + '-01' : monthStartMSK(); };
+/* Границы даты «действует с» — те же, что проверяет база в reconcile_employee_rates:
+   не раньше начала прошлого месяца (иначе переписываются уже отработанные месяцы)
+   и не дальше трёх месяцев вперёд (там это почти всегда опечатка в годе).
+   На СОЗДАНИИ карточки ставки вставляются прямым INSERT, мимо RPC, — там эта
+   проверка вообще единственная. */
+function rateBounds() {
+  const t = new Date(Date.now() + 3 * 3600e3);                       // МСК
+  const y = t.getUTCFullYear(), m = t.getUTCMonth(), d = t.getUTCDate();
+  const iso = dt => dt.toISOString().slice(0, 10);
+  return { min: iso(new Date(Date.UTC(y, m - 1, 1))), max: iso(new Date(Date.UTC(y, m + 3, d))) };
+}
+/* Дата раньше текущего месяца — это правка уже посчитанного и, возможно,
+   выплаченного. Молча так делать нельзя: предупреждаем словами. */
+function rateBackWarn(d) {
+  const cur = monthStartMSK();
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(d)) && d < cur
+    ? `<div class="rc-warn">${ICONS.lock} Это <b>задним числом</b>: месяц уже посчитан,
+       по нему могли быть выплаты. Суммы пересчитаются.</div>`
+    : '';
+}
 /* Предупреждение под полем даты: если ставка стартует ПОЗЖЕ открытого месяца,
    за этот месяц не начислится ничего — ровно тот случай, что мы разбирали. */
 function rateStartWarn(d) {
@@ -2481,17 +2501,20 @@ function rateStartDialog(fresh, removed = 0) {
     showModal2(`<h3>${fresh.length ? 'С какого месяца действует ставка?' : 'С какого месяца ставка не действует?'}</h3>
       <div class="rc-diff">${list}</div>
       <label class="flbl">Действует с</label>
-      <input class="input" type="date" id="rsFrom" value="${def}">
+      <input class="input" type="date" id="rsFrom" value="${def}" min="${rateBounds().min}" max="${rateBounds().max}">
       <div class="msub" id="rsPrev"></div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="rsNo">Отмена</button>
         <button class="btn btn-primary btn-sm" id="rsYes">${ICONS.check}Сохранить</button></div>`);
     const inp = $('rsFrom');
-    const draw = () => { $('rsPrev').innerHTML = ratePreviewText(inp.value) + rateStartWarn(inp.value); };
+    const draw = () => { $('rsPrev').innerHTML = ratePreviewText(inp.value) + rateStartWarn(inp.value) + rateBackWarn(inp.value); };
     draw(); inp.oninput = draw;
     modalOnClose2 = () => resolve(null);           // крестик/Escape = «Отмена»
     $('rsNo').onclick = () => { resolve(null); closeModal2(); };
     $('rsYes').onclick = () => {
+      const b = rateBounds();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(inp.value)) { toast('Укажите дату', true); return; }
+      if (inp.value < b.min) { toast('Слишком далеко в прошлом: те месяцы уже посчитаны и выплачены', true); return; }
+      if (inp.value > b.max) { toast('Слишком далеко в будущем — проверьте год', true); return; }
       resolve(inp.value); closeModal2();
     };
   });
@@ -2520,18 +2543,21 @@ function rateChangeDialog(emp, oldLine, newLine) {
       </div>
       ${warn}
       <label class="flbl">Действует с</label>
-      <input class="input" type="date" id="rcFrom" value="${def}">
+      <input class="input" type="date" id="rcFrom" value="${def}" min="${rateBounds().min}" max="${rateBounds().max}">
       <div class="msub" id="rcPrev" style="margin-top:8px">${ratePreviewText(def)}</div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="rcNo">Отмена</button>
         <button class="btn btn-primary btn-sm" id="rcYes">${ICONS.check}Применить</button></div>`);
     $('modalBox').dataset.guard = '1';                       // деньги/ставки — не закрывать случайным кликом
     const inp = $('rcFrom');
-    inp.oninput = () => { $('rcPrev').innerHTML = ratePreviewText(inp.value) + rateStartWarn(inp.value); };
-    $('rcPrev').innerHTML = ratePreviewText(def) + rateStartWarn(def);
+    const drawRc = () => { $('rcPrev').innerHTML = ratePreviewText(inp.value) + rateStartWarn(inp.value) + rateBackWarn(inp.value); };
+    inp.oninput = drawRc; drawRc();
     modalOnClose = () => resolve(null);            // крестик/Escape = «Отмена»
     $('rcNo').onclick = () => { resolve(null); closeModal(); };
     $('rcYes').onclick = () => {
+      const b = rateBounds();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(inp.value)) { toast('Укажите дату', true); return; }
+      if (inp.value < b.min) { toast('Слишком далеко в прошлом: те месяцы уже посчитаны и выплачены', true); return; }
+      if (inp.value > b.max) { toast('Слишком далеко в будущем — проверьте год', true); return; }
       resolve(inp.value); closeModal();
     };
   });
