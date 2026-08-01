@@ -569,6 +569,8 @@ function fillCatSelects() {
   wire('empCat', () => renderEmployees($('empSearch').value || ''));
   wire('schedCat', () => drawSchedule());
   wire('payrollCat', () => drawPayroll($('payrollSearch')?.value || ''));
+  // «без начисления» — только перерисовка, данные уже загружены
+  if ($('payOnlyZero')) $('payOnlyZero').onchange = () => drawPayroll($('payrollSearch')?.value || '');
 }
 async function refresh() {
   [specialties, employees] = await Promise.all([store.listSpecialties(), store.listEmployees()]);
@@ -2601,9 +2603,18 @@ function drawPayroll(filter = '') {
   if (payrollShown !== payPeriod) return;
   const f = (filter || '').toLowerCase();
   const cat = $('payrollCat')?.dataset.value || '';
+  // «без начисления» — быстрый способ увидеть, кому за месяц ничего не посчиталось:
+  // нет ставки, нет графика, не введена выручка. Именно этот список закрывают
+  // в конце месяца, и раньше его приходилось выискивать глазами по всей ведомости.
+  const onlyZero = $('payOnlyZero')?.checked;
   const rows = payrollRows.filter(r => (r.fio || '').toLowerCase().includes(f)
-    && (!cat || specCat(employees.find(e => e.id === r.employee_id)?.specialty_id) === cat));
-  if (!rows.length) { $('payrollTable').innerHTML = `<div class="empty">${payrollRows.length ? 'Никого не найдено' : 'За ' + esc(periodLabel(payPeriod)) + ' данных нет'}</div>`; renderPayrollStat([]); return; }
+    && (!cat || specCat(employees.find(e => e.id === r.employee_id)?.specialty_id) === cat)
+    && (!onlyZero || (r.salary_kop || 0) === 0));
+  if (!rows.length) {
+    $('payrollTable').innerHTML = `<div class="empty">${onlyZero && payrollRows.length ? 'Всем за месяц что-то начислено 🎉'
+      : payrollRows.length ? 'Никого не найдено' : 'За ' + esc(periodLabel(payPeriod)) + ' данных нет'}</div>`;
+    renderPayrollStat([]); return;
+  }
 
   // Каждый вид выплаты — своя графа (решение Дарины 31.07). Раньше «Карта» была
   // одним числом на аванс+ЗП+расчёт, и по ведомости нельзя было понять, ЧТО
