@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=74';
+import { makeStore, lineLabel, sameRate } from './store.js?v=75';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -863,7 +863,7 @@ function openCard(id, replace) {
         <div class="field"><span class="caps">Должность</span><span class="val">${esc(e.position === FIO_SENTINEL ? '—' : (e.position || '—'))}</span></div>
         <div class="field"><span class="caps">Телефон (для СМС)</span><span class="val num">${esc(fmtPhone(e.phone) || '—')}</span></div>
         <div class="field"><span class="caps">Принят / уволен</span><span class="val small">${e.hired_on || e.left_on ? esc(dm(e.hired_on) || '—') + ' — ' + esc(dm(e.left_on) || '…') : '—'}</span></div>
-        <div class="field"><span class="caps">Статус</span><span class="val">${e.status === 'active' ? 'работает' : 'уволен'}</span></div>
+        <div class="field"><span class="caps">Статус</span><span class="val">${e.left_on ? 'уволен' : (e.status === 'active' ? 'работает' : 'в архиве')}</span></div>
         <div class="field" style="margin:0"><span class="caps">Карточка создана</span><span class="val small">${esc(fmtDT(e.created_at))}</span></div>
       </div>
     </div>${partialMonthNote(e)}
@@ -1023,8 +1023,9 @@ function confirmBigAmounts(amounts) {
       <div class="rc-diff"><div>Вводите: ${list}</div></div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="baNo">Исправить</button>
         <button class="btn btn-primary btn-sm" id="baYes">${ICONS.check}Да, всё верно</button></div>`);
-    $('baNo').onclick = () => { closeModal2(); resolve(false); };
-    $('baYes').onclick = () => { closeModal2(); resolve(true); };
+    modalOnClose2 = () => resolve(false);          // крестик/Escape = «Исправить»
+    $('baNo').onclick = () => { resolve(false); closeModal2(); };
+    $('baYes').onclick = () => { resolve(true); closeModal2(); };
   });
 }
 
@@ -1039,8 +1040,9 @@ function confirmPhone(norm) {
       <div class="rc-diff"><div>Сохраним как <b>${esc(fmtPhone(norm))}</b></div></div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="phNo">Исправить</button>
         <button class="btn btn-primary btn-sm" id="phYes">${ICONS.check}Да, верно</button></div>`);
-    $('phNo').onclick = () => { closeModal2(); resolve(false); };
-    $('phYes').onclick = () => { closeModal2(); resolve(true); };
+    modalOnClose2 = () => resolve(false);          // крестик/Escape = «Исправить»
+    $('phNo').onclick = () => { resolve(false); closeModal2(); };
+    $('phYes').onclick = () => { resolve(true); closeModal2(); };
   });
 }
 
@@ -1559,8 +1561,9 @@ function confirmImportLoad(kindLabel, period, count, total, warn) {
     // бы вечно — экран импорта остался бы «в процессе» до перезагрузки. Поэтому
     // guard, как у остальных денежных форм: он же держит и Escape, и фон, и «назад».
     $('modalBox').dataset.guard = '1';
-    $('ilNo').onclick = () => { closeModal(); resolve(false); };
-    $('ilYes').onclick = () => { closeModal(); resolve(true); };
+    modalOnClose = () => resolve(false);           // крестик/Escape = «Отмена»
+    $('ilNo').onclick = () => { resolve(false); closeModal(); };
+    $('ilYes').onclick = () => { resolve(true); closeModal(); };
   });
 }
 async function doImportLoad() {
@@ -1721,8 +1724,12 @@ function employeeForm(e) {
       // Появились НОВЫЕ строки ставки — спрашиваем, с какого месяца они действуют.
       // Существующие (_keep) не трогаем: у них своя дата начала.
       const fresh = (lines || []).filter(l => !l._keep);
+      const removed = e ? activeLines(e).length - (lines || []).filter(l => l._keep).length : 0;
       let vfrom = null;
-      if (fresh.length) { vfrom = await rateStartDialog(fresh); if (!vfrom) { btn.disabled = false; return; } }
+      if (fresh.length || removed > 0) {
+        vfrom = await rateStartDialog(fresh, removed);
+        if (!vfrom) { btn.disabled = false; return; }
+      }
       if (e) { await store.updateEmployee(e.id, patch, lines, vfrom); toast(ICONS.check + 'Карточка обновлена — изменения в журнале'); }
       else { await store.createEmployee({ ...patch, lines, valid_from: vfrom }); toast(ICONS.check + 'Карточка создана: ' + esc(fio.split(' ')[0])); }
       closeModal(); await refresh(); if (e) openCard(e.id);
@@ -2028,7 +2035,7 @@ function drawSchedule() {
   // Ширину первой колонки берём из CSS (--gr-name-w), а не числом здесь: когда
   // имена расширили до 190px ради ФИО в две строки, эта строка осталась на 150px,
   // и колонка с именами наезжала на первое число месяца.
-  grid.style.gridTemplateColumns = `var(--gr-name-w) repeat(${nd}, minmax(44px, 1fr)) repeat(4, minmax(46px, auto))`;
+  grid.style.gridTemplateColumns = `var(--gr-name-w, 190px) repeat(${nd}, minmax(44px, 1fr)) repeat(4, minmax(46px, auto))`;
   grid.innerHTML = shown ? head + rows : `<div class="empty" style="padding:40px">${active.length ? 'Никого не найдено' : 'Нет сотрудников'}</div>`;
   if (wrap) { wrap.scrollLeft = keepL; wrap.scrollTop = keepT; }
   if (anyEdit) {
@@ -2367,11 +2374,13 @@ const monthStartMSK = () => new Date(Date.now() + 3 * 3600e3).toISOString().slic
    число. От сегодняшнего месяца это отвязано намеренно: 1 августа 2026 все ставки,
    заведённые для июля, молча легли в август, и у Хуцишвили за 12 отработанных дней
    вышло 0 ₽ — в июле ставки «ещё не было». monthStartMSK остаётся запасным. */
-const rateStartDefault = () => (/^\d{4}-\d{2}$/.test(workPeriod || '') ? workPeriod + '-01' : monthStartMSK());
+const openPeriod = () => [workPeriod, payPeriod, curPeriod, ovPeriod]
+  .find(p => /^\d{4}-\d{2}$/.test(p || '')) || null;
+const rateStartDefault = () => { const p = openPeriod(); return p ? p + '-01' : monthStartMSK(); };
 /* Предупреждение под полем даты: если ставка стартует ПОЗЖЕ открытого месяца,
    за этот месяц не начислится ничего — ровно тот случай, что мы разбирали. */
 function rateStartWarn(d) {
-  const open = /^\d{4}-\d{2}$/.test(workPeriod || '') ? workPeriod : null;
+  const open = openPeriod();
   if (!open || !/^\d{4}-\d{2}-\d{2}$/.test(String(d))) return '';
   const [y, m] = open.split('-').map(Number);
   return d.slice(0, 7) > open
@@ -2390,11 +2399,13 @@ function ratePreviewText(d) {
 /* Новые строки ставки в карточке заводились БЕЗ вопроса о дате: она бралась от
    сегодняшнего числа. Именно так ставки Хуцишвили и Круглова попали в август,
    хотя заводили их для июля. Теперь спрашиваем — с подсказкой о последствии. */
-function rateStartDialog(fresh) {
+function rateStartDialog(fresh, removed = 0) {
   return new Promise(resolve => {
     const def = rateStartDefault();
-    const list = fresh.map(l => `<div><b>${esc(lineLabel(l))}</b></div>`).join('');
-    showModal2(`<h3>С какого месяца действует ставка?</h3>
+    const list = fresh.length
+      ? fresh.map(l => `<div><b>${esc(lineLabel(l))}</b></div>`).join('')
+      : `<div class="muted">убрано строк: <b>${removed}</b></div>`;
+    showModal2(`<h3>${fresh.length ? 'С какого месяца действует ставка?' : 'С какого месяца ставка не действует?'}</h3>
       <div class="rc-diff">${list}</div>
       <label class="flbl">Действует с</label>
       <input class="input" type="date" id="rsFrom" value="${def}">
@@ -2404,10 +2415,11 @@ function rateStartDialog(fresh) {
     const inp = $('rsFrom');
     const draw = () => { $('rsPrev').innerHTML = ratePreviewText(inp.value) + rateStartWarn(inp.value); };
     draw(); inp.oninput = draw;
-    $('rsNo').onclick = () => { closeModal2(); resolve(null); };
+    modalOnClose2 = () => resolve(null);           // крестик/Escape = «Отмена»
+    $('rsNo').onclick = () => { resolve(null); closeModal2(); };
     $('rsYes').onclick = () => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(inp.value)) { toast('Укажите дату', true); return; }
-      closeModal2(); resolve(inp.value);
+      resolve(inp.value); closeModal2();
     };
   });
 }
@@ -2443,10 +2455,11 @@ function rateChangeDialog(emp, oldLine, newLine) {
     const inp = $('rcFrom');
     inp.oninput = () => { $('rcPrev').innerHTML = ratePreviewText(inp.value) + rateStartWarn(inp.value); };
     $('rcPrev').innerHTML = ratePreviewText(def) + rateStartWarn(def);
-    $('rcNo').onclick = () => { closeModal(); resolve(null); };
+    modalOnClose = () => resolve(null);            // крестик/Escape = «Отмена»
+    $('rcNo').onclick = () => { resolve(null); closeModal(); };
     $('rcYes').onclick = () => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(inp.value)) { toast('Укажите дату', true); return; }
-      closeModal(); resolve(inp.value);
+      resolve(inp.value); closeModal();
     };
   });
 }
@@ -2810,8 +2823,9 @@ function confirmStorno(row) {
         и обе останутся видны владельцу в журнале. Это правильный способ исправить ошибку.</div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="stNo">Отмена</button>
         <button class="btn btn-primary btn-sm" id="stYes">${ICONS.check}Сторнировать</button></div>`);
-    $('stNo').onclick = () => { closeModal2(); resolve(false); };
-    $('stYes').onclick = () => { closeModal2(); resolve(true); };
+    modalOnClose2 = () => resolve(false);          // крестик/Escape = «Отмена»
+    $('stNo').onclick = () => { resolve(false); closeModal2(); };
+    $('stYes').onclick = () => { resolve(true); closeModal2(); };
   });
 }
 
@@ -2913,8 +2927,9 @@ async function undoAllPayouts(empId, per, onDone) {
         встречные на минус, в истории видно, кто вносил и кто убрал.</div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="uaNo">Отмена</button>
         <button class="btn btn-primary btn-sm" id="uaYes">${ICONS.check}Убрать всё</button></div>`);
-    $('uaNo').onclick = () => { closeModal2(); resolve(false); };
-    $('uaYes').onclick = () => { closeModal2(); resolve(true); };
+    modalOnClose2 = () => resolve(false);          // крестик/Escape = «Отмена»
+    $('uaNo').onclick = () => { resolve(false); closeModal2(); };
+    $('uaYes').onclick = () => { resolve(true); closeModal2(); };
   });
   if (!ok) return;
   try {
@@ -3620,12 +3635,19 @@ function drawJournal() {
    по пустому месту, а это, по словам Дарины, понятно не всем. Так и новые окна
    получат выход сами собой, без отдельной правки. */
 const MODAL_X = '<div class="modal-xwrap"><button class="modal-x" type="button" aria-label="Закрыть">\u2715</button></div>';
-function showModal(html) { $('modalBox').innerHTML = MODAL_X + html; $('modalOv').classList.add('show'); applyIcons($('modalBox')); const f = $('modalBox').querySelector('input'); if (f) setTimeout(() => f.focus(), 60); }
+/* onClose — ответ окна, когда его закрыли не кнопкой. Диалоги на промисах
+   (подтверждения суммы и телефона, дата ставки, сторно) резолвились только из
+   своих кнопок; крестик закрывал окно молча, промис висел вечно, и «Сохранить»
+   в карточке под ним оставалась мёртвой. Теперь ответ даёт и крестик, и Escape,
+   и клик по фону. Повторный resolve промис игнорирует — двойной вызов безопасен. */
+let modalOnClose = null, modalOnClose2 = null;
+function showModal(html, onClose) { modalOnClose = onClose || null; $('modalBox').innerHTML = MODAL_X + html; $('modalOv').classList.add('show'); applyIcons($('modalBox')); const f = $('modalBox').querySelector('input'); if (f) setTimeout(() => f.focus(), 60); }
 // ⚠ Никакого syncHash здесь. Пробовали — closeModal зовётся и из applyHash (закрыть
 // неохраняемую форму и идти дальше), и syncHash успевал вернуть адрес на СТАРЫЙ
 // экран ДО того, как applyHash прочитает новый: переход просто исчезал, а запись
 // истории затиралась. Адрес чинит сам отказ в applyHash, пушем.
-function closeModal() { $('modalOv').classList.remove('show'); delete $('modalBox').dataset.guard; }
+function closeModal() { $('modalOv').classList.remove('show'); delete $('modalBox').dataset.guard;
+  const f = modalOnClose; modalOnClose = null; if (f) f(); }
 // Открыта любая из двух форм (вторая — диалог поверх первой). Спрашивают и
 // маршрутизация («назад» не уводит экран из-под формы), и суточный сброс.
 const modalOpen = () => $('modalOv').classList.contains('show') || $('modalOv2').classList.contains('show');
@@ -3638,8 +3660,9 @@ const modalOpen = () => $('modalOv').classList.contains('show') || $('modalOv2')
 const guardedModal = () => ($('modalOv').classList.contains('show') && !!$('modalBox').dataset.guard) || $('modalOv2').classList.contains('show');
 // Второй слой — диалог ПОВЕРХ уже открытой формы. Без него confirmBigAmounts
 // затирал бы карточку (оба писали в общий #modalBox), и «Исправить» терял ввод.
-function showModal2(html) { $('modalBox2').innerHTML = MODAL_X + html; $('modalOv2').classList.add('show'); applyIcons($('modalBox2')); }
-function closeModal2() { $('modalOv2').classList.remove('show'); }
+function showModal2(html, onClose) { modalOnClose2 = onClose || null; $('modalBox2').innerHTML = MODAL_X + html; $('modalOv2').classList.add('show'); applyIcons($('modalBox2')); }
+function closeModal2() { $('modalOv2').classList.remove('show');
+  const f = modalOnClose2; modalOnClose2 = null; if (f) f(); }
 /* Ошибки выводим как текст (без innerHTML) — в них попадают сообщения БД/сети;
    успех может содержать доверенную иконку из ICONS. */
 function toast(msg, isErr) {

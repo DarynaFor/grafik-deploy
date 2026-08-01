@@ -384,7 +384,7 @@ body.authed .login-stage{display:none}
 /* модалка / тост */
 .modal-ov{position:fixed;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(7px);display:none;place-items:center;z-index:100;padding:16px}
 .modal-ov.show{display:grid}
-.modal{width:480px;max-width:94vw;max-height:92vh;overflow:auto;border-radius:24px;background:var(--modal-grad);border:1px solid var(--glass-bd);box-shadow:var(--sh-pop);padding:26px;animation:fade .25s ease-out}
+.modal{scroll-padding-bottom:70px;width:480px;max-width:94vw;max-height:92vh;overflow:auto;border-radius:24px;background:var(--modal-grad);border:1px solid var(--glass-bd);box-shadow:var(--sh-pop);padding:26px;animation:fade .25s ease-out}
 .modal h3{font-size:20px;font-weight:700;letter-spacing:-.02em}
 .modal .msub{color:var(--ink-2);font-size:13px;margin-top:3px}
 /* «Закрыть» и кнопки действий ВСЕГДА видны внизу длинной модалки: липнут к низу
@@ -397,8 +397,7 @@ body.authed .login-stage{display:none}
 .modal-foot{display:flex;gap:10px;justify-content:flex-end;position:sticky;bottom:0;z-index:3;box-shadow:0 -10px 14px -10px rgba(0,0,0,.16);
   margin:22px -26px -26px;padding:15px 26px;background:var(--modal-grad),var(--surface);
   border-top:1px solid var(--glass-bd);border-radius:0 0 24px 24px;scroll-margin-bottom:0}
-/* запас, чтобы последний ряд контента можно было выкрутить из-под футера */
-.modal-foot::before{content:'';position:absolute;left:0;right:0;top:-22px;height:22px;pointer-events:none}
+
 /* кнопки перехода «по одному человеку»: карточка / график без поиска по имени */
 .me-jump{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
 
@@ -425,7 +424,7 @@ body.authed .login-stage{display:none}
    не двигает вёрстку и остаётся на виду, когда длинное окно прокручивают */
 .modal-xwrap{position:sticky;top:0;height:0;z-index:4;display:flex;justify-content:flex-end;pointer-events:none}
 .modal-x{pointer-events:auto;width:32px;height:32px;flex:0 0 32px;margin:-4px -4px 0 0;border:0;border-radius:50%;
-  background:var(--fill-1);color:var(--ink-2);font-size:15px;line-height:1;cursor:pointer;
+  background:var(--surface);color:var(--ink-2);font-size:15px;box-shadow:0 0 0 1px var(--glass-bd);line-height:1;cursor:pointer;
   display:grid;place-items:center;transition:background .15s,color .15s}
 .modal-x:hover{background:var(--fill-2);color:var(--ink)}
 @keyframes updIn{from{opacity:0;transform:translateX(-50%) translateY(12px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
