@@ -123,7 +123,16 @@ body.authed .login-stage{display:none}
 .btn-ghost{border-color:var(--glass-bd);color:var(--ink);background:var(--fill-2)}
 .btn-ghost:hover{background:var(--fill-hi)}
 .btn-sm{padding:8px 13px;font-size:13px}
-.btn[disabled]{opacity:.4;cursor:not-allowed}
+/* Кнопки в этой программе гасятся ТОЛЬКО на время запроса (защита от двойного
+   клика) — постоянно выключенных нет ни одной. Значит «выключена» = «работает»,
+   и она должна это показывать: раньше единственным признаком была бледность, а
+   на телефоне при плохом интернете её попросту не видно, и человек не понимал,
+   нажалось ли вообще. Спиннер через ::before — одним правилом на все места сразу,
+   включая те, что появятся потом. Не .4, а .6: «ждём» не должно выглядеть «мертво». */
+.btn[disabled]{opacity:.6;cursor:progress}
+.btn[disabled]::before{content:'';display:inline-block;width:14px;height:14px;
+  border:2px solid currentColor;border-right-color:transparent;border-radius:50%;
+  animation:spin .6s linear infinite;margin-right:8px;vertical-align:-2px;flex:none}
 .card{border-radius:var(--r-card);background:var(--card-grad);border:1px solid var(--glass-bd);box-shadow:var(--sh)}
 .cardpad{padding:22px 24px}
 .input,select.input{width:100%;background:var(--fill-2);border:1px solid var(--glass-bd);border-radius:var(--r-ctl);padding:11px 14px;color:var(--ink);font-size:14px;font-family:inherit}
@@ -444,6 +453,21 @@ body.authed .login-stage{display:none}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--toast-bg);backdrop-filter:var(--blur);color:var(--toast-ink);border-radius:var(--r-pill);padding:12px 21px;font-size:14px;font-weight:600;box-shadow:var(--sh-pop);opacity:0;pointer-events:none;transition:.26s;z-index:200;display:flex;align-items:center;gap:9px}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.err{background:#c8443f;color:#fff}
+
+/* Обмен с базой. Сверху и по центру — не спорит с тостом внизу. z-index выше
+   модалки: ждать приходится как раз с открытой формой, и полоска должна быть
+   видна поверх неё. pointer-events:none — она информирует, а не перехватывает. */
+.netbar{position:fixed;top:0;left:50%;transform:translateX(-50%) translateY(-100%);
+  background:var(--toast-bg);backdrop-filter:var(--blur);color:var(--toast-ink);
+  border-radius:0 0 var(--r-pill) var(--r-pill);padding:9px 20px 10px;font-size:13px;font-weight:600;
+  box-shadow:var(--sh-pop);opacity:0;pointer-events:none;transition:.24s;z-index:400;
+  display:flex;align-items:center;gap:9px;max-width:92vw}
+.netbar.show{opacity:1;transform:translateX(-50%) translateY(0)}
+/* Ждём дольше обычного — тот же смысл, но заметнее, чтобы не выглядело зависанием */
+.netbar.slow{background:#8a6d1f;color:#fff}
+/* Интернета нет совсем: не «медленно», а «сейчас не сохранится» — это другое
+   сообщение, и человек должен увидеть его до того, как наберёт сумму. */
+.netbar.off{background:#c8443f;color:#fff}
 
 @media(max-width:860px){
   .app{grid-template-columns:minmax(0,1fr);grid-template-areas:"top" "main"}

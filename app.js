@@ -7,8 +7,76 @@
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
 import { makeStore, lineLabel, sameRate } from './store.js?v=75';
 
-const store = makeStore();
 const $ = id => document.getElementById(id);
+
+/* ── «Идёт обмен с базой» ────────────────────────────────────────────────
+   Жалоба Дарины 01.08: вносишь сумму при плохом интернете и просто ждёшь, не
+   понимая — грузится или зависло. Раньше единственным признаком была погасшая
+   кнопка, а её на телефоне не видно.
+
+   Считаем запросы к базе в ОДНОМ месте — обёртке над store, — чтобы не трогать
+   полсотни вызовов и не забыть новый. Показываем не сразу: короткий запрос
+   (обычный случай) мелькнул бы полоской на каждый чих. Дальше текст меняется по
+   времени ожидания, потому что «медленно» и «висит» человек различает только так.
+   Сообщения РАЗНЫЕ по смыслу: «сохраняем» — идёт, «медленный интернет» — идёт, но
+   долго, «нет интернета» — НЕ сохранится, и это надо знать до, а не после ввода. */
+const NET_SHOW_AFTER = 450;      // короче — только моргание на быстрых запросах
+const NET_SLOW_AFTER = 4000;     // столько человек ещё считает нормальным ожиданием
+let netPending = 0, netStarted = 0, netTimers = [];
+function netPaint(text, cls) {
+  const b = $('netBar'); if (!b) return;
+  b.className = 'netbar show' + (cls ? ' ' + cls : '');
+  b.innerHTML = (cls === 'off' ? '' : '<span class="btn-spin"></span>') + esc(text);
+}
+function netHide() { const b = $('netBar'); if (b && !b.classList.contains('off')) b.className = 'netbar'; }
+function netClearTimers() { netTimers.forEach(clearTimeout); netTimers = []; }
+function netStart() {
+  if (++netPending > 1) return;                       // уже показываем
+  netStarted = Date.now();
+  netClearTimers();
+  netTimers.push(setTimeout(() => netPaint('Сохраняем…'), NET_SHOW_AFTER));
+  netTimers.push(setTimeout(() => netPaint('Медленный интернет — ждём ответа базы', 'slow'), NET_SLOW_AFTER));
+  netTimers.push(setTimeout(() => netPaint('Всё ещё пытаемся. Не закрывайте программу', 'slow'), 15000));
+}
+function netEnd() {
+  if (--netPending > 0) return;
+  netPending = 0;
+  netClearTimers();
+  netHide();
+}
+// Обёртка: любой асинхронный метод store считается запросом к базе. Синхронные
+// (me(), dayExpired()) отдаём как есть — иначе полоска мигала бы на каждом чтении
+// из памяти. Прокси, а не правка store.js: store подменяется и в демо-режиме.
+function withNetIndicator(s) {
+  const cache = new Map();
+  return new Proxy(s, {
+    get(t, prop) {
+      const v = t[prop];
+      if (typeof v !== 'function' || prop.startsWith('_')) return typeof v === 'function' ? v.bind(t) : v;
+      if (!cache.has(prop)) cache.set(prop, (...args) => {
+        const out = v.apply(t, args);
+        if (!out || typeof out.then !== 'function') return out;   // синхронный ответ — не сеть
+        netStart();
+        return out.finally(netEnd);
+      });
+      return cache.get(prop);
+    },
+  });
+}
+const store = withNetIndicator(makeStore());
+/* Интернета нет совсем — это НЕ «медленно», а «сейчас ничего не сохранится».
+   Показываем постоянно, пока не вернётся: человек должен увидеть это ДО того,
+   как наберёт сумму и станет ждать. navigator.onLine врёт в одну сторону (может
+   говорить «есть», когда сети по факту нет), поэтому он тут не единственный
+   признак, а дополнение к полоске ожидания — не заменяет её. */
+function netOffline() {
+  const b = $('netBar'); if (!b) return;
+  b.className = 'netbar show off';
+  b.textContent = 'Нет интернета — изменения не сохраняются';
+}
+window.addEventListener('offline', netOffline);
+window.addEventListener('online', () => { const b = $('netBar'); if (b) b.className = 'netbar'; if (netPending) netPaint('Сохраняем…'); });
+if (navigator.onLine === false) setTimeout(netOffline, 0);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 /* ── иконки ── */
@@ -287,6 +355,9 @@ const ROUTES = [
   // Чинится вторым аргументом в адресе; отложено, чтобы не расширять грамматику
   // адресов ради одного экрана в этой задаче.
   { s: 'card',        slug: 'kartochka',    arg: 'id' },
+  // «Пробелы» приехали из master уже после маршрутизации — без адреса экран
+  // нельзя было ни прислать ссылкой, ни удержать в общем месяце.
+  { s: 'gaps',        slug: 'probely',      arg: 'period' },
   { s: 'schedule',    slug: 'grafik',       arg: 'period' },
   { s: 'payroll',     slug: 'raschet',      arg: 'period' },
   { s: 'rates',       slug: 'stavki' },
@@ -305,6 +376,7 @@ const ROUTES = [
 // ⚠ Список обязан совпадать с теми, у кого в ROUTES стоит arg: 'period'. Забыть
 // здесь — тихо: адрес просто перестанет называть месяц, и никто не заметит.
 const PERIOD_OF = {
+  gaps:     { get: () => gapsPeriod, set: v => { gapsPeriod = v; workPeriod = v; } },
   schedule: { get: () => curPeriod, set: v => { curPeriod = v; workPeriod = v; } },
   payroll:  { get: () => payPeriod, set: v => { payPeriod = v; workPeriod = v; } },
   patients: { get: () => patPeriod, set: v => { patPeriod = v; workPeriod = v; } },
@@ -1556,10 +1628,11 @@ function confirmImportLoad(kindLabel, period, count, total, warn) {
       <div class="msub" style="margin-top:8px">Отменить запись можно только сторно. Продолжить?</div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="ilNo">Отмена</button>
         <button class="btn btn-primary btn-sm" id="ilYes">${ICONS.check}Загрузить</button></div>`);
-    // Единственный выход — эти две кнопки. Закройся окно иначе (Escape, клик по
-    // фону, «назад»), resolve не позвался бы никогда и await в doImportLoad висел
-    // бы вечно — экран импорта остался бы «в процессе» до перезагрузки. Поэтому
-    // guard, как у остальных денежных форм: он же держит и Escape, и фон, и «назад».
+    // Две защиты, и обе нужны. guard — как у остальных денежных форм: не даёт
+    // закрыть окно случайным Escape, кликом по фону и «назад» (маршрутизация
+    // спрашивает именно его). modalOnClose ниже — страховка на всё остальное
+    // (крестик): без неё resolve не позвался бы, await в doImportLoad висел бы
+    // вечно, и экран импорта остался бы «в процессе» до перезагрузки.
     $('modalBox').dataset.guard = '1';
     modalOnClose = () => resolve(false);           // крестик/Escape = «Отмена»
     $('ilNo').onclick = () => { resolve(false); closeModal(); };
@@ -1752,7 +1825,7 @@ function specForm() {
     const btn = $('mSave'); if (btn.disabled) return;
     const n = $('mSn').value.trim(); if (!n) { $('mSn').focus(); return; }
     btn.disabled = true;
-    try { await store.addSpecialty(n, $('mSc').value.trim() || 'Прочие'); closeModal(); await refresh(); toast(ICONS.check + 'Добавлено: ' + esc(n)); }
+    try { await store.addSpecialty(n, $('mSc').value.trim() || 'Прочие'); closeModal(); toast(ICONS.check + 'Добавлено: ' + esc(n)); refresh(); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
 }
@@ -2127,13 +2200,13 @@ function scheduleDayDialog(day) {
     showModal(`<h3>Закрыть день ${esc(label)}?</h3>
       <div class="msub">После закрытия клетки этого дня блокируются от правок. Изменить закрытый день сможет владелец напрямую (а Алёна — по СМС-подтверждению, этап 5б). Всё пишется в журнал.</div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="dCancel">Отмена</button><button class="btn btn-primary btn-sm" id="dClose">${ICONS.lock}Закрыть день</button></div>`);
-    $('dClose').onclick = async () => { const b = $('dClose'); if (b.disabled) return; b.disabled = true; try { await store.closeDay(date); closeModal(); await renderSchedule(); toast(ICONS.check + 'День ' + day + ' закрыт'); } catch (e) { b.disabled = false; toast(e.message || e, true); } };
+    $('dClose').onclick = async () => { const b = $('dClose'); if (b.disabled) return; b.disabled = true; try { await store.closeDay(date); closeModal(); toast(ICONS.check + 'День ' + day + ' закрыт'); renderSchedule(); } catch (e) { b.disabled = false; toast(e.message || e, true); } };
     $('dCancel').onclick = closeModal;
   } else {
     showModal(`<h3>${ICONS.lock} День ${esc(label)} закрыт</h3>
       <div class="msub">Клетки заблокированы от правок. ${meRole === 'owner' ? 'Как владелец — вы можете открыть день или править клетки напрямую (запишется в журнал).' : 'Исправить может владелец, либо вы по СМС-подтверждению (этап 5б) — с уведомлением владельца.'}</div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="dCancel">Закрыть</button>${meRole === 'owner' ? `<button class="btn btn-primary btn-sm" id="dOpen">Открыть день</button>` : ''}</div>`);
-    if ($('dOpen')) $('dOpen').onclick = async () => { const b = $('dOpen'); if (b.disabled) return; b.disabled = true; try { await store.reopenDay(date); closeModal(); await renderSchedule(); toast('День ' + day + ' открыт'); } catch (e) { b.disabled = false; toast(e.message || e, true); } };
+    if ($('dOpen')) $('dOpen').onclick = async () => { const b = $('dOpen'); if (b.disabled) return; b.disabled = true; try { await store.reopenDay(date); closeModal(); toast('День ' + day + ' открыт'); renderSchedule(); } catch (e) { b.disabled = false; toast(e.message || e, true); } };
     $('dCancel').onclick = closeModal;
   }
 }
@@ -2149,11 +2222,11 @@ function scheduleCellPopup(empId, day) {
   $('scSave').onclick = async () => {
     const btn = $('scSave'); if (btn.disabled) return; btn.disabled = true;
     const kind = $('scKind').value || null;   // время без типа смены не сохраняем (иначе невидимая строка-пустышка)
-    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, plan_end: null, fact: null }); closeModal(); await renderSchedule(); toast(ICONS.check + 'Сохранено'); }
+    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, plan_end: null, fact: null }); closeModal(); toast(ICONS.check + 'Сохранено'); renderSchedule(); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
   $('scClear').onclick = async () => {
-    try { await store.setScheduleCell(empId, date, { plan_kind: null, plan_start: null, plan_end: null, fact: null }); closeModal(); await renderSchedule(); toast('Очищено'); }
+    try { await store.setScheduleCell(empId, date, { plan_kind: null, plan_start: null, plan_end: null, fact: null }); closeModal(); toast('Очищено'); renderSchedule(); }
     catch (err) { toast(err.message || err, true); }
   };
 }
@@ -2183,7 +2256,7 @@ function vacationDialog(empId, startDay) {
     btn.disabled = true;
     try {
       for (const d of days) await store.setScheduleCell(empId, d, { plan_kind: 'отпуск', plan_start: null, plan_end: null, fact: null });
-      closeModal(); await renderSchedule(); toast(ICONS.check + `Отпуск отмечен · ${days.length} дн`);
+      closeModal(); toast(ICONS.check + `Отпуск отмечен · ${days.length} дн`); renderSchedule();
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
 }
@@ -2220,7 +2293,7 @@ function scheduleFactPopup(empId, day) {
     <div class="modal-foot"><span class="msub">сейчас: <b>${now}</b></span><button class="btn btn-ghost btn-sm" id="fVac">Отпуск…</button><button class="btn btn-ghost btn-sm" id="fClear">Сбросить</button></div>`);
   $('fVac').onclick = () => vacationDialog(empId, day);
   const apply = async fact => {
-    try { await store.setScheduleFact(empId, date, fact); closeModal(); await renderSchedule(); toast(ICONS.check + 'Факт отмечен'); }
+    try { await store.setScheduleFact(empId, date, fact); closeModal(); toast(ICONS.check + 'Факт отмечен'); renderSchedule(); }
     catch (err) { toast(err.message || err, true); }
   };
   $('modalBox').querySelectorAll('.fact-btn').forEach(b => b.onclick = () => apply(b.dataset.f === 'plan' ? null : b.dataset.f));
@@ -2229,7 +2302,7 @@ function scheduleFactPopup(empId, day) {
   if (kb) kb.onclick = async () => {
     const kind = $('fKind').value; if (!kind) return toast('Выберите тип смены', true);
     if (kb.disabled) return; kb.disabled = true;
-    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: $('fKindStart').value || null, plan_end: null, fact: null }); closeModal(); await renderSchedule(); toast(ICONS.check + 'Смена добавлена'); }
+    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: $('fKindStart').value || null, plan_end: null, fact: null }); closeModal(); toast(ICONS.check + 'Смена добавлена'); renderSchedule(); }
     catch (err) { kb.disabled = false; toast(err.message || err, true); }
   };
   $('fClear').onclick = () => apply(null);
@@ -2275,7 +2348,7 @@ function retroConfirmPhase(requestId, demoCode, label) {
     const btn = $('rConf'); if (btn.disabled) return; btn.disabled = true;
     try {
       const st = await store.confirmRetroEdit(requestId, $('rCode').value.trim());
-      if (st === 'ok') { closeModal(); await renderSchedule(); toast(ICONS.check + 'Исправлено · владелец уведомлён'); }
+      if (st === 'ok') { closeModal(); toast(ICONS.check + 'Исправлено · владелец уведомлён'); renderSchedule(); }
       else { btn.disabled = false; toast(RUS[st] || st, true); }
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
@@ -2317,12 +2390,12 @@ function scheduleTemplateDialog(empId) {
       employee_id: empId, work_date: cellDate(x.day),
       plan_kind: x.work ? kind : 'off', plan_start: x.work ? start : null,
     })).filter(c => !closedDays.has(c.work_date));   // закрытые дни шаблоном не трогаем
-    try { await store.setScheduleBulk(cells); closeModal(); await renderSchedule(); toast(ICONS.check + 'Заполнено по шаблону'); }
+    try { await store.setScheduleBulk(cells); closeModal(); toast(ICONS.check + 'Заполнено по шаблону'); renderSchedule(); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
   $('tpClear').onclick = async () => {
     const btn = $('tpClear'); if (btn.disabled) return; btn.disabled = true;
-    try { await store.clearScheduleMonth(empId, curPeriod); closeModal(); await renderSchedule(); toast('Месяц очищен'); }
+    try { await store.clearScheduleMonth(empId, curPeriod); closeModal(); toast('Месяц очищен'); renderSchedule(); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
 }
@@ -3350,7 +3423,7 @@ function shiftGapsMonth(d) {
   if (!gapsPeriod) gapsPeriod = nowPeriod();
   let [y, m] = gapsPeriod.split('-').map(Number); m += d;
   if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
-  gapsPeriod = y + '-' + String(m).padStart(2, '0'); renderGaps();
+  gapsPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = gapsPeriod; syncHash(false); renderGaps();
 }
 
 // Проверки идут ПО РОСТЕРУ (активные сотрудники), а расчётная строка из
