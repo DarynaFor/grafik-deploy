@@ -693,9 +693,11 @@ function partialMonthNote(e) {
    имени заново. Теперь достаточно кнопки: экран открывается уже отфильтрованным
    по нему. Фильтр ставим в то же поле поиска, которым пользуется человек, —
    чтобы было видно, ПОЧЕМУ в списке одна строка, и легко сбросить. */
+let cardFrom = null;   // экран, с которого открыли карточку — туда и вернёт «назад»
 function focusOn(screen, empId) {
   const e = employees.find(x => x.id === empId); if (!e) return;
   const key = String(e.fio || '').split(' ')[0];      // фамилии достаточно и она не ломает поиск пробелами
+  cardFrom = curScreen;                               // чтобы «назад» вернул туда, откуда пришли
   closeModal();
   if (screen === 'schedule') { const i = $('schedSearch'); if (i) i.value = key; }
   if (screen === 'payroll')  { const i = $('payrollSearch'); if (i) i.value = key; }
@@ -714,6 +716,7 @@ function openCard(id, replace) {
       <div class="emp-ava" style="width:64px;height:64px;border-radius:20px;font-size:20px;background:${palette[id % palette.length]}">${esc(initials(e.fio))}</div>
       <div style="flex:1;min-width:200px"><h1 style="font-size:23px;font-weight:700">${esc(e.fio)}</h1><p class="muted" style="margin-top:2px">${esc(specName(e.specialty_id))}</p></div>
       <div id="cardMoney" class="card-money"></div>
+      ${isStaff() ? `<button class="btn btn-ghost btn-sm" id="cardToPay">Расчёт</button><button class="btn btn-ghost btn-sm" id="cardToSched">График</button>` : ''}
       ${canEditCards() ? `<button class="btn btn-ghost btn-sm" id="editEmpBtn">${ICONS.edit}Редактировать</button><button class="btn btn-ghost btn-sm" id="archiveEmpBtn">${e.status === 'active' ? 'В архив' : 'Из архива'}</button>` : `<span class="tag">${ICONS.lock} правит владелец</span>`}
     </div></div>
     <div class="grid2">
@@ -739,6 +742,10 @@ function openCard(id, replace) {
   applyIcons($('cardBody'));           // поздний ответ по деньгам не лёг в чужую
   const eb = $('editEmpBtn'); if (eb) eb.onclick = () => employeeForm(e);
   const ab = $('archiveEmpBtn'); if (ab) ab.onclick = () => toggleArchive(e);
+  // переходы из карточки: тот же человек, но в расчёте или в графике —
+  // чтобы не возвращаться в список и не искать его заново
+  const cp = $('cardToPay'); if (cp) cp.onclick = () => { focusOn('payroll', id); setTimeout(() => payrollDialog(id), 350); };
+  const cs2 = $('cardToSched'); if (cs2) cs2.onclick = () => focusOn('schedule', id);
   go('card', replace);                 // адрес карточки берётся из dataset.emp выше
   loadCardMoney(id);
   loadCardNotes(id);
@@ -3286,7 +3293,10 @@ $('addSpecBtn').onclick = specForm;
 // replace: кнопка нарисована шевроном «влево» и читается как «назад», поэтому
 // новую запись заводить нельзя — иначе системное «назад» возвращало бы в только
 // что закрытую карточку, и выход из программы шёл пинг-понгом список↔карточка.
-$('backBtn').onclick = () => go('employees', true);
+// «Назад» ведёт ТУДА, ОТКУДА ПРИШЛИ. Раньше всегда в «Сотрудники»: перейдя из
+// «Расчёта» в карточку, вернуться в расчёт было нечем — приходилось открывать
+// экран заново и снова искать человека.
+$('backBtn').onclick = () => { const to = cardFrom || 'employees'; cardFrom = null; go(to, true); };
 $('logoutBtn').innerHTML = ICONS.out;
 // finally: выход должен ВЫГЛЯДЕТЬ выходом даже если signOut упал по сети. Иначе экран
 // остаётся «внутри программы», хотя store.logout() уже снял пользователя и ключ дня.
