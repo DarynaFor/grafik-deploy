@@ -2493,15 +2493,26 @@ function drawPayroll(filter = '') {
   }
 
   const sum = k => rows.reduce((s, r) => s + (r[k] || 0), 0);
+  // «Осталось выдать» в итоге складываем ТОЛЬКО из плюсов: это деньги, которые
+  // реально надо раздать. Минусы — переплата вперёд, они не уменьшают выдачу,
+  // а переходят на следующий месяц, и им своя строка. Раньше всё складывалось
+  // в одно число, и переплата одному тихо гасила недоплату другому: итог
+  // показывал меньше, чем предстоит выдать на руки.
+  const toGive   = rows.reduce((s, r) => s + Math.max(0, r.delta_kop || 0), 0);
+  const overpaid = rows.reduce((s, r) => s + Math.min(0, r.delta_kop || 0), 0);
+  const overpaidCnt = rows.filter(r => (r.delta_kop || 0) < 0).length;
   const total = `<tfoot><tr class="pw-total"><td class="pw-name">ИТОГО</td><td></td>
-    <td class="num">${sum('norm_days')} дн</td><td class="num">${sum('fact_days')} дн</td><td></td>
+    <td></td><td></td><td></td>
     <td class="num sep fin"><b>${rub(sum('salary_kop'))}</b></td>
     <td class="num fin">${rub(sum('cash_avans_kop'))}</td>
     <td class="num fin">${rub(sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('card_rasch_kop'))}</td>
     <td class="num fin">${rub(sum('card_uvol_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('otpusk_cash_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
-    <td class="num pw-pay fin"><b class="money">${rub(sum('delta_kop'))}</b></td></tr></tfoot>`;
+    <td class="num pw-pay fin"><b class="money">${rub(toGive)}</b></td></tr>
+    ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
+      <td colspan="13" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
+      <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td></tr>` : ''}</tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
   $('payrollTable').querySelectorAll('.pw-row').forEach(tr => {

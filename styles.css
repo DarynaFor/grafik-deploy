@@ -250,6 +250,14 @@ body.authed .login-stage{display:none}
 .mn-btn:hover{background:var(--fill-hi)}
 #mLabel{min-width:128px;text-align:center}
 .gridwrap{overflow-x:auto;border-radius:18px;border:1px solid var(--glass-bd);background:var(--fill-1);box-shadow:var(--sh-sm)}
+/* Прокрутка ДОЛЖНА идти внутри контейнера, иначе `position:sticky` у шапки не к
+   чему прилипать: вертикаль уезжала на уровень страницы, и заголовки уплывали
+   вверх вместе с таблицей. Ограничиваем высоту — появляется своя прокрутка,
+   и шапка со «Сотрудником» остаются на месте. */
+/* max() — страховка: если 100vh почему-то окажется крошечным, таблица не
+   схлопнется в ноль, а просто получит минимальную высоту */
+.gridwrap{overflow-y:auto;max-height:max(320px, calc(100vh - 250px))}
+@media (max-width:900px){ .gridwrap{max-height:max(280px, calc(100vh - 210px))} }
 #scheduleGrid{display:grid;min-width:max-content;font-size:12px}
 .gr-corner{position:sticky;left:0;z-index:3;background:var(--surf-1);padding:10px 12px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;font-size:10px;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
 .gr-day{padding:9px 4px;text-align:center;font-weight:700;color:var(--ink-3);border-bottom:1px solid var(--hair);border-right:1px solid var(--hair);font-variant-numeric:tabular-nums}
@@ -440,19 +448,32 @@ body.authed .login-stage{display:none}
    резала чипы посреди слова */
 .pw .pw-pay{position:sticky;right:0;z-index:3;background:var(--surf-2);border-left:1px solid var(--glass-bd)}
 .pw th.pw-pay{z-index:5}
+/* Угловые ячейки (шапка × примороженная колонка) перекрывают всё: без этого при
+   одновременной прокрутке по обеим осям в углу мелькали чужие значения. */
+.pw thead th{background:var(--surf-1)}
+.pw th.pw-name,.pw th.pw-pay{background:var(--surf-1)}
+.pw-total td{background:var(--surf-1)}
+/* переплата вперёд — отдельной строкой под итогом, приглушённо: это не долг
+   клинике и не деньги к выдаче, а остаток, уезжающий в следующий месяц */
+.pw-total.pw-over td{border-top:1px dashed var(--glass-bd);font-weight:600}
+.pw-total.pw-over .pw-name{color:var(--ink-2);font-weight:600}
+.money.neg{color:var(--red-d)}
 /* Имя не должно распирать колонку: длинное ФИО обрезаем, чипы уходят на 2-ю
    строку. Иначе у человека с 3–4 флагами имя занимало почти весь экран — чем
    больше проблем, тем меньше видно его денег. */
 .pw-fio{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pw-flags{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
 .pw-row{cursor:pointer;transition:.1s}
-.pw-row:hover td{background:var(--fill-1)}
-.pw-row:hover .pw-name,.pw-row:hover .pw-pay{background:var(--fill-2)}
+/* Подсветку строки кладём ДВУМЯ слоями: полупрозрачный поверх сплошного. Иначе
+   у «примороженных» колонок (Сотрудник, К выдаче) фон становился прозрачным, и
+   при горизонтальной прокрутке сквозь них наползали чужие цифры. */
+.pw-row:hover td{background:linear-gradient(var(--fill-1),var(--fill-1)),var(--bg)}
+.pw-row:hover .pw-name,.pw-row:hover .pw-pay{background:linear-gradient(var(--fill-2),var(--fill-2)),var(--surf-2)}
 .pw-sub td{color:var(--ink-2)}
 .pw-total td{background:var(--surf-1);font-weight:700;border-top:1px solid var(--glass-bd);border-bottom:none}
 .pw-total .pw-name,.pw-total .pw-pay{background:var(--surf-1)}
 .pw-group td{background:var(--surf-1);padding:0;border-bottom:1px solid var(--glass-bd);border-left:4px solid var(--cat,transparent)}
-.pw-group span{position:sticky;left:0;display:inline-flex;align-items:center;gap:9px;padding:7px 12px;font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
+.pw-group span{position:sticky;left:0;background:var(--surf-1);display:inline-flex;align-items:center;gap:9px;padding:7px 12px;font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
 .pw-group span::before{content:'';width:9px;height:9px;border-radius:50%;background:var(--cat,var(--ink-3));flex:none}
 .pw-group b{color:var(--green-d);font-weight:800}
 .pw .money{color:var(--green-d)}
