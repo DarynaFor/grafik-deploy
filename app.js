@@ -1347,6 +1347,11 @@ function confirmImportLoad(kindLabel, period, count, total, warn) {
       <div class="msub" style="margin-top:8px">Отменить запись можно только сторно. Продолжить?</div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="ilNo">Отмена</button>
         <button class="btn btn-primary btn-sm" id="ilYes">${ICONS.check}Загрузить</button></div>`);
+    // Единственный выход — эти две кнопки. Закройся окно иначе (Escape, клик по
+    // фону, «назад»), resolve не позвался бы никогда и await в doImportLoad висел
+    // бы вечно — экран импорта остался бы «в процессе» до перезагрузки. Поэтому
+    // guard, как у остальных денежных форм: он же держит и Escape, и фон, и «назад».
+    $('modalBox').dataset.guard = '1';
     $('ilNo').onclick = () => { closeModal(); resolve(false); };
     $('ilYes').onclick = () => { closeModal(); resolve(true); };
   });
@@ -1658,6 +1663,13 @@ let redRemarks = [];                      // «красные замечания
 async function renderSchedule() {
   if (!isStaff() || !$('scheduleGrid')) return;
   if (!curPeriod) curPeriod = nowPeriod();
+  // Гасим сетку при СМЕНЕ месяца. Пока грузится новый, на экране висели клетки
+  // старого — а cellDate() и pastDay() уже отдают НОВЫЙ месяц, и тап по такой
+  // клетке писал факт не в тот месяц молча. Убираем сами кликабельные клетки,
+  // не трогая логику клика (см. TODO у schedShown). При обновлении ТОГО ЖЕ месяца
+  // (после каждой правки) не гасим: моргало бы и сбрасывался горизонтальный
+  // скролл на 31 колонке — та же причина, что у «Расчёта».
+  if (schedShown !== curPeriod) { $('scheduleGrid').innerHTML = '<div class="empty">Загружаем график…</div>'; if ($('mLabel')) $('mLabel').textContent = periodLabel(curPeriod); }
   const seq = ++schedSeq;                 // защита от гонки: быстрое переключение месяцев даёт несколько запросов
   try {
     const [rows, kinds, closed] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds(), store.listClosedDays(curPeriod)]);
@@ -1921,6 +1933,10 @@ function retroConfirmPhase(requestId, demoCode, label) {
     <div class="msub">${demoCode ? `<b>ДЕМО:</b> код <b>${esc(demoCode)}</b> (в проде придёт по СМС)` : 'Код отправлен на ваш телефон по СМС.'} · правка: ${esc(label || '')}</div>
     <label class="flbl">Код из СМС</label><input class="input" id="rCode" inputmode="numeric" maxlength="6" placeholder="6 цифр" autocomplete="off">
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="rCancel">Отмена</button><button class="btn btn-primary btn-sm" id="rConf">${ICONS.check}Подтвердить</button></div>`);
+  // guard: код уже ОТПРАВЛЕН, requestId живёт только в этом замыкании, а попытки
+  // ограничены (RUS.locked/expired). Закройся окно случайно — Escape, клик по фону,
+  // «назад» — и код придётся запрашивать заново, тратя попытку. Выход — «Отмена».
+  $('modalBox').dataset.guard = '1';
   $('rCancel').onclick = () => closeModal();
   $('rConf').onclick = async () => {
     const btn = $('rConf'); if (btn.disabled) return; btn.disabled = true;
@@ -2190,7 +2206,9 @@ async function renderPayroll(filter = '') {
   // деньги), но НЕ при обновлении после ввода — там гашение сбрасывало скролл.
   const sameMonth = payrollShown === payPeriod;
   const prevShown = payrollShown;                       // что реально лежит в payrollRows
-  if (!sameMonth) $('payrollTable').innerHTML = '<div class="empty">Загружаем расчёт…</div>';
+  // Чипы гасим ВМЕСТЕ с таблицей: «Осталось выдать» — контрольная цифра владельца,
+  // и висеть от прошлого месяца под новой подписью она не должна.
+  if (!sameMonth) { $('payrollTable').innerHTML = '<div class="empty">Загружаем расчёт…</div>'; $('payrollStat').innerHTML = ''; }
   // payrollShown ставим ТОЛЬКО после успеха (как schedShown/patShown/ovData.period).
   // Раньше он значил «загрузка началась»: два быстрых клика по ›, и второй вызов
   // брал prevShown = месяц, который никогда не грузился, — откат уводил бы ИМЕННО
@@ -2236,6 +2254,12 @@ function linesFor(r) {
 }
 
 function drawPayroll(filter = '') {
+  // В payrollRows лежат деньги за payrollShown. Если сейчас грузится ДРУГОЙ месяц —
+  // рисовать нечего. Поиск по ФИО и выбор отделения зовут drawPayroll НАПРЯМУЮ,
+  // минуя renderPayroll: без этой строки один символ в поиске перерисовывал старые
+  // деньги — вместе с подытогами по отделениям, строкой ИТОГО и чипами «Осталось
+  // выдать» — под новой подписью и новым адресом. Ошибки сети для этого не нужно.
+  if (payrollShown !== payPeriod) return;
   const f = (filter || '').toLowerCase();
   const cat = $('payrollCat')?.dataset.value || '';
   const rows = payrollRows.filter(r => (r.fio || '').toLowerCase().includes(f)
@@ -2381,6 +2405,13 @@ function confirmStorno(row) {
 
 async function payrollDialog(empId) {
   const r = payrollRows.find(x => x.employee_id === empId); if (!r) return;
+  // Месяц ФИКСИРУЕМ здесь и дальше пользуемся только `per`. Ниже два запроса к
+  // базе, и всё это время окна ещё нет — modalOpen() = false, dataset.guard не
+  // выставлен, — значит payPeriod свободно уводят и ‹/›, и «назад», и открытая
+  // ссылка. Строка `r` при этом снята ДО ожидания. Без фиксации заголовок печатал
+  // бы один месяц, суммы показывал другой, а запись уходила бы в третий — и это
+  // деньги, которые потом только сторнировать.
+  const per = payPeriod;
   const my = payrollLines.filter(l => l.employee_id === empId);
   const canEdit = isStaff();
   // процентник: ЗП = % × выручка. Пока оплаты пациентов неполные — выручку за месяц
@@ -2388,9 +2419,12 @@ async function payrollDialog(empId) {
   const emp = employees.find(e => e.id === empId);
   const pctLine = emp && emp.lines && emp.lines.find(l => l.pay_kind === 'процент');
   let curRev = 0;
-  if (pctLine && canEdit) { try { curRev = await store.getDoctorRevenue(empId, payPeriod); } catch (e) {} }
+  if (pctLine && canEdit) { try { curRev = await store.getDoctorRevenue(empId, per); } catch (e) {} }
   let curOverride = null;                                 // финальная сумма вручную (миграция 049)
-  if (canEdit) { try { curOverride = await store.getSalaryOverride(empId, payPeriod); } catch (e) {} }
+  if (canEdit) { try { curOverride = await store.getSalaryOverride(empId, per); } catch (e) {} }
+  // Пока ждали базу, месяц или экран могли смениться. Диалог тогда уже не про то,
+  // что перед человеком: молча уходим, строку он откроет заново.
+  if (payPeriod !== per || curScreen !== 'payroll') return;
   const breakdown = my.length
     ? my.map(l => `<div class="me-row"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}</span><b>${rub(l.money_kop)} ₽</b></div>`).join('')
     : `<div class="me-row"><span class="muted">${r.flag_no_rate ? 'Ставка не заведена' : 'Начислений за месяц нет'}</span><b>0 ₽</b></div>`;
@@ -2400,7 +2434,7 @@ async function payrollDialog(empId) {
   // идёт в ведомости; специальность из карточки. emp может не найтись (список
   // карточек урезан ролью) — тогда останется одно ФИО, без строки специальности.
   showModal(`${personHead({ fio: r.fio, specialty_id: emp?.specialty_id },
-      `${esc(periodLabel(payPeriod))} · норма ${r.norm_days} дн · факт ${r.fact_days} дн`)}
+      `${esc(periodLabel(per))} · норма ${r.norm_days} дн · факт ${r.fact_days} дн`)}
     <div class="rc-diff">${breakdown}${pct}
       <div class="me-row me-sum"><span>Зарплата${r.flag_manual_salary ? ' · <b class="jact">вручную</b>' : ''}</span><b>${rub(r.salary_kop)} ₽</b></div>
       ${r.card_avans_kop ? `<div class="me-row"><span class="muted">Аванс на карту</span><b>${rub(r.card_avans_kop)} ₽</b></div>` : ''}
@@ -2444,7 +2478,7 @@ async function payrollDialog(empId) {
 
   const loadHist = async () => {
     try {
-      const ev = await store.listMoneyEvents(empId, payPeriod);
+      const ev = await store.listMoneyEvents(empId, per);
       const reversed = new Set(ev.filter(e => e.reverses_id).map(e => e.reverses_id));
       $('pmHist').innerHTML = ev.length ? ev.map(e => {
         const isStorno = !!e.reverses_id, isDead = reversed.has(e.id);
@@ -2485,7 +2519,7 @@ async function payrollDialog(empId) {
     if (sum > RATE_CONFIRM && !(await confirmBigAmounts([sum]))) return;
     btn.disabled = true;
     try {
-      await store.addMoneyLine({ employee_id: empId, period: payPeriod,
+      await store.addMoneyLine({ employee_id: empId, period: per,
         kind: $('pmKind').value, amount_kop: Math.round(sum * 100) });
       $('pmSum').value = '';
       await renderPayroll($('payrollSearch')?.value || '');
@@ -2503,7 +2537,7 @@ async function payrollDialog(empId) {
     if (rev == null || rev < 0) { toast('Укажите выручку (0 — убрать)', true); return; }
     btn.disabled = true;
     try {
-      const res = await store.setDoctorRevenue(empId, payPeriod, Math.round(rev * 100));
+      const res = await store.setDoctorRevenue(empId, per, Math.round(rev * 100));
       await renderPayroll($('payrollSearch')?.value || '');
       toast(ICONS.check + (res ? 'Выручка внесена — зарплата пересчитана' : 'Без изменений'));
       closeModal(); payrollDialog(empId);
@@ -2521,7 +2555,7 @@ async function payrollDialog(empId) {
     btn.disabled = true;
     try {
       const note = $('pmFinalNote')?.value.trim() || null;   // причина (необязательно) → в журнал
-      await store.setSalaryOverride(empId, payPeriod, Math.round(val * 100), note);
+      await store.setSalaryOverride(empId, per, Math.round(val * 100), note);
       await renderPayroll($('payrollSearch')?.value || '');
       toast(ICONS.check + 'Финальная сумма задана — «осталось» пересчитано');
       closeModal(); payrollDialog(empId);
@@ -2531,7 +2565,7 @@ async function payrollDialog(empId) {
     const btn = $('pmFinalClear'); if (btn.disabled) return;
     btn.disabled = true;
     try {
-      await store.setSalaryOverride(empId, payPeriod, null);
+      await store.setSalaryOverride(empId, per, null);
       await renderPayroll($('payrollSearch')?.value || '');
       toast(ICONS.check + 'Финальная сумма убрана — вернулся расчёт по графику');
       closeModal(); payrollDialog(empId);
