@@ -19,7 +19,7 @@
 <meta name="theme-color" content="#0C0D10" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#EBE6DD" media="(prefers-color-scheme: light)">
 <script>(function(){try{var t=localStorage.getItem('milena-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-<link rel="stylesheet" href="styles.css?v=72">
+<link rel="stylesheet" href="styles.css?v=73">
 </head>
 <body>
 
@@ -184,7 +184,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=87"></script>
+<script type="module" src="app.js?v=88"></script>
 <!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
      без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
      index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —
@@ -192,6 +192,24 @@
      Так выкатки доходят до пользователей сами, без ⌘⇧R. version.txt не нужен —
      index.html всегда отдаётся сервером. -->
 <script>
+/* Перезагрузка, которую НЕ может обслужить кэш.
+   location.reload() в веб-приложении Safari (окно из Dock) разрешено отдать ту же
+   страницу из кэша: адрес не изменился. Тогда версия в DOM остаётся старой,
+   а guard 'vr<версия>' уже израсходован — окно застревает на старой версии
+   навсегда, и ни ⌘R, ни закрытие окна не помогают (случай Дарины 01.08.2026:
+   в обычном Safari новые цифры есть, в окне из Dock — нет).
+   Уходим на адрес с ?v=<версия сервера> — такого в кэше нет, браузер обязан
+   сходить на сервер. Хеш сохраняем: на нём держится роутинг экранов. */
+function hardReload(v) {
+  location.replace(location.pathname + '?v=' + v + location.hash);
+}
+/* и убираем ?v= из адреса, чтобы он не оставался в закладке/иконке Dock */
+(function () {
+  try {
+    if (/[?&]v=\d+/.test(location.search) && history.replaceState)
+      history.replaceState(null, '', location.pathname + location.hash);
+  } catch (e) {}
+})();
 (function () {
   try {
     var s = document.querySelector('script[src*="app.js?v="]');
@@ -204,10 +222,44 @@
         var m = html.match(/app\.js\?v=(\d+)/);
         if (m && +m[1] > +cur && !sessionStorage.getItem('vr' + m[1])) {
           sessionStorage.setItem('vr' + m[1], '1');
-          location.reload();
+          hardReload(m[1]);
         }
       }).catch(function () {});
   } catch (e) {}
+})();
+
+/* Проверка обновлений НЕ ТОЛЬКО при старте. Окно, добавленное в Dock, живёт
+   открытым часами: скрипт выше отрабатывает один раз при загрузке, и о новой
+   версии окно не узнаёт — Дарина видела старые цифры, пока не нажимала ⌘R.
+   Проверяем при возврате к окну и раз в 10 минут.
+   НЕ перезагружаем сами: человек может стоять посреди ввода суммы. Показываем
+   плашку, решение за ним. */
+(function () {
+  var shown = false;
+  function cur() {
+    var s = document.querySelector('script[src*="app.js?v="]');
+    return s && (s.getAttribute('src').match(/v=(\d+)/) || [])[1];
+  }
+  function check() {
+    if (shown || document.hidden) return;
+    var c = cur(); if (!c) return;
+    fetch(location.pathname + '?_ts=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (html) {
+        if (!html) return;
+        var m = html.match(/app\.js\?v=(\d+)/);
+        if (!m || +m[1] <= +c) return;
+        shown = true;
+        var b = document.createElement('button');
+        b.className = 'upd-bar';
+        b.innerHTML = 'Вышло обновление · <b>обновить</b>';
+        b.onclick = function () { hardReload(m[1]); };
+        document.body.appendChild(b);
+      }).catch(function () {});
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) check(); });
+  window.addEventListener('focus', check);
+  setInterval(check, 600000);
 })();
 </script>
 </body>
