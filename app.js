@@ -688,6 +688,23 @@ function partialMonthNote(e) {
 }
 // Возвращает false, если карточки с таким id нет: по ссылке #/kartochka/999
 // роутеру нужно отличить «открыл» от «нечего открывать» и увести в список.
+/* Переходы между экранами ПО ОДНОМУ ЧЕЛОВЕКУ. Раньше, чтобы посмотреть одного
+   сотрудника целиком, приходилось обойти четыре экрана и в каждом искать его по
+   имени заново. Теперь достаточно кнопки: экран открывается уже отфильтрованным
+   по нему. Фильтр ставим в то же поле поиска, которым пользуется человек, —
+   чтобы было видно, ПОЧЕМУ в списке одна строка, и легко сбросить. */
+function focusOn(screen, empId) {
+  const e = employees.find(x => x.id === empId); if (!e) return;
+  const key = String(e.fio || '').split(' ')[0];      // фамилии достаточно и она не ломает поиск пробелами
+  closeModal();
+  if (screen === 'schedule') { const i = $('schedSearch'); if (i) i.value = key; }
+  if (screen === 'payroll')  { const i = $('payrollSearch'); if (i) i.value = key; }
+  if (screen === 'employees'){ const i = $('empSearch'); if (i) i.value = key; }
+  go(screen);
+  if (screen === 'schedule') renderSchedule();
+  if (screen === 'employees') renderEmployees(key);
+}
+
 function openCard(id, replace) {
   const e = employees.find(x => x.id === id); if (!e) return false;
   const lines = activeLines(e).map(l => `<div class="line-row"><span class="pill ${l.line_type === 'основной' ? 'o' : 's'}">${l.line_type === 'основной' ? 'Основной' : 'Совмест.'}</span><div style="font-weight:700">${esc(lineLabel(l))}</div><span class="lv muted small">с ${esc(l.valid_from || '—')}</span></div>`).join('') || '<div class="empty" style="padding:20px">Строк начисления нет</div>';
@@ -2837,6 +2854,10 @@ async function payrollDialog(empId) {
       </div>
       <div class="msub">Записи не правятся: ошибку исправляют сторно — обе записи видны владельцу.${store.me()?.role === 'operator' ? ' Премию вносит владелец.' : ''}</div>` : ''}
     ${canEdit && recorded(r) ? `<div class="me-row" style="margin-top:10px"><span class="muted small">Начислили лишнего всем скопом?</span><button class="btn btn-ghost btn-sm" id="pmUndoAll">Убрать все выплаты за месяц</button></div>` : ''}
+    <div class="me-jump">
+      <button class="btn btn-ghost btn-sm" id="pmToCard">${ICONS.user || ''}Карточка</button>
+      <button class="btn btn-ghost btn-sm" id="pmToSched">${ICONS.calendar || ''}График</button>
+    </div>
     <label class="flbl" style="margin-top:12px">Кто внёс и когда</label>
     <div id="pmHist" class="pm-hist"><span class="muted small">загружаем…</span></div>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="pmClose">Закрыть</button></div>`);
@@ -2845,6 +2866,8 @@ async function payrollDialog(empId) {
   $('modalBox').querySelectorAll('.me-row.me-tap[data-kind]').forEach(el => el.onclick = () => editPayout(empId, per, el.dataset.kind, reopen));
   if ($('pmSalaryRow')) $('pmSalaryRow').onclick = () => editSalary(empId, per, r, reopen);
   if ($('pmUndoAll')) $('pmUndoAll').onclick = () => undoAllPayouts(empId, per, reopen);
+  if ($('pmToCard')) $('pmToCard').onclick = () => focusOn('employees', empId) || openCard(empId);
+  if ($('pmToSched')) $('pmToSched').onclick = () => focusOn('schedule', empId);
   $('pmClose').onclick = closeModal;
 
   const loadHist = async () => {
