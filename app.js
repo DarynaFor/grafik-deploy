@@ -2354,6 +2354,11 @@ const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.car
 // выдать». Разбивка по видам — в «Расчёте» (графы) и в окне человека.
 const cardTotal = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
 let payrollRows = [], payrollLines = [], payrollSeq = 0, payrollShown = null;
+// Норма часов месяца на «Расчёте» — та же v_month_norm, что и в графике.
+// Нужна, чтобы шапка окна человека говорила часами, а не днями: оклад теперь
+// считается от НОРМЫ и ФАКТА в часах (миграция 058), и дни к этому отношения
+// уже не имеют — «норма 12 дн · факт 11 дн» рядом с суммой сбивало с толку.
+let payrollNorms = new Map();
 
 async function renderPayroll(filter = '') {
   if (!isStaff()) { $('payrollTable').innerHTML = ''; return; }
@@ -2377,7 +2382,9 @@ async function renderPayroll(filter = '') {
   // брал prevShown = месяц, который никогда не грузился, — откат уводил бы ИМЕННО
   // в него, а ввод суммы записался бы туда же.
   let rows, lines;
-  try { [rows, lines] = await Promise.all([store.listPayroll(payPeriod), store.listPayrollLines(payPeriod)]); }
+  let norms = [];
+  try { [rows, lines, norms] = await Promise.all([store.listPayroll(payPeriod), store.listPayrollLines(payPeriod),
+    store.listMonthNorms(payPeriod).catch(e => { console.warn('listMonthNorms:', e); return []; })]); }   // норма не критична: ведомость должна открыться и без неё
   // Месяц не загрузился — откатываем payPeriod к тому, что РЕАЛЬНО лежит в
   // payrollRows (они при ошибке не обновились). Без отката любой следующий
   // drawPayroll — а его зовёт просто ввод в поиске и смена отделения — нарисовал
@@ -2398,6 +2405,7 @@ async function renderPayroll(filter = '') {
   if (seq !== payrollSeq) return;                       // пришёл ответ от старого месяца — игнорируем
   payrollShown = payPeriod;                             // теперь месяц ДЕЙСТВИТЕЛЬНО показан
   payrollRows = rows; payrollLines = lines;
+  payrollNorms = new Map((norms || []).map(n => [n.employee_id, n]));
   drawPayroll(filter);
   if (wrap) { wrap.scrollTop = keepTop; wrap.scrollLeft = keepLeft; }
 }
@@ -2676,6 +2684,53 @@ async function undoAllPayouts(empId, per, onDone) {
   } catch (err) { toast(err.message || err, true); }
 }
 
+/* Правка ИТОГОВОЙ зарплаты кликом по строке «Зарплата». Это та же «финальная
+   сумма вручную» (month_salary_override), что и в поле ниже, но открывается там,
+   где человек смотрит на неверную сумму — по просьбе Дарины, тем же жестом, что
+   и правка выплат.
+   ⚠ Отличие от выплат: здесь НЕ сторно. Выплата — событие («выдали 5-го»), её
+   нельзя стереть, только погасить встречной. А итоговая зарплата — не событие,
+   а решение «сколько человек заработал»; оно одно на месяц, и его меняют.
+   Каждое изменение и так видно владельцу в журнале. */
+async function editSalary(empId, per, r, onDone) {
+  const calc = (r.salary_kop || 0) / 100;
+  let cur = null;
+  try { cur = await store.getSalaryOverride(empId, per); } catch (e) {}
+  showModal2(`<h3>Зарплата за месяц</h3>
+    <div class="msub">${esc(periodLabel(per))} · сейчас <b>${rub(r.salary_kop)} ₽</b>${cur ? ' · задана вручную' : ' · посчитано по графику'}</div>
+    <label class="flbl">Итоговая зарплата</label>
+    <input class="input" id="esVal" inputmode="numeric" autocomplete="off" value="${fmt(Math.round(calc))}">
+    <input class="input" id="esNote" placeholder="причина (необязательно): напр. «по ведомости, без графика»" autocomplete="off" style="margin-top:8px">
+    <div class="msub" style="margin-top:8px">Своя сумма ЗАМЕНЯЕТ расчёт по графику — «осталось выдать» пересчитается от неё.
+      Изменение видно владельцу в журнале и в «Требует внимания».</div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost btn-sm" id="esNo">Отмена</button>
+      ${cur ? `<button class="btn btn-ghost btn-sm" id="esClear">Вернуть расчёт</button>` : ''}
+      <button class="btn btn-primary btn-sm" id="esOk">${ICONS.check}Сохранить</button></div>`);
+  $('esNo').onclick = closeModal2;
+  $('esVal').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('esOk').click(); } };
+  if (cur) $('esClear').onclick = async () => {
+    const b = $('esClear'); if (b.disabled) return; b.disabled = true;
+    try { await store.setSalaryOverride(empId, per, null); closeModal2();
+      toast(ICONS.check + 'Вернулся расчёт по графику'); if (onDone) await onDone(); }
+    catch (err) { b.disabled = false; toast(err.message || err, true); }
+  };
+  $('esOk').onclick = async () => {
+    const b = $('esOk'); if (b.disabled) return;
+    let v;
+    try { v = parseNum($('esVal').value, { thousands: true, field: 'сумму', max: RATE_ABSURD }); }
+    catch (err) { toast(err.message, true); return; }
+    if (v == null || v <= 0) { toast('Укажите сумму больше 0 (или «Вернуть расчёт»)', true); return; }
+    if (v > RATE_CONFIRM && !(await confirmBigAmounts([v]))) return;
+    b.disabled = true;
+    try {
+      await store.setSalaryOverride(empId, per, Math.round(v * 100), $('esNote').value.trim() || null);
+      closeModal2(); toast(ICONS.check + 'Зарплата ' + fmt(Math.round(v)) + ' ₽');
+      if (onDone) await onDone();
+    } catch (err) { b.disabled = false; toast(err.message || err, true); }
+  };
+}
+
 async function payrollDialog(empId) {
   const r = payrollRows.find(x => x.employee_id === empId); if (!r) return;
   // Месяц ФИКСИРУЕМ здесь и дальше пользуемся только `per`. Ниже два запроса к
@@ -2727,9 +2782,16 @@ async function payrollDialog(empId) {
   // идёт в ведомости; специальность из карточки. emp может не найтись (список
   // карточек урезан ролью) — тогда останется одно ФИО, без строки специальности.
   showModal(`${personHead({ fio: r.fio, specialty_id: emp?.specialty_id },
-      `${esc(periodLabel(per))} · норма ${r.norm_days} дн · факт ${r.fact_days} дн`)}
+      `${esc(periodLabel(per))} · ${(() => {
+        const n = payrollNorms.get(empId), nh = n && n.hours != null ? parseFloat(n.hours) : null;
+        const fh = Number(r.fact_hours) || 0;
+        // Часы — если норма задана. Иначе дни, как было: у сменщиков без нормы
+        // говорить «норма — ч» бессмысленно, а дни им как раз о чём-то говорят.
+        return nh != null ? `норма ${fmtH(nh)} · факт ${fmtH(fh)}`
+                          : `норма ${r.norm_days} дн · факт ${r.fact_days} дн`;
+      })()}`)}
     <div class="rc-diff">${breakdown}${pct}
-      <div class="me-row me-sum"><span>Зарплата${r.flag_manual_salary ? ' · <b class="jact">вручную</b>' : ''}</span><b>${rub(r.salary_kop)} ₽</b></div>
+      <div class="me-row me-sum${canEdit ? ' me-tap' : ''}"${canEdit ? ' id="pmSalaryRow" title="Задать итоговую зарплату вручную"' : ''}><span>Зарплата${r.flag_manual_salary ? ' · <b class="jact">вручную</b>' : ''}</span><b>${rub(r.salary_kop)} ₽</b>${canEdit ? `<span class="me-pen">${ICONS.pencil || '✎'}</span>` : ''}</div>
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
       ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
       ${payRow('Расчёт на карту (увольнение)', r.card_uvol_kop, 'card_uvol', canEdit)}
@@ -2769,7 +2831,8 @@ async function payrollDialog(empId) {
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="pmClose">Закрыть</button></div>`);
   $('modalBox').dataset.guard = '1';                    // деньги — не закрывать случайным кликом
   const reopen = async () => { await renderPayroll($('payrollSearch')?.value || ''); closeModal(); payrollDialog(empId); };
-  $('modalBox').querySelectorAll('.me-row.me-tap').forEach(el => el.onclick = () => editPayout(empId, per, el.dataset.kind, reopen));
+  $('modalBox').querySelectorAll('.me-row.me-tap[data-kind]').forEach(el => el.onclick = () => editPayout(empId, per, el.dataset.kind, reopen));
+  if ($('pmSalaryRow')) $('pmSalaryRow').onclick = () => editSalary(empId, per, r, reopen);
   if ($('pmUndoAll')) $('pmUndoAll').onclick = () => undoAllPayouts(empId, per, reopen);
   $('pmClose').onclick = closeModal;
 
