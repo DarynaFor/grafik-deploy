@@ -51,6 +51,25 @@ export const SHIFT_KINDS = [
 ];
 export const shiftKind = code => SHIFT_KINDS.find(k => k.code === code) || null;
 
+/* Производственный календарь РФ 2026 для ДЕМО — зеркало таблицы prod_norm
+   (migrations/056). В проде календарь живёт в базе и правится владельцем; здесь
+   он вшит, чтобы демо показывало те же числа, что прод. Сходится сам с собой:
+   247 рабочих дней × 8 ч − 4 предпраздничных часа = 1972 ч за год при 40-часовой. */
+const PROD_NORM_2026 = {
+  '2026-01': { '40': 120.0, '36': 108.0, '24':  72.0 },
+  '2026-02': { '40': 152.0, '36': 136.8, '24':  91.2 },
+  '2026-03': { '40': 168.0, '36': 151.2, '24': 100.8 },
+  '2026-04': { '40': 175.0, '36': 157.4, '24': 104.6 },
+  '2026-05': { '40': 151.0, '36': 135.8, '24':  90.2 },
+  '2026-06': { '40': 167.0, '36': 150.2, '24':  99.8 },
+  '2026-07': { '40': 184.0, '36': 165.6, '24': 110.4 },
+  '2026-08': { '40': 168.0, '36': 151.2, '24': 100.8 },
+  '2026-09': { '40': 176.0, '36': 158.4, '24': 105.6 },
+  '2026-10': { '40': 176.0, '36': 158.4, '24': 105.6 },
+  '2026-11': { '40': 159.0, '36': 143.0, '24':  95.0 },
+  '2026-12': { '40': 176.0, '36': 158.4, '24': 105.6 },
+};
+
 const DEMO_SEED = {
   specialties: [
     { id: 1, name: 'Врач-терапевт', category: 'Врачи' },
@@ -142,7 +161,7 @@ export class MockStore {
   async updateEmployee(id, patch, newLines) {
     const e = this.db.employees.find(x => x.id === id);
     if (!e) throw new Error('Карточка не найдена');
-    for (const f of ['fio', 'position', 'phone', 'specialty_id', 'status', 'hired_on', 'left_on']) {
+    for (const f of ['fio', 'position', 'phone', 'specialty_id', 'status', 'hired_on', 'left_on', 'week_hours']) {
       if (patch[f] !== undefined && patch[f] !== e[f]) {
         this._log('updated', 'employee', id, f, String(e[f] ?? ''), String(patch[f] ?? ''));
         e[f] = patch[f];
@@ -437,6 +456,39 @@ export class MockStore {
     this._save(); return { ...row };
   }
   _dayClosed(wd) { return (this.db.closed || []).some(d => d.work_date === wd); }
+  // Нормы часов месяца — зеркало v_month_norm (migrations/056): ручное
+  // переопределение → производственный календарь РФ по типу недели → ничего.
+  async listMonthNorms(period) {
+    const per = period + '-01';
+    const cal = PROD_NORM_2026[period] || null;
+    return this.db.employees.filter(e => e.status !== 'archived').map(e => {
+      const wk = e.week_hours == null ? null : parseFloat(e.week_hours);
+      const calH = cal && wk != null ? cal[String(wk)] ?? null : null;
+      const man = (this.db.monthNorms || []).find(n => n.employee_id === e.id && n.period === per);
+      return { employee_id: e.id, period: per, hours: man ? man.hours : calH,
+        is_manual: !!man, week_hours: wk, calendar_hours: calH };
+    });
+  }
+  async setMonthNorm(employee_id, period, hours) {
+    this.db.monthNorms = this.db.monthNorms || [];
+    const per = period + '-01';
+    const cur = this.db.monthNorms.find(n => n.employee_id === employee_id && n.period === per);
+    const e = this.db.employees.find(x => x.id === employee_id);
+    const old = cur ? String(cur.hours) : null;
+    if (cur) cur.hours = hours; else this.db.monthNorms.push({ employee_id, period: per, hours });
+    this._log('updated', 'employee_month_norm', employee_id, `${e ? e.fio : '?'} · ${period} · норма часов`, old, String(hours));
+    this._save(); return { employee_id, period: per, hours };
+  }
+  async clearMonthNorm(employee_id, period) {
+    this.db.monthNorms = this.db.monthNorms || [];
+    const per = period + '-01';
+    const i = this.db.monthNorms.findIndex(n => n.employee_id === employee_id && n.period === per);
+    if (i < 0) return null;
+    const [row] = this.db.monthNorms.splice(i, 1);
+    const e = this.db.employees.find(x => x.id === employee_id);
+    this._log('updated', 'employee_month_norm', employee_id, `${e ? e.fio : '?'} · ${period} · норма часов`, String(row.hours), 'по календарю');
+    this._save(); return row;
+  }
   async listClosedDays(period) {                         // множество закрытых дат месяца 'YYYY-MM'
     const pre = period + '-';
     return (this.db.closed || []).filter(d => String(d.work_date).startsWith(pre)).map(d => d.work_date);
@@ -517,6 +569,9 @@ export function lineLabel(l) {
   const kind = l.pay_kind;
   if (kind === 'процент') return `${l.line_type} · процент ${l.percent ?? '?'} %`;
   if (kind === '12ч') return `${l.line_type} · 12ч день ${l.amount ?? '?'} / ночь ${l.amount_night ?? '?'} ₽`;
+  // Зеркало rate_label() в БД (migrations/055): у «сдельно» суммы в ставке НЕТ,
+  // иначе метка печаталась бы «сдельно ? ₽» и читалась как потерянная ставка.
+  if (kind === 'сдельно') return `${l.line_type} · сдельно (сумму за месяц вписывают вручную)`;
   const unit = { 'оклад': '₽/мес', 'фикс': '₽/мес', 'сутки': '₽/смена', 'почасово': '₽/час' }[kind] || '₽';
   return `${l.line_type} · ${kind} ${l.amount ?? '?'} ${unit}`;
 }
@@ -546,7 +601,12 @@ export function employeeError(err) {
 
 const RATE_ERRORS = [
   ['rate_line_amount_sane_chk', 'Сумма вне разумных границ (больше 0 и не больше 100 000 000 ₽)'],
-  ['rate_line_kind_amount_chk', 'Для «12ч» нужны обе ставки — дневная и ночная; для процента — значение от 1 до 100'],
+  ['rate_line_kind_amount_chk', 'Поля не соответствуют виду оплаты: для «12ч» нужны обе ставки — дневная и ночная; для процента — от 1 до 100; у «сдельно» суммы быть не должно'],
+  // Эти два ловят случай «приложение выложили раньше, чем накатили 055»:
+  // база ещё не знает вида «сдельно», и без перевода Милена получила бы
+  // сырое английское «violates check constraint» в тосте на 2.8 секунды.
+  ['rate_line_pay_kind_check', 'База ещё не знает вид оплаты «Сдельно» — нужна миграция 055. Скажите об этом разработчику'],
+  ['rate_line_check', 'База ещё не знает вид оплаты «Сдельно» — нужна миграция 055. Скажите об этом разработчику'],
   ['rate_line_range_chk',       'Новая ставка не может действовать раньше той, что уже стоит'],
   ['rate_line_one_active_primary', 'У сотрудника уже есть основная строка начисления. Лишние сделайте «Совместитель»'],
   ['Ставку нельзя править напрямую', 'Ставку нельзя править напрямую — заведите новую через смену ставки'],
@@ -803,6 +863,29 @@ export class SupabaseStore {
     const { data: ins, error: e2 } = await this.sb.from('schedule')   // вышел без плана — новая строка
       .insert({ employee_id: employeeId, work_date, fact, source: 'manual', updated_by: this.user.id }).select().single();
     if (e2) throw e2; return ins;
+  }
+  // Нормы часов месяца. Считает БАЗА (v_month_norm, migrations/056): ручное
+  // переопределение → производственный календарь по типу недели из карточки.
+  // Одним запросом на месяц — иначе 119 вызовов employee_norm_hours().
+  async listMonthNorms(period) {
+    const { data, error } = await this.sb.from('v_month_norm')
+      .select('employee_id, hours, is_manual, week_hours, calendar_hours').eq('period', period + '-01');
+    if (error) throw error; return data || [];
+  }
+  // Переопределение на (человек, месяц) — редактируемое, одна строка. set_by
+  // ставим сами: RLS emn_wr требует set_by = auth.uid() (нельзя от чужого имени).
+  async setMonthNorm(employee_id, period, hours) {
+    const { data, error } = await this.sb.from('employee_month_norm')
+      .upsert({ employee_id, period: period + '-01', hours, set_by: this.user.id }, { onConflict: 'employee_id,period' })
+      .select().single();
+    if (error) throw new Error(employeeError(error));
+    return data;
+  }
+  async clearMonthNorm(employee_id, period) {
+    const { error } = await this.sb.from('employee_month_norm')
+      .delete().eq('employee_id', employee_id).eq('period', period + '-01');
+    if (error) throw new Error(employeeError(error));
+    return true;
   }
   async listClosedDays(period) {                         // множество закрытых дат месяца 'YYYY-MM'
     const start = period + '-01';

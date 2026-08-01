@@ -303,9 +303,17 @@ body.authed .login-stage{display:none}
 .gr-cell.f-rest{background:var(--fill-2)}
 .gr-cell.k-vac{background:rgba(183,155,255,.22);color:var(--violet-d,#6d5bd0)}
 .gr-cell.sc2.ro{cursor:default}
-/* сводка справа: Смен · План · Факт · Δ */
+/* сводка справа: Смен · Норма · Факт · Δ */
 .gr-day.sum{font-size:9px;letter-spacing:0}
 .gr-sum{padding:6px 4px;text-align:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--hair);font-variant-numeric:tabular-nums;font-weight:700;font-size:11px;color:var(--ink-2);display:flex;align-items:center;justify-content:center;background:var(--surf-1)}
+/* норма правится кликом (владелец/СЕО) — показываем это курсором и подсветкой */
+.gr-sum.s-norm.tap{cursor:pointer;transition:.12s}
+.gr-sum.s-norm.tap:hover{background:var(--fill-hi);color:var(--green)}
+/* норма, правленная рукой: календарное и ручное число обязаны отличаться на
+   вид — иначе «184» и «180» выглядят одинаково достоверно. Точка, а не цвет:
+   цветом в этой сетке говорят факт/расхождение, занимать его нельзя. */
+.gr-sum.s-norm.n-man{position:relative}
+.gr-sum.s-norm.n-man::after{content:"";position:absolute;top:4px;right:4px;width:4px;height:4px;border-radius:50%;background:var(--amber-d)}
 .gr-sum.s-fact{color:var(--green-d)}
 .gr-sum.s-delta.neg{color:var(--red-d)}
 .gr-sum.s-delta.pos{color:var(--amber-d,#b7791f)}

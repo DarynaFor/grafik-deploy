@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=56';
+import { makeStore, lineLabel, sameRate } from './store.js?v=71';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -60,7 +60,12 @@ const catShift = cat => hashStr('~' + cat) % 12;
 const catColor = cat => `hsl(${catHue(cat)}, 56%, ${50 + catShift(cat)}%)`;   // точка/полоска: 50–61%
 const catTint = cat => `hsl(${catHue(cat)}, 58%, ${85 + (catShift(cat) >> 1)}%)`;   // аватарка (пастель): 85–90%
 const initials = f => String(f || '?').split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase();
-const PAY_KINDS = [['оклад', 'Оклад'], ['фикс', 'Фикс/мес'], ['сутки', 'Сутки'], ['12ч', '12ч день / ночь'], ['почасово', 'Почасово'], ['процент', 'Процент']];
+// «сдельно» — единственный вид БЕЗ суммы в ставке (migrations/055). Это пометка
+// «этому человеку сумму называют готовым числом каждый месяц»; сама сумма живёт
+// в «Финальной сумме вручную» (month_salary_override, 049) — второго механизма
+// денег не заводим. Пометка отвечает на вопрос «почему у него вписано руками»:
+// без неё ручная сумма у окладника (ошибка) выглядит так же, как у сдельщика.
+const PAY_KINDS = [['оклад', 'Оклад'], ['фикс', 'Фикс/мес'], ['сутки', 'Сутки'], ['12ч', '12ч день / ночь'], ['почасово', 'Почасово'], ['процент', 'Процент'], ['сдельно', 'Сдельно (сумма за месяц)']];
 const payKindLabel = k => (PAY_KINDS.find(p => p[0] === k) || [k, k])[1];
 const fmtDT = iso => { const d = new Date(iso); return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
 const fmt = n => Number(n || 0).toLocaleString('ru-RU');            // 80000 → «80 000» (деньги, ставки)
@@ -756,6 +761,9 @@ function lineBlockHtml(l) {
 function renderLineFields(blk, l) {
   const kind = blk.querySelector('.lb-pay').value, box = blk.querySelector('.lb-fields');
   if (kind === 'процент') box.innerHTML = `<label class="flbl" style="margin-top:0">Процент %</label><input class="input lb-percent" inputmode="decimal" value="${l?.percent ?? ''}" placeholder="напр. 35">`;
+  // Сдельно: поля ставки нет намеренно. Была бы сумма и здесь, и в «Финальной
+  // сумме вручную» — стало бы два источника правды и вечный вопрос, какой верен.
+  else if (kind === 'сдельно') box.innerHTML = `<label class="flbl" style="margin-top:0">Сумма</label><div class="msub" style="margin-top:6px">Вписывается каждый месяц на экране «Расчёт» → «Финальная сумма вручную». Здесь ставка не нужна.</div>`;
   else if (kind === '12ч') box.innerHTML = `<div class="frow"><div><label class="flbl" style="margin-top:0">День ₽</label><input class="input lb-amount" inputmode="numeric" value="${l?.amount ?? ''}" placeholder="2500"></div><div><label class="flbl" style="margin-top:0">Ночь ₽</label><input class="input lb-night" inputmode="numeric" value="${l?.amount_night ?? ''}" placeholder="3000"></div></div>`;
   else box.innerHTML = `<label class="flbl" style="margin-top:0">Ставка ₽ ${(kind === 'оклад' || kind === 'фикс') ? '/мес' : kind === 'сутки' ? '/смена' : '/час'}</label><input class="input lb-amount" inputmode="numeric" value="${l?.amount ?? ''}" placeholder="напр. 50 000">`;
 }
@@ -783,6 +791,10 @@ function checkRate(l) {
     if (l.percent <= 0 || l.percent > 100) throw new Error('Процент должен быть больше 0 и не больше 100');
     return l;
   }
+  // Сдельно — единственный вид БЕЗ суммы. Чистим все три поля, чтобы в базу не
+  // уехал хвост от прежнего вида оплаты: rate_line_kind_amount_chk (055) требует
+  // у «сдельно» ровно пустые amount/amount_night/percent.
+  if (l.pay_kind === 'сдельно') { l.amount = null; l.amount_night = null; l.percent = null; return l; }
   if (l.amount == null) throw new Error('Укажите сумму ставки');
   if (l.amount <= 0) throw new Error('Ставка должна быть больше 0');
   // Верхнюю границу (абсурд, RATE_ABSURD=100 млн) держит parseNum через opts.max
@@ -1573,6 +1585,10 @@ function plural(n, one, few, many) {
 const dm = d => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || '')); return m ? `${m[3]}.${m[2]}.${m[1].slice(2)}` : String(d || ''); };
 const periodLabel = p => { const [y, m] = p.split('-').map(Number); return MONTHS_RU[m] + ' ' + y; };
 const daysInMonth = p => { const [y, m] = p.split('-').map(Number); return new Date(y, m, 0).getDate(); };
+// 1-е число СЛЕДУЮЩЕГО месяца, 'YYYY-MM-DD'. Нужен, чтобы сравнивать период со
+// ставками так же, как это делает база: `valid_from < period + interval '1 mon'`.
+// ISO-даты сравниваются лексикографически — это и есть сравнение по дате.
+const nextPeriodStart = p => { let [y, m] = p.split('-').map(Number); if (++m > 12) { m = 1; y++; } return y + '-' + String(m).padStart(2, '0') + '-01'; };
 const cellDate = day => curPeriod + '-' + String(day).padStart(2, '0');
 const cellOf = (empId, day) => scheduleRows.find(s => s.employee_id === empId && s.work_date === cellDate(day));
 // Гос. праздники РФ — ТОЛЬКО фиксированные по ТК РФ ст.112 (одни и те же каждый год),
@@ -1657,6 +1673,11 @@ function schedCellInner(c, past) {                                  // соде�
   return `<span class="iv mini faint">${esc(planTxt)}</span>`;      // выходной/отпуск по плану — просто план тускло
 }
 let closedDays = new Set();               // закрытые даты текущего месяца (лок табеля)
+// Нормы часов месяца: employee_id → {hours, is_manual, week_hours, calendar_hours}.
+// Считает БАЗА (v_month_norm, migrations/056): норма = ручное переопределение,
+// иначе производственный календарь РФ по типу недели из карточки. Одним запросом
+// на месяц, а не вызовом функции на каждого из 119 человек.
+let monthNorms = new Map();
 let redRemarks = [];                      // «красные замечания» владельцу: ретро-правки после закрытия
 // renderSchedule — грузит данные месяца из сети, затем рисует. drawSchedule — только рисует
 // из уже загруженных scheduleRows + текущих фильтров (мгновенно, без сети → без гонок/мерцания).
@@ -1672,7 +1693,8 @@ async function renderSchedule() {
   if (schedShown !== curPeriod) { $('scheduleGrid').innerHTML = '<div class="empty">Загружаем график…</div>'; if ($('mLabel')) $('mLabel').textContent = periodLabel(curPeriod); }
   const seq = ++schedSeq;                 // защита от гонки: быстрое переключение месяцев даёт несколько запросов
   try {
-    const [rows, kinds, closed] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds(), store.listClosedDays(curPeriod)]);
+    const [rows, kinds, closed, norms] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds(), store.listClosedDays(curPeriod),
+      store.listMonthNorms(curPeriod).catch(e => { console.warn('listMonthNorms:', e); return []; })]);   // норма — не критично: график должен открыться и без неё
     if (seq !== schedSeq) return;         // ответ пришёл не для текущего запроса — отбрасываем (иначе чужой месяц перетрёт)
     const remarks = isOwner() ? await store.listRedRemarks().catch(e => { console.warn('listRedRemarks:', e); return []; }) : [];   // ретро-правки — видит только владелец
     if (seq !== schedSeq) return;
@@ -1682,6 +1704,7 @@ async function renderSchedule() {
     // старым. Тогда откат по ошибке рисовал старый месяц чужими строками — сетка
     // выходила ПУСТОЙ, и владелец «дозаполнял» месяц, который на самом деле полон.
     scheduleRows = rows; shiftKinds = kinds; closedDays = new Set(closed); redRemarks = remarks;
+    monthNorms = new Map((norms || []).map(n => [n.employee_id, n]));   // сюда же: то же правило «после последнего await»
     schedShown = curPeriod;
     drawSchedule();
   } catch (e) {
@@ -1707,6 +1730,10 @@ function drawSchedule() {
   // НАПРЯМУЮ, каждая правка — в журнал (закрытие ещё показывается, но не блокирует).
   // Вернём ретро-по-СМС отдельной задачей. Пока — доверенные роли правят любой день.
   const canEditDay = d => ['owner', 'operator', 'ceo'].includes(meRole);
+  // Тип недели живёт в карточке (employee.week_hours), а карточку правят владелец и
+  // СЕО (RLS emp_update, 035). Показываем «клик» ровно тем, кого пустит база —
+  // иначе Алёна тыкала бы в поле и получала отказ.
+  const canEditNorm = ['owner', 'ceo'].includes(meRole);
   const todayD = (nowPeriod() === curPeriod) ? mskNow().getUTCDate() : 0;
   const active = employees.filter(e => e.status !== 'archived');
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
@@ -1749,7 +1776,11 @@ function drawSchedule() {
     const title = hol ? (hint ? hol + ' · ' + hint : hol) : hint;   // название праздника — в подсказке
     head += `<div class="gr-day${d === todayD ? ' today' : ''}${isClosed(d) ? ' dlock' : ''}${mk}${anyEdit ? ' tapday' : ''}" data-day="${d}" title="${esc(title)}">${d}${hol ? '<i class="holdot"></i>' : ''}${isClosed(d) ? `<i class="dlockmark">${ICONS.lock}</i>` : ''}</div>`;
   }
-  head += '<div class="gr-day sum">Смен</div><div class="gr-day sum">План</div><div class="gr-day sum">Факт</div><div class="gr-day sum" title="факт − план за прошедшие дни">Δ</div>';
+  // «Норма» вместо суммы плановых часов (migrations/056): у администраторов и
+  // колл-центра норма — договорённость (180 ч), а не то, что успели расставить в
+  // табеле. Δ при этом СТАВИТ прежний вопрос — «вышел ли так, как назначено», —
+  // и потому по-прежнему считается от плана, а не от нормы.
+  head += '<div class="gr-day sum">Смен</div><div class="gr-day sum" title="норма часов в месяц — задаётся вручную">Норма</div><div class="gr-day sum">Факт</div><div class="gr-day sum" title="факт − план за прошедшие дни">Δ</div>';
   let rows = '', shown = 0;
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
@@ -1759,23 +1790,35 @@ function drawSchedule() {
     for (const e of list) {
       shown++;
       rows += `<div class="gr-name${editable ? ' tap' : ''}" data-emp="${e.id}" title="${editable ? 'Шаблон на месяц: ' : ''}${esc(e.fio)}" style="box-shadow:inset 3px 0 0 ${catColor(cat)}">${esc(e.fio)}</div>`;
-      let planM = 0, planPast = 0, factPast = 0, cnt = 0;
+      let planPast = 0, factPast = 0, cnt = 0;
       for (let d = 1; d <= nd; d++) {
         const c = cget(e.id, d), pst = pastDay(d);
         const empty = !(c && (c.plan_kind || (c.fact ?? null) !== null));
-        planM += planHoursOf(c);
         if (pst) { planPast += planHoursOf(c); const fh = factHoursOf(c); factPast += fh; if (fh > 0) cnt++; }
         const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
         const addable = empty && canEditDay(d) && (pst || d === todayD);   // пустая клетка прошлого/сегодня, куда можно ДОБАВИТЬ смену (замена) — подсказка «+»
         rows += `<div class="gr-cell sc2${bg}${c && c.plan_kind === 'отпуск' ? ' k-vac' : ''}${addable ? ' addable' : ''}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
       }
       const delta = factPast - planPast, ds = Math.abs(delta) < 0.05 ? '0' : (delta > 0 ? '+' : '−') + fmtH(Math.abs(delta));
-      rows += `<div class="gr-sum">${cnt}</div><div class="gr-sum">${fmtH(planM)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}">${ds}</div>`;
+      // numeric из Supabase приходит строкой — parseFloat обязателен
+      const nrm = monthNorms.get(e.id), nh = nrm && nrm.hours != null ? parseFloat(nrm.hours) : null;
+      const nMan = !!(nrm && nrm.is_manual);
+      const nCal = nrm && nrm.calendar_hours != null ? parseFloat(nrm.calendar_hours) : null;
+      const nTitle = nh == null ? 'Норма не задана: нет ни типа рабочей недели, ни своего числа. Клик — задать'
+        : !nMan ? 'Норма по производственному календарю РФ. Клик — изменить'
+        : nCal != null ? `Норма задана вручную (по календарю ${fmtH(nCal)}). Клик — изменить`
+        : 'Норма задана вручную: сменный график, календарь для него нормы не даёт. Клик — изменить';
+      rows += `<div class="gr-sum">${cnt}</div><div class="gr-sum s-norm${nMan ? ' n-man' : ''}${canEditNorm ? ' tap' : ''}" data-emp="${e.id}" title="${esc(canEditNorm ? nTitle : nTitle.replace(/\. Клик.*$/, ''))}">${nh == null ? '<span class="muted">—</span>' : fmtH(nh)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}">${ds}</div>`;
     }
   }
   const grid = $('scheduleGrid');
+  // Колонка «Норма» — крайняя справа: чтобы кликнуть по ней, таблицу домотали
+  // вправо. innerHTML ниже сбрасывает scrollLeft, и после каждого сохранения
+  // норму пришлось бы искать заново — на 119 людях это неработоспособно.
+  const wrap = grid.closest('.gridwrap'), keepL = wrap ? wrap.scrollLeft : 0, keepT = wrap ? wrap.scrollTop : 0;
   grid.style.gridTemplateColumns = `150px repeat(${nd}, minmax(44px, 1fr)) repeat(4, minmax(46px, auto))`;
   grid.innerHTML = shown ? head + rows : `<div class="empty" style="padding:40px">${active.length ? 'Никого не найдено' : 'Нет сотрудников'}</div>`;
+  if (wrap) { wrap.scrollLeft = keepL; wrap.scrollTop = keepT; }
   if (anyEdit) {
     grid.querySelectorAll('.gr-cell').forEach(cell => cell.onclick = () => {
       const emp = +cell.dataset.emp, d = +cell.dataset.day;
@@ -1785,6 +1828,77 @@ function drawSchedule() {
     grid.querySelectorAll('.gr-day.tapday').forEach(h => h.onclick = () => scheduleDayDialog(+h.dataset.day));
   }
   if (editable) grid.querySelectorAll('.gr-name.tap').forEach(n => n.onclick = () => scheduleTemplateDialog(+n.dataset.emp));
+  if (canEditNorm) grid.querySelectorAll('.s-norm.tap').forEach(n => n.onclick = () => normDialog(+n.dataset.emp));
+}
+/* Норма часов месяца. Решение Дарины 31.07: «проставить по календарю РФ, но с
+   возможностью исправить вручную на клетке». Отсюда два поля в одном диалоге:
+     • ТИП НЕДЕЛИ — свойство человека (40/36/24 или сменный график). По нему
+       календарь (prod_norm) сам даёт норму КАЖДОГО месяца — проставлять руками
+       12 раз в году не нужно;
+     • НОРМА НА ЭТОТ МЕСЯЦ — исключение (неполный месяц, больничный). Пусто =
+       берём календарную. Это и есть «правка на клетке».
+   ⚠ Норма ДОЛЖНА влиять на деньги (оплата = ставка / норма × факт — так считают
+   в клинике), но база сегодня считает оклад по ДНЯМ графика (v_month_salary/044).
+   Переход на часовую формулу — отдельная работа; см. шапку migrations/056.
+   ⚠ Не путать с колонкой norm_hours в v_month_total — там сумма ПЛАНОВЫХ часов
+   по расставленным сменам, другая величина, они нигде не соединяются. */
+const WEEK_KINDS = [['', 'Сменный график (нормы нет)'], ['40', '40 часов'], ['36', '36 часов'], ['24', '24 часа']];
+function normDialog(empId) {
+  const e = employees.find(x => x.id === empId); if (!e) return;
+  const n = monthNorms.get(empId) || {};
+  const cal = n.calendar_hours == null ? null : parseFloat(n.calendar_hours);
+  const man = n.is_manual ? parseFloat(n.hours) : null;
+  const wk = e.week_hours == null ? '' : String(parseFloat(e.week_hours));
+  const opts = WEEK_KINDS.map(k => `<option value="${k[0]}" ${wk === k[0] ? 'selected' : ''}>${k[1]}</option>`).join('');
+  showModal(`<h3>Норма часов</h3>
+    <div class="msub">${esc(e.fio)} · ${esc(periodLabel(curPeriod))}</div>
+    <label class="flbl">Рабочая неделя</label>
+    <select class="input" id="nhWeek">${opts}</select>
+    <div class="msub" style="margin-top:6px">Норму каждого месяца по этому типу недели берём из производственного календаря РФ — вручную проставлять не нужно.</div>
+    <label class="flbl">Норма на ${esc(periodLabel(curPeriod))}</label>
+    <input class="input" id="nhVal" inputmode="decimal" value="${man == null ? '' : esc(String(man))}" placeholder="${cal == null ? 'по календарю нормы нет' : 'по календарю ' + esc(String(cal))}" autocomplete="off">
+    <div class="msub" style="margin-top:6px">${cal == null
+        ? 'Сменный график — календарь нормы не даёт. Впишите своё число (например 180 = 15 смен × 12 ч) или выберите неделю выше.'
+        : `Пусто — берём календарные <b>${esc(fmtH(cal))}</b>. Своё число нужно для исключений: приняли или уволили в середине месяца, длинный больничный.`}
+      Пока на расчёт не влияет: зарплата считается по дням графика, переход на часы — отдельная задача. Изменение попадёт в журнал.</div>
+    <div class="modal-foot">
+      ${man != null ? `<button class="btn btn-ghost btn-sm" id="nhReset">Вернуть календарную</button>` : ''}
+      <button class="btn btn-ghost btn-sm" id="nhCancel">Отмена</button>
+      <button class="btn btn-primary btn-sm" id="nhSave">${ICONS.check}Сохранить</button></div>`);
+  $('nhCancel').onclick = closeModal;
+  $('nhVal').onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); $('nhSave').click(); } };
+  // Перерисовываем только график и только после перезагрузки норм. Полный
+  // refresh() тянул бы сотрудников/справочники/ставки/журнал ради одного числа,
+  // а drawSchedule сохраняет прокрутку — иначе после каждого сохранения таблицу
+  // пришлось бы доматывать вправо заново (колонка «Норма» — крайняя).
+  const redraw = async () => { await renderSchedule(); };
+  if (man != null) $('nhReset').onclick = async () => {
+    const b = $('nhReset'); if (b.disabled) return; b.disabled = true;
+    try { await store.clearMonthNorm(empId, curPeriod); closeModal(); await redraw(); toast(ICONS.check + 'Вернули норму по календарю'); }
+    catch (err) { b.disabled = false; toast(err.message || err, true); }
+  };
+  $('nhSave').onclick = async () => {
+    const btn = $('nhSave'); if (btn.disabled) return;
+    let v;
+    try { v = parseNum($('nhVal').value, { field: 'норму (часов в месяц)' }); }   // пусто → null = вернуть календарную
+    catch (err) { toast(err.message, true); return; }
+    // Границы те же, что emn hours check (migrations/056): 744 = 31 сутки × 24 ч.
+    if (v != null && (v <= 0 || v > 744)) { toast('Норма — больше 0 и не больше 744 часов в месяц', true); return; }
+    const newWk = $('nhWeek').value === '' ? null : parseFloat($('nhWeek').value);
+    const oldWk = e.week_hours == null ? null : parseFloat(e.week_hours);
+    btn.disabled = true;
+    try {
+      if (newWk !== oldWk) await store.updateEmployee(empId, { week_hours: newWk });
+      if (v !== man) {
+        if (v == null) await store.clearMonthNorm(empId, curPeriod);
+        else await store.setMonthNorm(empId, curPeriod, v);
+      }
+      closeModal();
+      if (newWk !== oldWk) await refresh();          // тип недели живёт в карточке — обновляем и её
+      else await redraw();
+      toast(ICONS.check + 'Норма сохранена');
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
 }
 // Закрытие/открытие дня табеля. Закрытый день лочит клетки от оператора (правит владелец / Алёна по СМС в 5б).
 function scheduleDayDialog(day) {
@@ -2001,11 +2115,16 @@ function rtFields(kind, l) {
   const has = l && l.pay_kind === kind;
   if (kind === 'процент') return `<input class="input rt-a" inputmode="decimal" value="${has ? (l.percent ?? '') : ''}" placeholder="%">`;
   if (kind === '12ч') return `<input class="input rt-a" inputmode="numeric" value="${has ? (l.amount ?? '') : ''}" placeholder="день ₽"><input class="input rt-b" inputmode="numeric" value="${has ? (l.amount_night ?? '') : ''}" placeholder="ночь ₽">`;
+  if (kind === 'сдельно') return `<span class="muted small">сумму вписывают на «Расчёте»</span>`;
   return `<input class="input rt-a" inputmode="numeric" value="${has ? (l.amount ?? '') : ''}" placeholder="сумма ₽">`;
 }
 function rtRow(e) {
   const l = primaryLine(e), kind = l?.pay_kind || 'оклад';
-  const opts = RT_KINDS.map(k => `<option value="${k[0]}" ${kind === k[0] ? 'selected' : ''}>${k[1]}</option>`).join('');
+  // «фикс» и «сдельно» на этом экране не заводят (он для массовой простановки
+  // ставок), но если такой вид уже стоит — его надо ПОКАЗАТЬ. Иначе select молча
+  // показывал бы «Оклад», и сохранение строки подменяло бы вид оплаты.
+  const kinds = RT_KINDS.some(k => k[0] === kind) ? RT_KINDS : [[kind, payKindLabel(kind)], ...RT_KINDS];
+  const opts = kinds.map(k => `<option value="${k[0]}" ${kind === k[0] ? 'selected' : ''}>${k[1]}</option>`).join('');
   const cur = l ? `<span class="pill o">${esc(lineLabel(l))}</span>` : `<span class="pill k">нет ставки</span>`;
   return `<div class="rate-row" data-id="${e.id}">
     <div class="rate-name">${esc(e.fio)}<div class="sub">${esc(specName(e.specialty_id))} · ${cur}</div></div>
@@ -2140,8 +2259,11 @@ function renderRates(filter = '') {
 const J_ENTITY = { employee: 'Карточка', rate_line: 'Ставка', specialty: 'Специальность', app_user: 'Пользователь',
   // без этих подписей владелец видел сырое «money_line · cash: 5000.00» вместо человеческой строки
   money_line: 'Деньги', patient_payment: 'Оплата пациента', calc_rule: 'Правило расчёта',
-  schedule: 'График', closed_day: 'День', day: 'День', import_batch: 'Импорт' };
-const J_FIELD = { fio: 'ФИО', position: 'должность', phone: 'телефон', status: 'статус', specialty: 'специальность', specialty_id: 'специальность', 'новая строка': 'новая строка', 'закрыта': 'строка закрыта', 'ставка добавлена': 'ставка добавлена', 'ставка закрыта': 'ставка закрыта' };
+  schedule: 'График', closed_day: 'День', day: 'День', import_batch: 'Импорт',
+  // без этих подписей владелец видит сырые имена таблиц вместо человеческой строки
+  salary_override: 'Финальная сумма', employee_month_norm: 'Норма часов',
+  doctor_month_revenue: 'Выручка врача' };
+const J_FIELD = { fio: 'ФИО', position: 'должность', phone: 'телефон', status: 'статус', specialty: 'специальность', specialty_id: 'специальность', norm_hours: 'норма часов', week_hours: 'рабочая неделя', hired_on: 'принят', left_on: 'уволен', 'новая строка': 'новая строка', 'закрыта': 'строка закрыта', 'ставка добавлена': 'ставка добавлена', 'ставка закрыта': 'ставка закрыта' };
 // Действия, которые надо ПОКАЗАТЬ, а не проглотить: раньше j.action только
 // сравнивался с 'created' и никогда не выводился — то есть «сторно», единственное
 // слово, отличающее исправление от обычной выплаты, терялось по дороге, и
@@ -2340,12 +2462,22 @@ function drawPayroll(filter = '') {
 }
 
 // Флаги — короткими чипами у имени. Это ПОДСКАЗКА «посмотри», а не приговор.
+// Есть ли у человека вид оплаты «сдельно», действующий в периоде ведомости.
+// Держим отдельной функцией: этим признаком гасится ложный flag_no_rate и в
+// чипах, и в счётчике «нужна ставка», и в модалке — расходиться им нельзя.
+function isPiece(employee_id) {
+  const e = employees.find(x => x.id === employee_id);
+  if (!e || !e.lines) return false;
+  const p1 = payPeriod + '-01', pn = nextPeriodStart(payPeriod);
+  return e.lines.some(l => l.pay_kind === 'сдельно' && l.valid_from < pn && (!l.valid_to || l.valid_to > p1));
+}
 function payrollFlags(r) {
   const f = [];
   if (r.flag_manual_salary) f.push(['сумма вручную', 'info']);
   if (!r.flag_manual_salary) {            // при ручной финальной сумме расчётные предупреждения не к месту
     if (r.flag_money_without_calc) f.push(['деньги без расчёта', 'red']);
-    if (r.flag_no_rate)        f.push(['нет ставки', 'red']);
+    // у сдельщика ставки «под смену» и не должно быть — сумму называют числом
+  if (r.flag_no_rate && !isPiece(r.employee_id)) f.push(['нет ставки', 'red']);
     if (r.flag_oklad_no_days)  f.push(['оклад без дней', 'red']);
     if (r.flag_rate_gap)       f.push(['ставка не на все дни', 'amber']);
     if (r.flag_no_patient_data)f.push(['нет оплат пациентов', 'amber']);
@@ -2412,12 +2544,25 @@ async function payrollDialog(empId) {
   // бы один месяц, суммы показывал другой, а запись уходила бы в третий — и это
   // деньги, которые потом только сторнировать.
   const per = payPeriod;
-  const my = payrollLines.filter(l => l.employee_id === empId);
+  // ТОТ ЖЕ linesFor, что и в таблице «Расчёт». Раньше модалка брала сырые дневные
+  // строки и из-за этого показывала «Оклад · 20 из 20 · 0 ₽» (у оклада дневные
+  // деньги всегда 0, он месячный), а процент и фикс теряла вовсе — то есть на
+  // вопрос «откуда взялась эта сумма» не отвечала. Один источник — модалка и
+  // ведомость больше не могут разойтись.
+  const my = linesFor(r);
   const canEdit = isStaff();
-  // процентник: ЗП = % × выручка. Пока оплаты пациентов неполные — выручку за месяц
-  // вносят руками (СЕО/Алёна). Показываем поле, если у врача есть ставка «процент».
+  // Ставки берём ПО ПЕРИОДУ ведомости, а не «действующие сейчас»: база в
+  // v_month_salary (036 §pctr) спрашивает перекрытие с месяцем. Иначе у врача с
+  // закрытой процентной строкой выручку за прошлый месяц было бы не ввести, хотя
+  // база её на процент умножит.
   const emp = employees.find(e => e.id === empId);
-  const pctLine = emp && emp.lines && emp.lines.find(l => l.pay_kind === 'процент');
+  const inPeriod = l => l.valid_from < nextPeriodStart(per) && (!l.valid_to || l.valid_to > per + '-01');   // ← per, не payPeriod: месяц зафиксирован выше
+  const periodLines = (emp && emp.lines ? emp.lines : []).filter(inPeriod);
+  const pctLine = periodLines.find(l => l.pay_kind === 'процент');
+  // сдельщик: вид оплаты «сдельно» (055) — пометка «сумму называют готовым числом».
+  // Отдельного поля ему НЕ даём: сумма живёт в «Финальной сумме вручную» ниже,
+  // просто подписываем блок так, чтобы было видно — это норма, а не костыль.
+  const piece = periodLines.some(l => l.pay_kind === 'сдельно');
   let curRev = 0;
   if (pctLine && canEdit) { try { curRev = await store.getDoctorRevenue(empId, per); } catch (e) {} }
   let curOverride = null;                                 // финальная сумма вручную (миграция 049)
@@ -2427,7 +2572,14 @@ async function payrollDialog(empId) {
   if (payPeriod !== per || curScreen !== 'payroll') return;
   const breakdown = my.length
     ? my.map(l => `<div class="me-row"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}</span><b>${rub(l.money_kop)} ₽</b></div>`).join('')
-    : `<div class="me-row"><span class="muted">${r.flag_no_rate ? 'Ставка не заведена' : 'Начислений за месяц нет'}</span><b>0 ₽</b></div>`;
+    // При ручной сумме «Начислений за месяц нет · 0 ₽» стоял бы прямо над
+    // «Зарплата 175 000» и читался как противоречие. Пишем причину словами:
+    // именно на вопрос «откуда взялась эта сумма» модалка и должна отвечать.
+    : `<div class="me-row"><span class="muted">${
+        r.flag_manual_salary ? 'Сумма вписана вручную — расчёт по графику не применялся'
+        : piece ? 'Сдельно — сумму за месяц вписывают ниже'
+        : r.flag_no_rate ? 'Ставка не заведена' : 'Начислений за месяц нет'
+      }</span>${r.flag_manual_salary || piece ? '' : '<b>0 ₽</b>'}</div>`;
   const pct = '';   // процент теперь приходит строкой из linesFor()
 
   // ФИО берём из строки расчёта (v_month_total) — это имя, под которым человек
@@ -2455,14 +2607,14 @@ async function payrollDialog(empId) {
         <button class="btn btn-primary btn-sm" id="pmRevSave">${ICONS.check}Сохранить</button>
       </div>
       <div class="msub">Для процентников считаем ЗП от введённой выручки (оплаты пациентов пока неполные). Изменение выручки видит владелец в журнале.</div>` : ''}
-    ${canEdit ? `<label class="flbl">Финальная сумма вручную${r.flag_manual_salary ? ' · <span class="jact">задана</span>' : ''}</label>
+    ${canEdit ? `<label class="flbl">${piece ? 'Сумма за месяц · сдельно' : 'Финальная сумма вручную'}${r.flag_manual_salary ? ' · <span class="jact">задана</span>' : ''}</label>
       <div class="me-add">
         <input class="input" id="pmFinal" placeholder="итоговая зарплата ₽" autocomplete="off" inputmode="numeric" value="${curOverride ? fmt(Math.round(curOverride / 100)) : ''}">
         <button class="btn btn-primary btn-sm" id="pmFinalSave">${ICONS.check}${r.flag_manual_salary ? 'Изменить' : 'Задать'}</button>
         ${r.flag_manual_salary ? `<button class="btn btn-ghost btn-sm" id="pmFinalClear">Убрать</button>` : ''}
       </div>
       <input class="input" id="pmFinalNote" placeholder="причина (необязательно): напр. «по ведомости, без графика»" autocomplete="off" style="margin-top:8px;width:100%">
-      <div class="msub">Для людей без графика: итоговая зарплата за месяц одной суммой. Заменяет расчёт → «осталось» = эта сумма − выданное на карту/наличными. Причина и каждое изменение видны владельцу — в журнале и в «Требует внимания».</div>` : ''}
+      <div class="msub">${piece ? 'У этого человека вид оплаты «сдельно» — сумму за месяц называют готовым числом, это штатный путь, а не исключение. ' : 'Для людей без графика: '}Итоговая зарплата за месяц одной суммой. Заменяет расчёт → «осталось» = эта сумма − выданное на карту/наличными. Причина и каждое изменение видны владельцу — в журнале и в «Требует внимания».</div>` : ''}
     ${canEdit ? `<label class="flbl">Внести деньги</label>
       <div class="me-add">
         <select class="input" id="pmKind">${moneyKindsFor(store.me()?.role).map(k => `<option value="${k[0]}">${k[1]}</option>`).join('')}</select>
