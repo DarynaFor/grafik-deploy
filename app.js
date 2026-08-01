@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=71';
+import { makeStore, lineLabel, sameRate } from './store.js?v=73';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -2567,6 +2567,106 @@ function confirmStorno(row) {
    т.е. отдельная задача (запрос за все месяцы, а не за текущий). Пока три числа
    стоят рядом отдельными строками, и разность видно глазами. */
 
+/* Строка выплаты в разбивке + кнопка «убрать». Раньше убрать выплату можно было
+   только внизу модалки, в ленте «Кто внёс и когда» — Дарина её попросту не
+   находила: лента длинная и лежит под всеми полями ввода. Кнопка стоит там, где
+   человек СМОТРИТ на неверную сумму.
+   Внутри это по-прежнему сторно (встречная запись), а не удаление: деньги в этой
+   системе — не число, а перечень событий, и стереть событие значит потерять след
+   «кто внёс». Пользователю про сторно знать не нужно — он видит «убрать». */
+function payRow(label, kop, kind, canEdit) {
+  if (!kop) return '';
+  const can = canEdit && kind && moneyKindsFor(store.me()?.role).some(k => k[0] === kind);
+  return `<div class="me-row${can ? ' me-tap' : ''}"${can ? ` data-kind="${kind}" title="Изменить или убрать"` : ''}>`
+       + `<span class="muted">${esc(label)}</span><b>${rub(kop)} ₽</b>`
+       + (can ? `<span class="me-pen">${ICONS.pencil || '✎'}</span>` : '')
+       + `</div>`;
+}
+/* Живые записи вида за месяц: не сторно и не сторнированные ранее. Повторное
+   сторно база запретит, а тихо проглотить отказ здесь было бы хуже всего. */
+function liveOf(ev, kind) {
+  const dead = new Set(ev.filter(x => x.reverses_id).map(x => x.reverses_id));
+  return ev.filter(x => !x.reverses_id && !dead.has(x.id) && (!kind || x.kind === kind));
+}
+/* Правка выплаты: изменить сумму ИЛИ убрать. И то, и другое внутри — сторно
+   прежних записей (плюс новая запись, если сумма меняется, а не обнуляется).
+   Дарине про сторно думать не нужно: она видит сумму, меняет её или убирает.
+   Почему не UPDATE: деньги здесь — не число, а перечень событий; переписав
+   событие, мы потеряли бы след «кто внёс», ради которого система и строилась. */
+async function editPayout(empId, per, kind, onDone) {
+  let ev;
+  try { ev = await store.listMoneyEvents(empId, per); }
+  catch (e) { toast(e.message || e, true); return; }
+  const live = liveOf(ev, kind);
+  const cur = live.reduce((s, x) => s + x.amount_kop, 0);
+  if (!live.length) { toast('Записей этого вида за месяц нет', true); return; }
+
+  showModal2(`<h3>${esc(moneyKindLabel(kind))}</h3>
+    <div class="msub">${esc(periodLabel(per))} · сейчас <b>${rub(cur)} ₽</b> ${live.length > 1 ? `(${live.length} записей)` : ''}</div>
+    <label class="flbl">Новая сумма</label>
+    <input class="input" id="epVal" inputmode="numeric" autocomplete="off" value="${rub(cur)}">
+    <div class="msub" style="margin-top:8px">Запишем разницу: прежние записи уйдут встречными на минус, новая сумма — отдельной строкой.
+      В истории останется видно, кто вносил и кто менял. «Осталось выдать» пересчитается само.</div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost btn-sm" id="epNo">Отмена</button>
+      <button class="btn btn-ghost btn-sm" id="epClear">Убрать совсем</button>
+      <button class="btn btn-primary btn-sm" id="epOk">${ICONS.check}Сохранить</button></div>`);
+  $('epNo').onclick = closeModal2;
+  $('epVal').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('epOk').click(); } };
+
+  const apply = async (newKop) => {
+    try {
+      for (const row of live) await store.reverseMoneyLine(row);          // по одной: база проверяет каждую
+      if (newKop > 0) await store.addMoneyLine({ employee_id: empId, period: per, kind, amount_kop: newKop, note: 'исправление суммы' });
+      closeModal2();
+      toast(ICONS.check + (newKop > 0 ? 'Стало ' + rub(newKop) + ' ₽' : 'Убрано · ' + rub(cur) + ' ₽'));
+      if (onDone) await onDone();
+    } catch (err) { toast(err.message || err, true); }
+  };
+  $('epClear').onclick = () => apply(0);
+  $('epOk').onclick = async () => {
+    let v;
+    try { v = parseNum($('epVal').value, { thousands: true, field: 'сумму', max: RATE_ABSURD }); }
+    catch (err) { toast(err.message, true); return; }
+    if (v == null || v < 0) { toast('Укажите сумму (0 — убрать совсем)', true); return; }
+    const kop = Math.round(v * 100);
+    if (kop === cur) { closeModal2(); return; }
+    if (v > RATE_CONFIRM && !(await confirmBigAmounts([v]))) return;
+    await apply(kop);
+  };
+}
+/* «Убрать все выплаты за месяц» — когда бухгалтер начислила всем скопом и надо
+   откатить целиком. Спрашиваем отдельно и показываем итог: это самое крупное
+   действие в окне. */
+async function undoAllPayouts(empId, per, onDone) {
+  let ev;
+  try { ev = await store.listMoneyEvents(empId, per); }
+  catch (e) { toast(e.message || e, true); return; }
+  const allowed = new Set(moneyKindsFor(store.me()?.role).map(k => k[0]));
+  const live = liveOf(ev).filter(x => allowed.has(x.kind));
+  if (!live.length) { toast('Убирать нечего', true); return; }
+  const sum = live.reduce((s, x) => s + x.amount_kop, 0);
+  const byKind = [...new Set(live.map(x => x.kind))]
+    .map(k => `${esc(moneyKindLabel(k))} — ${rub(live.filter(x => x.kind === k).reduce((s, x) => s + x.amount_kop, 0))} ₽`).join('<br>');
+  const ok = await new Promise(resolve => {
+    showModal2(`<h3>Убрать ВСЕ выплаты за месяц?</h3>
+      <div class="msub">${esc(periodLabel(per))} · ${live.length} записей на <b>${rub(sum)} ₽</b></div>
+      <div class="rc-diff"><div class="small">${byKind}</div></div>
+      <div class="rc-warn">Все эти суммы станут <b>0 ₽</b>. Записи не стираются — рядом появятся
+        встречные на минус, в истории видно, кто вносил и кто убрал.</div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="uaNo">Отмена</button>
+        <button class="btn btn-primary btn-sm" id="uaYes">${ICONS.check}Убрать всё</button></div>`);
+    $('uaNo').onclick = () => { closeModal2(); resolve(false); };
+    $('uaYes').onclick = () => { closeModal2(); resolve(true); };
+  });
+  if (!ok) return;
+  try {
+    for (const row of live) await store.reverseMoneyLine(row);
+    toast(ICONS.check + 'Убрано ' + live.length + ' записей · ' + rub(sum) + ' ₽');
+    if (onDone) await onDone();
+  } catch (err) { toast(err.message || err, true); }
+}
+
 async function payrollDialog(empId) {
   const r = payrollRows.find(x => x.employee_id === empId); if (!r) return;
   // Месяц ФИКСИРУЕМ здесь и дальше пользуемся только `per`. Ниже два запроса к
@@ -2621,15 +2721,15 @@ async function payrollDialog(empId) {
       `${esc(periodLabel(per))} · норма ${r.norm_days} дн · факт ${r.fact_days} дн`)}
     <div class="rc-diff">${breakdown}${pct}
       <div class="me-row me-sum"><span>Зарплата${r.flag_manual_salary ? ' · <b class="jact">вручную</b>' : ''}</span><b>${rub(r.salary_kop)} ₽</b></div>
-      ${r.card_avans_kop ? `<div class="me-row"><span class="muted">Аванс на карту</span><b>${rub(r.card_avans_kop)} ₽</b></div>` : ''}
-      ${r.card_rasch_kop ? `<div class="me-row"><span class="muted">ЗП на карту</span><b>${rub(r.card_rasch_kop)} ₽</b></div>` : ''}
-      ${r.card_uvol_kop ? `<div class="me-row"><span class="muted">Расчёт на карту (увольнение)</span><b>${rub(r.card_uvol_kop)} ₽</b></div>` : ''}
-      ${r.cash_kop ? `<div class="me-row"><span class="muted">Наличными</span><b>${rub(r.cash_kop)} ₽</b></div>` : ''}
-      ${r.cash_avans_kop ? `<div class="me-row"><span class="muted">Аванс наличными</span><b>${rub(r.cash_avans_kop)} ₽</b></div>` : ''}
-      ${r.premia_kop ? `<div class="me-row"><span class="muted">Премия</span><b>${rub(r.premia_kop)} ₽</b></div>` : ''}
-      ${r.otpusk_nach_kop ? `<div class="me-row"><span class="muted">Отпускные начислено</span><b>${rub(r.otpusk_nach_kop)} ₽</b></div>` : ''}
-      ${r.otpusk_kop ? `<div class="me-row"><span class="muted">Отпускные на карту</span><b>${rub(r.otpusk_kop)} ₽</b></div>` : ''}
-      ${r.otpusk_cash_kop ? `<div class="me-row"><span class="muted">Отпускные наличными</span><b>${rub(r.otpusk_cash_kop)} ₽</b></div>` : ''}
+      ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
+      ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
+      ${payRow('Расчёт на карту (увольнение)', r.card_uvol_kop, 'card_uvol', canEdit)}
+      ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
+      ${payRow('Аванс наличными', r.cash_avans_kop, 'cash_avans', canEdit)}
+      ${payRow('Премия', r.premia_kop, 'premia', canEdit)}
+      ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
+      ${payRow('Отпускные на карту', r.otpusk_kop, 'otpusk', canEdit)}
+      ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money">${rub(r.delta_kop)} ₽</b></div>
       <div class="me-row"><span class="muted small">Зарплата минус уже выданное (карта/наличные). Столько ещё раздать — в основном наличными. Отпускные в эту разницу не входят: на карту они уже выплачены, а наличные идут отдельной строкой в кассу.</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
@@ -2654,10 +2754,14 @@ async function payrollDialog(empId) {
         <button class="btn btn-primary btn-sm" id="pmAdd">${ICONS.plus}Внести</button>
       </div>
       <div class="msub">Записи не правятся: ошибку исправляют сторно — обе записи видны владельцу.${store.me()?.role === 'operator' ? ' Премию вносит владелец.' : ''}</div>` : ''}
+    ${canEdit && recorded(r) ? `<div class="me-row" style="margin-top:10px"><span class="muted small">Начислили лишнего всем скопом?</span><button class="btn btn-ghost btn-sm" id="pmUndoAll">Убрать все выплаты за месяц</button></div>` : ''}
     <label class="flbl" style="margin-top:12px">Кто внёс и когда</label>
     <div id="pmHist" class="pm-hist"><span class="muted small">загружаем…</span></div>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="pmClose">Закрыть</button></div>`);
   $('modalBox').dataset.guard = '1';                    // деньги — не закрывать случайным кликом
+  const reopen = async () => { await renderPayroll($('payrollSearch')?.value || ''); closeModal(); payrollDialog(empId); };
+  $('modalBox').querySelectorAll('.me-row.me-tap').forEach(el => el.onclick = () => editPayout(empId, per, el.dataset.kind, reopen));
+  if ($('pmUndoAll')) $('pmUndoAll').onclick = () => undoAllPayouts(empId, per, reopen);
   $('pmClose').onclick = closeModal;
 
   const loadHist = async () => {

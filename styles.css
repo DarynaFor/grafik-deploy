@@ -464,6 +464,12 @@ body.authed .login-stage{display:none}
 .mini-chip.warn{background:rgba(255,107,107,.12);color:var(--red-d)}
 .mini-chip.strong{background:rgba(31,165,101,.14);color:var(--green-d);border-color:rgba(31,165,101,.32);font-size:12.5px}
 /* модалка человека */
+/* строка выплаты кликабельна: правка суммы прямо там, где на неё смотрят.
+   Раньше убрать выплату можно было только в ленте внизу окна — её не находили. */
+.me-row.me-tap{cursor:pointer;border-radius:8px;margin:0 -6px;padding-left:6px;padding-right:6px;transition:.12s}
+.me-row.me-tap:hover{background:var(--fill-hi)}
+.me-row.me-tap .me-pen{margin-left:8px;opacity:.45;font-size:12px}
+.me-row.me-tap:hover .me-pen{opacity:1;color:var(--green)}
 .me-row{display:flex;justify-content:space-between;gap:14px;padding:3px 0;font-size:13.5px}
 .me-sum{border-top:1px solid var(--hair);margin-top:5px;padding-top:7px;font-weight:700}
 .me-add{display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center}

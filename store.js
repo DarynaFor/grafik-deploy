@@ -263,7 +263,9 @@ export class MockStore {
         card_avans_kop: sum('card_avans'), card_rasch_kop: sum('card_rasch'),
         to_pay_kop: cash + premia + otpuskCash,
         unchecked_kop: premia + otpuskCash,
-        delta_kop: salaryFinal - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')),
+        // + премия: она деньги, которые человеку ЕЩЁ надо выдать (миграция 059).
+        // Демо обязано считать так же, как прод, иначе оно врёт увереннее прода.
+        delta_kop: salaryFinal + premia - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')),
         norm_days: my.reduce((s, l) => s + l.planned, 0), fact_days: my.reduce((s, l) => s + l.worked, 0),
         flag_no_rate: !(e.lines || []).some(l => !l.valid_to), flag_partial_month: false,
         flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false, flag_manual_salary: !!ovr };
