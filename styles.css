@@ -393,6 +393,23 @@ body.authed .login-stage{display:none}
   border-top:1px solid var(--glass-bd);border-radius:0 0 24px 24px}
 /* кнопки перехода «по одному человеку»: карточка / график без поиска по имени */
 .me-jump{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+
+/* ── панель человека: расчёт и график месяца прямо в карточке ────────────── */
+.cp-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.cp-head .month-nav{margin-left:auto}
+/* Полоса дней: узкие клетки в ряд, перенос по ширине карточки. Это не табель на
+   119 человек, а один месяц одного — сетка с прокруткой была бы тут лишней. */
+.cp-strip{display:flex;flex-wrap:wrap;gap:4px}
+.cp-day{position:relative;width:46px;min-height:46px;border-radius:10px;background:var(--fill-1);
+  border:1px solid var(--hair);display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:1px;padding:16px 2px 4px;cursor:pointer;transition:.12s;overflow:hidden}
+.cp-day:hover{background:var(--fill-hi);border-color:var(--glass-bd)}
+.cp-day.empty{background:transparent}
+.cp-day.today{border-color:var(--green);box-shadow:0 0 0 1px var(--green) inset}
+.cp-day i{position:absolute;top:3px;left:5px;font-style:normal;font-size:9px;font-weight:700;color:var(--ink-3)}
+.cp-day .iv{font-size:9.5px;line-height:1.1;color:var(--ink-3);text-align:center}
+.cp-day .fh{font-size:11px;font-weight:700;line-height:1.1}
+.cp-day .fh.ok{color:var(--green-d)} .cp-day .fh.dev{color:var(--amber-d)} .cp-day .fh.miss{color:var(--red-d)}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--toast-bg);backdrop-filter:var(--blur);color:var(--toast-ink);border-radius:var(--r-pill);padding:12px 21px;font-size:14px;font-weight:600;box-shadow:var(--sh-pop);opacity:0;pointer-events:none;transition:.26s;z-index:200;display:flex;align-items:center;gap:9px}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.err{background:#c8443f;color:#fff}

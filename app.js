@@ -299,6 +299,7 @@ const PERIOD_OF = {
   payroll:  { get: () => payPeriod, set: v => { payPeriod = v; workPeriod = v; } },
   patients: { get: () => patPeriod, set: v => { patPeriod = v; workPeriod = v; } },
   overview: { get: () => ovPeriod,  set: v => { ovPeriod = v; workPeriod = v; } },
+  card:     { get: () => payPeriod, set: v => { payPeriod = v; workPeriod = v; } },
 };
 /* ── Выбранный месяц — ОБЩИЙ для экранов ────────────────────────────────
    Выбрал июль на «Расчёте» — «График», «Оплаты» и «Обзор» тоже показывают июль,
@@ -690,6 +691,98 @@ function partialMonthNote(e) {
 }
 // Возвращает false, если карточки с таким id нет: по ссылке #/kartochka/999
 // роутеру нужно отличить «открыл» от «нечего открывать» и увести в список.
+/* ПАНЕЛЬ ЧЕЛОВЕКА: расчёт и график того же месяца прямо в карточке, чтобы не
+   ходить по трём экранам ради одного сотрудника (просьба Дарины 01.08).
+   Месяц берём ОБЩИЙ (PERIOD_OF.card = payPeriod): панель и «Расчёт» обязаны
+   показывать одно и то же, иначе человек сверял бы разные числа.
+   Правки — те же функции, что и в окне «Расчёта» (editPayout/editSalary), а не
+   их копии: две реализации правки денег разошлись бы на первой же доработке. */
+async function loadCardPanel(id) {
+  const box = $('cardPanel'); if (!box || !isStaff()) return;
+  const per = payPeriod || nowPeriod();
+  box.innerHTML = `<div class="card cardpad" style="margin-top:16px"><span class="muted small">загружаем расчёт…</span></div>`;
+  let r, lines, norms, sched;
+  try {
+    [r, lines, norms, sched] = await Promise.all([
+      store.getPayrollRow(id, per),
+      store.listPayrollLines(per).catch(() => []),
+      store.listMonthNorms(per).catch(() => []),
+      store.listSchedule(per).catch(() => []),
+    ]);
+  } catch (e) { box.innerHTML = ''; return; }
+  if (+$('cardBody').dataset.emp !== id) return;      // пока грузили, открыли другого
+  if (!r) { box.innerHTML = ''; return; }
+
+  const my = linesForRow(r, (lines || []).filter(l => l.employee_id === id));
+  const nrm = (norms || []).find(n => n.employee_id === id);
+  const nh = nrm && nrm.hours != null ? parseFloat(nrm.hours) : null;
+  const canEdit = isStaff();
+  const days = daysInMonth(per);
+  const mine = (sched || []).filter(c => c.employee_id === id);
+  const byDate = new Map(mine.map(c => [String(c.work_date), c]));
+  const todayISO = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
+
+  let strip = '';
+  for (let d = 1; d <= days; d++) {
+    const iso = per + '-' + String(d).padStart(2, '0');
+    const c = byDate.get(iso) || null;
+    const past = iso < todayISO;
+    strip += `<div class="cp-day${c ? '' : ' empty'}${iso === todayISO ? ' today' : ''}" data-day="${d}" title="${d} ${esc(periodLabel(per))}">`
+           + `<i>${d}</i>${schedCellInner(c, past)}</div>`;
+  }
+
+  const breakdown = my.length
+    ? my.map(l => `<div class="me-row"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}</span><b>${rub(l.money_kop)} ₽</b></div>`).join('')
+    : `<div class="me-row"><span class="muted">${r.flag_manual_salary ? 'Сумма вписана вручную — расчёт по графику не применялся' : 'Начислений за месяц нет'}</span></div>`;
+
+  box.innerHTML = `<div class="card cardpad" style="margin-top:16px">
+    <div class="cp-head">
+      <div class="caps">Расчёт и график</div>
+      <div class="month-nav"><button class="mn-btn" id="cpPrev" aria-label="Пред. месяц">‹</button>
+        <span>${esc(periodLabel(per))}</span>
+        <button class="mn-btn" id="cpNext" aria-label="След. месяц">›</button></div>
+    </div>
+    <div class="msub" style="margin:-4px 0 10px">${nh != null ? `норма ${fmtH(nh)} · факт ${fmtH(Number(r.fact_hours) || 0)}` : `норма ${r.norm_days} дн · факт ${r.fact_days} дн`}</div>
+    <div class="cp-strip">${strip}</div>
+    <div class="rc-diff" style="margin-top:14px">${breakdown}
+      <div class="me-row me-sum${canEdit ? ' me-tap' : ''}"${canEdit ? ' id="cpSalary" title="Задать итоговую зарплату вручную"' : ''}><span>Зарплата${r.flag_manual_salary ? ' · <b class="jact">вручную</b>' : ''}</span><b>${rub(r.salary_kop)} ₽</b>${canEdit ? `<span class="me-pen">✎</span>` : ''}</div>
+      ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
+      ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
+      ${payRow('Расчёт на карту (увольнение)', r.card_uvol_kop, 'card_uvol', canEdit)}
+      ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
+      ${payRow('Аванс наличными', r.cash_avans_kop, 'cash_avans', canEdit)}
+      ${payRow('Премия', r.premia_kop, 'premia', canEdit)}
+      ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
+      ${payRow('Отпускные на карту', r.otpusk_kop, 'otpusk', canEdit)}
+      ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
+      <div class="me-row me-sum"><span>Осталось выдать</span><b class="money">${rub(r.delta_kop)} ₽</b></div>
+    </div>
+    ${canEdit ? `<div class="me-jump"><button class="btn btn-ghost btn-sm" id="cpAdd">${ICONS.plus || '+'}Внести деньги</button></div>` : ''}
+  </div>`;
+  applyIcons(box);
+
+  const redraw = () => loadCardPanel(id);
+  box.querySelectorAll('.me-row.me-tap[data-kind]').forEach(el => el.onclick = () => editPayout(id, per, el.dataset.kind, redraw));
+  if ($('cpSalary')) $('cpSalary').onclick = () => editSalary(id, per, r, redraw);
+  if ($('cpAdd')) $('cpAdd').onclick = () => { payrollDialog(id); };
+  $('cpPrev').onclick = () => { shiftCardMonth(-1, id); };
+  $('cpNext').onclick = () => { shiftCardMonth(1, id); };
+  // клетка графика: прошлое — факт, будущее — план, ровно как на экране «График».
+  // scheduleRows/curPeriod синхронизируем, потому что попапы читают именно их.
+  box.querySelectorAll('.cp-day').forEach(el => el.onclick = () => {
+    if (!['owner', 'operator', 'ceo'].includes(store.me()?.role)) return;
+    curPeriod = per; scheduleRows = sched || [];
+    const d = +el.dataset.day, iso = per + '-' + String(d).padStart(2, '0');
+    (iso < todayISO ? scheduleFactPopup : scheduleCellPopup)(id, d);
+  });
+}
+function shiftCardMonth(delta, id) {
+  let [y, m] = (payPeriod || nowPeriod()).split('-').map(Number);
+  m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
+  payPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = payPeriod;
+  loadCardMoney(id); loadCardPanel(id);
+}
+
 /* Переходы между экранами ПО ОДНОМУ ЧЕЛОВЕКУ. Раньше, чтобы посмотреть одного
    сотрудника целиком, приходилось обойти четыре экрана и в каждом искать его по
    имени заново. Теперь достаточно кнопки: экран открывается уже отфильтрованным
@@ -732,6 +825,7 @@ function openCard(id, replace) {
         <div class="field" style="margin:0"><span class="caps">Карточка создана</span><span class="val small">${esc(fmtDT(e.created_at))}</span></div>
       </div>
     </div>${partialMonthNote(e)}
+    <div id="cardPanel"></div>
     <div class="card cardpad" style="margin-top:16px">
       <div class="caps" style="margin-bottom:10px">Комментарии</div>
       <div id="cardNotes"><span class="muted small">загружаем…</span></div>
@@ -750,6 +844,7 @@ function openCard(id, replace) {
   const cs2 = $('cardToSched'); if (cs2) cs2.onclick = () => focusOn('schedule', id);
   go('card', replace);                 // адрес карточки берётся из dataset.emp выше
   loadCardMoney(id);
+  loadCardPanel(id);
   loadCardNotes(id);
   return true;
 }
@@ -2442,11 +2537,18 @@ async function renderPayroll(filter = '') {
    пациентов, и в дневных строках его нет вовсе. Раньше я суммировал только дни:
    «Оклад · 20 · 17 · 0 ₽» рядом с «Зарплата 68 000», а процентник вообще
    получал «нет начислений за месяц». Дни дают КОЛИЧЕСТВА, месяц — ДЕНЬГИ. */
-function linesFor(r) {
-  const raw = payrollLines.filter(l => l.employee_id === r.employee_id);
+function linesFor(r) { return linesForRow(r, payrollLines.filter(l => l.employee_id === r.employee_id)); }
+function linesForRow(r, raw) {
   const out = raw.map(l => l.kind === 'оклад' ? { ...l, money_kop: r.oklad_kop } : l);   // оклад — помесячно
   if (r.percent_kop || r.pct_rate != null)
     out.push({ kind: 'процент', planned: null, worked: null, money_kop: r.percent_kop, isPct: true });
+  // «Фикс/мес» к графику не привязан, дневных строк у него нет вовсе — без этой
+  // строки человек с надбавкой видел только оклад, а сумма в итоге была больше:
+  // ровно то, из-за чего у Бардаковой не было разбивки «оклад + надбавка».
+  // has() — страховка от дубля, если v_payroll_lines когда-нибудь начнёт отдавать этот вид.
+  const has = k => raw.some(l => l.kind === k);
+  if (r.fix_kop && !has('фикс'))
+    out.push({ kind: 'фикс', planned: null, worked: null, money_kop: r.fix_kop, isPct: true });
   return out;
 }
 
