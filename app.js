@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=73';
+import { makeStore, lineLabel, sameRate } from './store.js?v=74';
 
 const store = makeStore();
 const $ = id => document.getElementById(id);
@@ -1812,7 +1812,7 @@ function drawSchedule() {
   // колл-центра норма — договорённость (180 ч), а не то, что успели расставить в
   // табеле. Δ при этом СТАВИТ прежний вопрос — «вышел ли так, как назначено», —
   // и потому по-прежнему считается от плана, а не от нормы.
-  head += '<div class="gr-day sum">Смен</div><div class="gr-day sum" title="норма часов в месяц — задаётся вручную">Норма</div><div class="gr-day sum">Факт</div><div class="gr-day sum" title="факт − план за прошедшие дни">Δ</div>';
+  head += '<div class="gr-day sum">Смен</div><div class="gr-day sum" title="норма часов в месяц — задаётся вручную">Норма</div><div class="gr-day sum">Факт</div><div class="gr-day sum" title="факт − норма (у кого норма задана); иначе факт − план смен за прошедшие дни">Δ</div>';
   let rows = '', shown = 0;
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
@@ -1831,16 +1831,25 @@ function drawSchedule() {
         const addable = empty && canEditDay(d) && (pst || d === todayD);   // пустая клетка прошлого/сегодня, куда можно ДОБАВИТЬ смену (замена) — подсказка «+»
         rows += `<div class="gr-cell sc2${bg}${c && c.plan_kind === 'отпуск' ? ' k-vac' : ''}${addable ? ' addable' : ''}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
       }
-      const delta = factPast - planPast, ds = Math.abs(delta) < 0.05 ? '0' : (delta > 0 ? '+' : '−') + fmtH(Math.abs(delta));
       // numeric из Supabase приходит строкой — parseFloat обязателен
       const nrm = monthNorms.get(e.id), nh = nrm && nrm.hours != null ? parseFloat(nrm.hours) : null;
+      // Δ ОТ НОРМЫ, когда норма есть (решение Дарины 01.08). Раньше сравнивали с
+      // планом смен, и рядом со столбцом «Норма 184» это читалось как ложь: у
+      // Голик стояло «+2ч» при 8 отработанных часах — потому что её единственная
+      // смена была на 6 ч, а вышла она на 8. Теперь Δ отвечает на тот вопрос,
+      // который ТЕПЕРЬ СТОИТ ДЕНЕГ: сколько недоработано до нормы (оклад считается
+      // от неё, миграция 058).
+      // Если нормы нет — считаем как раньше, от плана смен: у сменщиков это
+      // единственный сигнал «вышел не так, как назначено», терять его нельзя.
+      const delta = nh != null ? factPast - nh : factPast - planPast;
+      const ds = Math.abs(delta) < 0.05 ? '0' : (delta > 0 ? '+' : '−') + fmtH(Math.abs(delta));
       const nMan = !!(nrm && nrm.is_manual);
       const nCal = nrm && nrm.calendar_hours != null ? parseFloat(nrm.calendar_hours) : null;
       const nTitle = nh == null ? 'Норма не задана: нет ни типа рабочей недели, ни своего числа. Клик — задать'
         : !nMan ? 'Норма по производственному календарю РФ. Клик — изменить'
         : nCal != null ? `Норма задана вручную (по календарю ${fmtH(nCal)}). Клик — изменить`
         : 'Норма задана вручную: сменный график, календарь для него нормы не даёт. Клик — изменить';
-      rows += `<div class="gr-sum">${cnt}</div><div class="gr-sum s-norm${nMan ? ' n-man' : ''}${canEditNorm ? ' tap' : ''}" data-emp="${e.id}" title="${esc(canEditNorm ? nTitle : nTitle.replace(/\. Клик.*$/, ''))}">${nh == null ? '<span class="muted">—</span>' : fmtH(nh)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}">${ds}</div>`;
+      rows += `<div class="gr-sum">${cnt}</div><div class="gr-sum s-norm${nMan ? ' n-man' : ''}${canEditNorm ? ' tap' : ''}" data-emp="${e.id}" title="${esc(canEditNorm ? nTitle : nTitle.replace(/\. Клик.*$/, ''))}">${nh == null ? '<span class="muted">—</span>' : fmtH(nh)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}" title="${nh != null ? `факт ${fmtH(factPast)} − норма ${fmtH(nh)}` : `факт ${fmtH(factPast)} − план смен ${fmtH(planPast)} (норма не задана)`}">${ds}</div>`;
     }
   }
   const grid = $('scheduleGrid');
