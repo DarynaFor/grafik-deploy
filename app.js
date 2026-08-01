@@ -205,7 +205,11 @@ function renderNav() {
   $('mobileNav').innerHTML = navItems().map(n => `<button data-s="${n.s}" class="${n.s === curScreen ? 'active' : ''}"><span>${ICONS[n.i]}</span>${n.l}</button>`).join('');
   document.querySelectorAll('[data-s]').forEach(b => b.onclick = () => go(b.dataset.s));
 }
-function go(screen) {
+// replace=true — не добавлять запись в историю. Нужно, когда экран меняется В ОТВЕТ
+// на уже изменившийся адрес (applyHash): запись браузер завёл сам, и push поверх
+// неё делал капкан — «назад» возвращал на тот же адрес, тот снова пушил, и выйти
+// назад было нельзя вообще. Клики внутри программы — наоборот, push.
+function go(screen, replace) {
   curScreen = screen;
   if (screen === 'overview') renderOverview();
   if (screen === 'payroll') renderPayroll($('payrollSearch')?.value || '');
@@ -220,7 +224,212 @@ function go(screen) {
   $('s-' + screen).classList.add('show');
   renderNav();
   document.querySelector('.main').scrollTop = 0;
+  // Первый экран после входа — тоже replace: он и есть дно истории, чтобы «назад»
+  // с него выходило из программы, а не оставляло пустой адрес.
+  syncHash(!firstNav && !replace);
+  firstNav = false;
 }
+
+/* ── Адрес экрана ───────────────────────────────────────────────────────
+   У каждого экрана свой адрес: grafik.one/#/raschet/2026-07. Зачем именно здесь:
+   (1) программа стоит иконкой на телефоне и в Dock. Кнопка «назад» на Android
+       раньше закрывала её целиком, а свайп на iPhone не делал ничего — уйти с
+       карточки можно было только кнопкой внутри экрана;
+   (2) страница перезагружается САМА (проверка версии внизу index.html и суточный
+       сброс входа) — без адреса человек каждый раз оказывался на «Обзоре», теряя
+       и экран, и выбранный месяц;
+   (3) на экран можно дать ссылку, а не объяснять словами, куда нажать.
+   Адреса ХЭШЕВЫЕ (#/…), а не путями (/raschet). Не из-за 404: сервер как раз
+   отдаёт index.html на любой путь с кодом 200 (SAFETY.md, проверено 28.07) —
+   а из-за относительных ссылок. index.html тянет styles.css / app.js / config.js
+   / иконки БЕЗ ведущего слэша, и на двухсегментном пути /kartochka/17 браузер
+   искал бы их в /kartochka/ — программа не загрузилась бы вовсе. Чинится это
+   тегом <base> или абсолютными путями, то есть правкой каждой ссылки ради
+   косметики адреса. Хэш ещё и не мешает проверке версии: она берёт pathname.
+   Слаги транслитом: ссылку читает Милена, а не программист.
+   ⚠ Адрес НЕ ДАЁТ ПРАВ: allowedScreen пускает только на экраны, которые роль и
+   так видит в меню, а данные всё равно закрыты RLS. */
+const ROUTES = [
+  { s: 'overview',    slug: 'obzor',        arg: 'period' },
+  { s: 'employees',   slug: 'sotrudniki' },
+  // Карточка — «kartochka», а не «sotrudnik»: с «sotrudniki» они различались бы
+  // одной буквой на конце, а ссылку переносят и обрезают в мессенджере. «Карточка»
+  // и есть слово, которым эту сущность зовут в команде.
+  // TODO(осознанно отложено, MED): месяца в адресе карточки нет, а блок «Осталось
+  // выдать» показывает payPeriod (loadCardMoney). Значит один и тот же
+  // #/kartochka/17 у отправителя и получателя покажет РАЗНЫЕ месяцы, и он же
+  // сменится после авто-перезагрузки. Не молча — месяц подписан рядом с суммой.
+  // Чинится вторым аргументом в адресе; отложено, чтобы не расширять грамматику
+  // адресов ради одного экрана в этой задаче.
+  { s: 'card',        slug: 'kartochka',    arg: 'id' },
+  { s: 'schedule',    slug: 'grafik',       arg: 'period' },
+  { s: 'payroll',     slug: 'raschet',      arg: 'period' },
+  { s: 'rates',       slug: 'stavki' },
+  // «patsienty», а не «oplaty»: здесь деньги ВХОДЯЩИЕ (база процента врачей), а
+  // «оплаты/выплаты» в этой программе — то, что выдают людям. Милена прочла бы
+  // #/oplaty как «выплаты» и пошла бы искать не тот экран.
+  { s: 'patients',    slug: 'patsienty',    arg: 'period' },
+  { s: 'import',      slug: 'import' },
+  { s: 'specialties', slug: 'specialnosti' },
+  { s: 'journal',     slug: 'zhurnal' },
+  { s: 'soon',        slug: 'skoro' },      // заглушка кассиров: адрес есть, ссылки на неё нет
+];
+// У «Графика», «Расчёта», «Оплат» и «Обзора» месяц СВОЙ (переменные разные
+// намеренно — см. комментарий у payPeriod). Поэтому месяц в адресе — через
+// геттер/сеттер того экрана, а не через одну общую переменную.
+// ⚠ Список обязан совпадать с теми, у кого в ROUTES стоит arg: 'period'. Забыть
+// здесь — тихо: адрес просто перестанет называть месяц, и никто не заметит.
+const PERIOD_OF = {
+  schedule: { get: () => curPeriod, set: v => { curPeriod = v; } },
+  payroll:  { get: () => payPeriod, set: v => { payPeriod = v; } },
+  patients: { get: () => patPeriod, set: v => { patPeriod = v; } },
+  overview: { get: () => ovPeriod,  set: v => { ovPeriod = v; } },
+};
+const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+let firstNav = true;
+// Вошли по живой сессии (страница перезагрузилась под тем же человеком) или
+// человек вводил пароль? От этого зависит, можно ли верить адресу в строке —
+// см. enter(). Ставится один раз при старте, до первого enter().
+let restoredSession = false;
+function parseHash() {
+  const raw = String(location.hash || '').replace(/^#\/?/, '').split('?')[0];
+  if (!raw) return null;
+  const [slug, arg] = raw.split('/');
+  // decodeURIComponent бросает URIError на «#/%» и прочих обломках. Разбор адреса
+  // зовёт и enter() — необработанное исключение там повесило бы ВХОД в программу
+  // из-за кривой ссылки. Кривой адрес — это просто «не адрес».
+  let name; try { name = decodeURIComponent(slug || ''); } catch (e) { return null; }
+  const r = ROUTES.find(x => x.slug === name);
+  if (!r) return null;
+  const t = { s: r.s };
+  if (r.arg === 'id') {
+    // Только цифры и без ведущих нулей. Number() принял бы и «0x10» (=16), и « 1 »,
+    // и «017» — открылась бы карточка, которую в адресе никто не писал.
+    if (!/^[1-9]\d*$/.test(arg || '')) return null;
+    t.id = Number(arg);
+  }
+  if (r.arg === 'period' && PERIOD_RE.test(arg || '')) t.period = arg;
+  return t;
+}
+// Карточка в меню не значится — её пускаем тем же условием, что и список
+// сотрудников. Заглушка «скоро» — наоборот, только тем, у кого нет экранов.
+function allowedScreen(s) {
+  if (s === 'card') return isStaff();
+  if (s === 'soon') return !isStaff();
+  return navItems().some(n => n.s === s);
+}
+function hashFor(screen) {
+  const r = ROUTES.find(x => x.s === screen);
+  if (!r) return '';
+  if (r.arg === 'id') { const id = $('cardBody').dataset.emp; return id ? `#/${r.slug}/${id}` : ''; }
+  if (r.arg === 'period') { const p = PERIOD_OF[screen]?.get(); return p ? `#/${r.slug}/${p}` : `#/${r.slug}`; }
+  return `#/${r.slug}`;
+}
+// push=false (replaceState) для смены месяца: месяц — состояние ВНУТРИ экрана, и
+// пролистав полгода, человек не должен жать «назад» шесть раз, чтобы уйти с
+// «Расчёта». В ссылке месяц при этом остаётся — ради него всё и делалось.
+// WebKit бросает SecurityError после ~100 вызовов history за 30 секунд, а программа
+// стоит иконкой и живёт в одной вкладке днями. Исключение отсюда прилетело бы в
+// go() и оборвало САМ ПЕРЕХОД (месяц уже сдвинут, экран не перерисован) — адрес
+// того не стоит: молча остаёмся с прежней строкой.
+const histSafe = fn => { try { fn(); } catch (e) { console.warn('history:', e); } };
+const clearHash = () => histSafe(() => history.replaceState(navState(), '', location.href.split('#')[0]));
+// Нонс сеанса. Помечать записи просто «своя» оказалось мало: гасится только та
+// запись, на которую браузер реально перешёл ДО входа, а те, что глубже в стеке,
+// после входа следующего человека оживают — одно «назад», и на экране карточка,
+// которую смотрел предыдущий. Нонс живёт в sessionStorage: переживает
+// перезагрузку (тот же человек, его записи работают), но снимается при выходе —
+// значит записи прошлого сеанса опознаются и гасятся, а не открываются.
+const SID_KEY = 'milena-nav-sid';
+function navSid() {
+  try {
+    let s = sessionStorage.getItem(SID_KEY);
+    if (!s) { s = Date.now().toString(36) + Math.random().toString(36).slice(2, 8); sessionStorage.setItem(SID_KEY, s); }
+    return s;
+  } catch (e) { return 'nosid'; }     // приватный режим без хранилища — деградируем до «своя/чужая»
+}
+const navState = () => ({ own: 1, sid: navSid() });
+function syncHash(push) {
+  if (!store.me()) return;                                 // см. applyHash
+  const h = hashFor(curScreen);
+  if (!h) return;
+  // Адрес уже верный — но пометку всё равно ставим, если её нет. Иначе запись,
+  // на которую человек попал по УЖЕ каноническому адресу (набрал руками, открыл
+  // присланную ссылку, достал из закладок), навсегда оставалась «чужой» и
+  // переживала выход: следующий на общем компьютере двумя «назад» доставал из
+  // строки карточку предыдущего. Раз экран показан вошедшему — запись его.
+  if (h === location.hash) { if (history.state?.sid !== navSid()) histSafe(() => history.replaceState(navState(), '', h)); return; }
+  if (push) location.hash = h;
+  // Помечаем запись истории как СВОЮ: адрес в ней написала программа, а не человек
+  // по присланной ссылке. На экране входа это единственный способ их различить —
+  // свою гасим (следующий не должен приземлиться на экран предыдущего), чужую
+  // бережём: ради неё всё и делалось.
+  // Голый фрагмент, а не pathname+search+h: строка вида «//что-то» (сервер отдаёт
+  // index.html на любой путь) стала бы протокол-относительным адресом, и
+  // replaceState бросил бы SecurityError прямо из go(). Фрагмент резолвится от
+  // текущего адреса, путь и query сохраняются, origin сменить нечем.
+  histSafe(() => history.replaceState(navState(), '', h));
+}
+// Ответ на смену адреса: «назад»/«вперёд», открытая ссылка, ручная правка строки.
+// Замка от собственного hashchange нет намеренно — вместо него проверка «мы уже
+// там»: она не зависит от того, в каком порядке браузер разложит события.
+function applyHash() {
+  // До входа ЧУЖОЙ адрес не трогаем: Милена шлёт Алёне #/grafik/2026-07, та
+  // открывает его с экрана входа — перепиши мы адрес по curScreen прошлого
+  // сеанса, и после входа Алёна попала бы не туда. Ссылку разберёт enter().
+  // А вот СВОЮ старую запись (вышли и нажали «назад») гасим: компьютер общий,
+  // и следующий вход не должен приземляться на экран предыдущего человека.
+  if (!store.me()) {
+    if (history.state?.own && location.hash) clearHash();
+    return;
+  }
+  // Запись ПРОШЛОГО сеанса (человек вышел, вошёл следующий — нонс уже другой).
+  // Не переходим: иначе одно «назад» открывало бы экран и карточку предыдущего.
+  // Гасим её по пути, так что след стирается сам, пока по нему идут назад.
+  if (history.state?.own && history.state.sid !== navSid()) return syncHash(false);
+  // Открытая форма и «назад». Правило берём то же, что уже действует для Escape и
+  // клика по фону (dataset.guard): обычную форму закрыть можно, форму с деньгами —
+  // нет. Иначе «назад» унёс бы экран из-под неё вместе с незаконченным вводом —
+  // суммой, сверенной с бумажки, пока экран телефона гас по автоблокировке.
+  // Второй слой — это подтверждение поверх формы, его тоже держим.
+  if (modalOpen()) {
+    // Отказ восстанавливает адрес ПУШЕМ (syncHash(true)), а не заменой и не
+    // history.forward(). Перебрали оба: forward() чинил «назад», но не спасал
+    // набранный руками адрес (там стека «вперёд» нет — и строка врала навсегда,
+    // а авто-перезагрузка уносила в чужой месяц); replaceState же затирал бы ту
+    // запись, на которую браузер уже перешёл, и повторные «назад» молча съедали
+    // стек, пока не выбрасывали из программы. Пуш не портит ни одной записи и
+    // делает строку верной сразу. Цена — лишняя запись за отказ, то есть потом
+    // одно холостое «назад»; это дешевле и потерянного ввода, и вранья в адресе.
+    // Цикла нет: следующий hashchange увидит адрес уже каноническим.
+    if (guardedModal()) { toast('Сначала завершите или отмените форму'); syncHash(true); return; }
+  }
+  const t = parseHash();
+  if (!t || !allowedScreen(t.s)) return syncHash(false);   // чужой или мусорный адрес — вернуть строку к тому, что на экране
+  const per = PERIOD_OF[t.s];
+  const changedPeriod = !!(t.period && per && per.get() !== t.period);
+  const sameCard = t.s !== 'card' || Number($('cardBody').dataset.emp) === t.id;
+  // Экран уже такой — не трогаем его, но адрес приводим к каноническому виду.
+  // Иначе #/grafik/2026-1 (месяц не по формату) молча теряет месяц, и в строке
+  // остаётся месяц, которого на экране НЕТ, — а такую ссылку ещё и перешлют.
+  // replaceState событий не порождает, зацикливания тут быть не может.
+  if (t.s === curScreen && !changedPeriod && sameCard) return syncHash(false);
+  // Неохраняемую форму закрываем только ЗДЕСЬ — когда переход точно состоится.
+  // Закрой мы её раньше, мусорный или чужой адрес (и «мы уже тут» выше) сносил бы
+  // диалог графика вместе с введённым, никуда не перейдя: «форма закрылась сама».
+  if (modalOpen()) { closeModal(); closeModal2(); }
+  if (changedPeriod) per.set(t.period);
+  // Всюду ниже replace: запись в истории браузер уже завёл, второй раз не нужно.
+  if (t.s === 'card') {
+    if (!openCard(t.id, true)) { toast('Такой карточки нет', true); go('employees', true); }
+    return;
+  }
+  go(t.s, true);
+  // go() перерисовывает обзор/расчёт/оплаты/импорт сам, а график рисует refresh()
+  // при входе — значит, месяц, пришедший адресом, дорисовываем здесь.
+  if (t.s === 'schedule' && changedPeriod) renderSchedule();
+}
+window.addEventListener('hashchange', applyHash);
 const ROLE_LABELS = { owner: 'владелец', operator: 'оператор', cashier1: 'касса · Бух 1', cashier2: 'карта / 1С · Бух 2', ceo: 'директор' };
 const isStaff = () => ['owner', 'operator', 'ceo'].includes(store.me()?.role);   // кто работает с карточками
 // График ведёт оператор (Алёна) с переданных головами отделений листов. Владелец
@@ -253,7 +462,26 @@ async function enter() {
   }
   $('addEmpBtn').style.display = canEditCards() ? '' : 'none';
   $('roNote').innerHTML = canEditCards() ? '' : `<div class="readonly-note">${ICONS.lock} Карточки, телефоны и ставки заводит и меняет владелец — у вас просмотр.</div>`;
+  // Адрес разбираем ДО refresh(): месяц из ссылки попадает в curPeriod раньше,
+  // чем refresh() нарисует график, — иначе он сначала грузил бы текущий месяц, а
+  // потом перерисовывался бы на нужный (два запроса и мигание чужого месяца).
+  const t = parseHash();
+  // Адрес, который писали МЫ ({own:1} переживает перезагрузку вместе с записью),
+  // после РУЧНОГО входа не используем: страница могла перезагрузиться сама, или
+  // сессия истекла за ночь — а за компьютером уже другой человек, и он не должен
+  // приземляться на карточку предыдущего. Если сессия была жива и мы вошли без
+  // формы (restoredSession) — это тот же человек, адрес его. Присланная ссылка
+  // (state пуст) работает всегда: ради неё маршрутизация и делалась.
+  const stale = !restoredSession && !!history.state?.own;
+  const target = t && !stale && allowedScreen(t.s) ? t : null;   // ссылка на чужой экран (роль его не видит) — молча на свой
+  if (target?.period && PERIOD_OF[target.s]) PERIOD_OF[target.s].set(target.period);
   await refresh();
+  if (target?.s === 'card') {
+    if (openCard(target.id)) return;
+    toast('Такой карточки нет', true);                 // ссылку прислали на удалённого/чужого — не молчим
+    return go('employees');                            // звали к человеку — оставляем в списке людей, как и applyHash
+  }
+  if (target) return go(target.s);
   // Владелец начинает с обзора (он для него и создан), остальные — с рабочего экрана.
   go(isOwner() ? 'overview' : 'employees');
 }
@@ -421,8 +649,10 @@ function partialMonthNote(e) {
     + `<b>Неполный месяц ${esc(periodLabel(per))}:</b> ${esc(parts.join(', '))}. `
     + `Оклад считается по своим плановым дням — проверьте сумму вручную (точная пропорция появится позже).</div>`;
 }
-function openCard(id) {
-  const e = employees.find(x => x.id === id); if (!e) return;
+// Возвращает false, если карточки с таким id нет: по ссылке #/kartochka/999
+// роутеру нужно отличить «открыл» от «нечего открывать» и увести в список.
+function openCard(id, replace) {
+  const e = employees.find(x => x.id === id); if (!e) return false;
   const lines = activeLines(e).map(l => `<div class="line-row"><span class="pill ${l.line_type === 'основной' ? 'o' : 's'}">${l.line_type === 'основной' ? 'Основной' : 'Совмест.'}</span><div style="font-weight:700">${esc(lineLabel(l))}</div><span class="lv muted small">с ${esc(l.valid_from || '—')}</span></div>`).join('') || '<div class="empty" style="padding:20px">Строк начисления нет</div>';
   const oldLines = (e.lines || []).filter(l => l.valid_to).map(l => `<div class="line-row" style="opacity:.55"><span class="pill k">закрыта ${esc(l.valid_to)}</span><div>${esc(lineLabel(l))}</div></div>`).join('');
   $('cardBody').innerHTML = `
@@ -455,9 +685,10 @@ function openCard(id) {
   applyIcons($('cardBody'));           // поздний ответ по деньгам не лёг в чужую
   const eb = $('editEmpBtn'); if (eb) eb.onclick = () => employeeForm(e);
   const ab = $('archiveEmpBtn'); if (ab) ab.onclick = () => toggleArchive(e);
-  go('card');
+  go('card', replace);                 // адрес карточки берётся из dataset.emp выше
   loadCardMoney(id);
   loadCardNotes(id);
+  return true;
 }
 // Лента заметок на карточке (миграция 037). Добавляют owner/operator/ceo/бухгалтер.
 async function loadCardNotes(id) {
@@ -1304,7 +1535,16 @@ function specForm() {
 
 /* ── график: сетка месяц × сотрудники (operator + owner) ── */
 const MONTHS_RU = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-let curPeriod = null, scheduleRows = [], shiftKinds = [], schedSeq = 0;
+// schedShown — месяц, который РЕАЛЬНО нарисован (в отличие от curPeriod = который
+// хотели). Та же пара, что payrollShown/payPeriod и patShown/patPeriod.
+// TODO(осознанно отложено, MED — дефект НЕ этой задачи, он старше): пока месяц
+// грузится, curPeriod уже новый, а сетка на экране старая. cellDate() и pastDay()
+// берут curPeriod — значит клик по клетке в этом окне (RTT до базы) уходит в
+// НОВЫЙ месяц, хотя человек видит старый. Приходит и от ‹/›, и от адреса.
+// Лечится тем, что рисовать и кликать надо по schedShown, а не по curPeriod —
+// это правка логики клика по клеткам, то есть самого денежного места экрана;
+// делать её заодно с маршрутизацией опаснее, чем отдельно и с проверкой.
+let curPeriod = null, schedShown = null, scheduleRows = [], shiftKinds = [], schedSeq = 0;
 /* ВРЕМЯ — ПО МОСКВЕ, а не по часам браузера.
    Милена живёт за границей — это вся посылка продукта. Расчёт в базе считает
    «сегодня» по МСК (msk_today), а здесь стояло голое new Date() = часовой пояс
@@ -1353,8 +1593,8 @@ function dayMark(day) {
    График: тот показывал июль с июльскими клетками, а клик писал в август —
    факты уходили не в тот месяц молча. */
 let payPeriod = null;
-function shiftPayMonth(delta) { let [y, m] = payPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } payPeriod = y + '-' + String(m).padStart(2, '0'); }
-function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = y + '-' + String(m).padStart(2, '0'); renderSchedule(); }
+function shiftPayMonth(delta) { let [y, m] = payPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } payPeriod = y + '-' + String(m).padStart(2, '0'); syncHash(false); }
+function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = y + '-' + String(m).padStart(2, '0'); syncHash(false); renderSchedule(); }
 const REST_KINDS = ['off', 'absent', 'отпуск'];   // нерабочие виды: НЕ в норму, НЕ «прогул», без оплаты смены
 const isRest = k => REST_KINDS.includes(k);
 function cellText(c) {
@@ -1422,11 +1662,26 @@ async function renderSchedule() {
   try {
     const [rows, kinds, closed] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds(), store.listClosedDays(curPeriod)]);
     if (seq !== schedSeq) return;         // ответ пришёл не для текущего запроса — отбрасываем (иначе чужой месяц перетрёт)
-    scheduleRows = rows; shiftKinds = kinds; closedDays = new Set(closed);
-    redRemarks = isOwner() ? await store.listRedRemarks().catch(e => { console.warn('listRedRemarks:', e); return []; }) : [];   // ретро-правки — видит только владелец
+    const remarks = isOwner() ? await store.listRedRemarks().catch(e => { console.warn('listRedRemarks:', e); return []; }) : [];   // ретро-правки — видит только владелец
     if (seq !== schedSeq) return;
+    // Общие переменные пишем ОДНИМ куском и только после ПОСЛЕДНЕГО await. Раньше
+    // scheduleRows присваивались до запроса ретро-правок: проигравший гонку запрос
+    // успевал положить туда СВОЙ месяц и уйти по seq-гарду, а schedShown оставался
+    // старым. Тогда откат по ошибке рисовал старый месяц чужими строками — сетка
+    // выходила ПУСТОЙ, и владелец «дозаполнял» месяц, который на самом деле полон.
+    scheduleRows = rows; shiftKinds = kinds; closedDays = new Set(closed); redRemarks = remarks;
+    schedShown = curPeriod;
     drawSchedule();
-  } catch (e) { toast('Не удалось загрузить график: ' + (e.message || e), true); }
+  } catch (e) {
+    if (seq !== schedSeq) return;
+    toast('Не удалось загрузить график: ' + (e.message || e), true);
+    // Откатываем curPeriod к нарисованному месяцу. Иначе на экране остаётся старая
+    // сетка со старой шапкой, а curPeriod уже новый — и клик по клетке записал бы
+    // факт В ДРУГОЙ МЕСЯЦ молча (cellDate() берёт именно curPeriod). Это тот самый
+    // случай, ради которого у «Расчёта» когда-то завели отдельный период. Заодно
+    // перестаёт врать адрес: он теперь называет месяц вслух и его пересылают.
+    if (schedShown && schedShown !== curPeriod) { curPeriod = schedShown; drawSchedule(); syncHash(false); }
+  }
 }
 function drawSchedule() {
   if (!isStaff() || !$('scheduleGrid')) return;
@@ -1934,12 +2189,33 @@ async function renderPayroll(filter = '') {
   // Гасим при СМЕНЕ месяца (иначе под новой подписью почти секунду висят старые
   // деньги), но НЕ при обновлении после ввода — там гашение сбрасывало скролл.
   const sameMonth = payrollShown === payPeriod;
+  const prevShown = payrollShown;                       // что реально лежит в payrollRows
   if (!sameMonth) $('payrollTable').innerHTML = '<div class="empty">Загружаем расчёт…</div>';
-  payrollShown = payPeriod;
+  // payrollShown ставим ТОЛЬКО после успеха (как schedShown/patShown/ovData.period).
+  // Раньше он значил «загрузка началась»: два быстрых клика по ›, и второй вызов
+  // брал prevShown = месяц, который никогда не грузился, — откат уводил бы ИМЕННО
+  // в него, а ввод суммы записался бы туда же.
   let rows, lines;
   try { [rows, lines] = await Promise.all([store.listPayroll(payPeriod), store.listPayrollLines(payPeriod)]); }
-  catch (e) { if (seq === payrollSeq) $('payrollTable').innerHTML = `<div class="empty">Не удалось загрузить: ${esc(e.message || e)}</div>`; return; }
+  // Месяц не загрузился — откатываем payPeriod к тому, что РЕАЛЬНО лежит в
+  // payrollRows (они при ошибке не обновились). Без отката любой следующий
+  // drawPayroll — а его зовёт просто ввод в поиске и смена отделения — нарисовал
+  // бы СТАРЫЕ деньги под НОВОЙ подписью и новым адресом, вместе со строкой ИТОГО;
+  // а ввод суммы ушёл бы с period = payPeriod, то есть в месяц, которого никто не
+  // видел. Это единственный из четырёх «месячных» экранов, который ПИШЕТ деньги.
+  catch (e) {
+    if (seq !== payrollSeq) return;
+    if (prevShown && prevShown !== payPeriod) {
+      payPeriod = prevShown;
+      $('pLabel').textContent = periodLabel(payPeriod);
+      syncHash(false);
+      toast('Не удалось загрузить: ' + (e.message || e), true);
+      drawPayroll(filter);
+    } else $('payrollTable').innerHTML = `<div class="empty">Не удалось загрузить: ${esc(e.message || e)}</div>`;
+    return;
+  }
   if (seq !== payrollSeq) return;                       // пришёл ответ от старого месяца — игнорируем
+  payrollShown = payPeriod;                             // теперь месяц ДЕЙСТВИТЕЛЬНО показан
   payrollRows = rows; payrollLines = lines;
   drawPayroll(filter);
   if (wrap) { wrap.scrollTop = keepTop; wrap.scrollLeft = keepLeft; }
@@ -2271,7 +2547,7 @@ async function payrollDialog(empId) {
    каждый пункт КЛИКАБЕЛЕН на нужный экран. График «Наличка по дням» отложен —
    он пуст до первого дня выдач (3b-6), рисовать диаграмму нулевого ряда рано. */
 let ovPeriod = null, ovData = null, ovSeq = 0;
-function shiftOvMonth(d) { if (!ovPeriod) ovPeriod = nowPeriod(); let [y, m] = ovPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } ovPeriod = y + '-' + String(m).padStart(2, '0'); renderOverview(); }
+function shiftOvMonth(d) { if (!ovPeriod) ovPeriod = nowPeriod(); let [y, m] = ovPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } ovPeriod = y + '-' + String(m).padStart(2, '0'); syncHash(false); renderOverview(); }
 
 // Флаги v_month_total → человеческие строки «Требует внимания». Красные — сверху.
 // Порядок массива = порядок показа. Клик ведёт на «Расчёт», где это видно построчно.
@@ -2310,7 +2586,11 @@ async function renderOverview(reset = true) {
     [rows, remarks, payouts] = await Promise.all([
       store.listPayroll(want), store.listRedRemarks(6), store.listRecentPayouts(5),
     ]);
-  } catch (e) { if (seq === ovSeq) { toast(e.message || e, true); $('oLabel').textContent = periodLabel(ovData?.period || want); } return; }
+  // Месяц не загрузился — откатываем ovPeriod к тому, что РЕАЛЬНО на экране, а не
+  // только заголовок. Иначе расходятся три вещи: данные (старый месяц), ‹/› (шагали
+  // бы от несостоявшегося) и адрес, который теперь называет месяц вслух и который
+  // человек перешлёт — получатель уехал бы в месяц, которого отправитель не видел.
+  } catch (e) { if (seq === ovSeq) { toast(e.message || e, true); ovPeriod = ovData?.period || want; $('oLabel').textContent = periodLabel(ovPeriod); syncHash(false); } return; }
   if (seq !== ovSeq) return;                       // месяц сменили, пока грузили
   ovData = { rows, remarks, payouts, period: want };
   $('oLabel').textContent = periodLabel(want);
@@ -2369,6 +2649,11 @@ function drawOverview() {
     + `<div class="note ov-note">${ICONS.lock}Все суммы — из неизменяемого журнала</div>`;
 
   $('overviewBody').querySelectorAll('[data-go]').forEach(b => b.onclick = () => {
+    // Месяц «Обзора» переносим на целевой экран: плашка посчитана по ovPeriod, и
+    // без этого клик по июньскому флагу открывал «Расчёт» за август — владелец шёл
+    // разбирать флаг в месяц, где его нет. Теперь этот месяц ещё и в адресе,
+    // который перешлют, так что расхождение стало видимым и заразным.
+    if (b.dataset.go === 'payroll' && ovPeriod) payPeriod = ovPeriod;
     if (b.dataset.go === 'journal-red') { journalFilter = 'red'; go('journal'); renderJournal(true); }
     else go(b.dataset.go);
   });
@@ -2382,7 +2667,7 @@ function drawOverview() {
    контроль. Итоги берём ГОТОВЫМИ из v_patient_month: список постраничный, и
    сумма по загруженной странице врала бы. */
 let patPeriod = null, patRows = [], patLastId = null, patHasMore = false, patMonth = [], patShown = null, patSeq = 0;
-function shiftPatMonth(d) { if (!patPeriod) patPeriod = nowPeriod(); let [y, m] = patPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } patPeriod = y + '-' + String(m).padStart(2, '0'); renderPatients(); }
+function shiftPatMonth(d) { if (!patPeriod) patPeriod = nowPeriod(); let [y, m] = patPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } patPeriod = y + '-' + String(m).padStart(2, '0'); syncHash(false); renderPatients(); }
 
 async function renderPatients(reset = true) {
   if (!isStaff()) { $('patList').innerHTML = ''; return; }
@@ -2403,9 +2688,13 @@ async function renderPatients(reset = true) {
   } catch (e) {
     if (seq !== patSeq) return;
     toast(e.message || e, true);
-    // Возвращаем заголовок к тому месяцу, который РЕАЛЬНО на экране, иначе
-    // осталась бы шапка нового месяца над данными старого.
-    $('qLabel').textContent = periodLabel(patShown || want);
+    // Возвращаем к тому месяцу, который РЕАЛЬНО на экране, иначе осталась бы шапка
+    // нового месяца над данными старого. Откатываем и сам patPeriod с адресом:
+    // адрес называет месяц вслух, и такую ссылку перешлют — получатель уехал бы в
+    // месяц, которого отправитель не видел, на экране, созданном ловить накрутку.
+    patPeriod = patShown || want;
+    $('qLabel').textContent = periodLabel(patPeriod);
+    syncHash(false);
     return;
   }
   if (seq !== patSeq) return;               // месяц сменили, пока ждали — ответ выбрасываем
@@ -2513,7 +2802,21 @@ function drawJournal() {
 
 /* ── модалка / тост ── */
 function showModal(html) { $('modalBox').innerHTML = html; $('modalOv').classList.add('show'); applyIcons($('modalBox')); const f = $('modalBox').querySelector('input'); if (f) setTimeout(() => f.focus(), 60); }
+// ⚠ Никакого syncHash здесь. Пробовали — closeModal зовётся и из applyHash (закрыть
+// неохраняемую форму и идти дальше), и syncHash успевал вернуть адрес на СТАРЫЙ
+// экран ДО того, как applyHash прочитает новый: переход просто исчезал, а запись
+// истории затиралась. Адрес чинит сам отказ в applyHash, пушем.
 function closeModal() { $('modalOv').classList.remove('show'); delete $('modalBox').dataset.guard; }
+// Открыта любая из двух форм (вторая — диалог поверх первой). Спрашивают и
+// маршрутизация («назад» не уводит экран из-под формы), и суточный сброс.
+const modalOpen = () => $('modalOv').classList.contains('show') || $('modalOv2').classList.contains('show');
+// Форма, которую нельзя закрыть случайно: помеченная dataset.guard (карточка,
+// деньги, ставки) и весь второй слой — он и есть подтверждение суммы.
+// ⚠ Диалоги графика (смена, факт, отпуск, шаблон, ретро-правка со СМС-кодом)
+// guard НЕ ставят, поэтому «назад» закрывает их так же, как Escape и клик по
+// фону, — вместе с введённым. Расширять guard на них — отдельное решение: у
+// ретро-правки в замыкании висит уже отправленный код, а попытки ограничены.
+const guardedModal = () => ($('modalOv').classList.contains('show') && !!$('modalBox').dataset.guard) || $('modalOv2').classList.contains('show');
 // Второй слой — диалог ПОВЕРХ уже открытой формы. Без него confirmBigAmounts
 // затирал бы карточку (оба писали в общий #modalBox), и «Исправить» терял ввод.
 function showModal2(html) { $('modalBox2').innerHTML = html; $('modalOv2').classList.add('show'); applyIcons($('modalBox2')); }
@@ -2552,13 +2855,33 @@ $('empSearch').oninput = e => renderEmployees(e.target.value);
 try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (!localStorage.getItem(THEME_KEY)) paintThemeBtn(); }); } catch (e) {}
 $('addEmpBtn').onclick = () => employeeForm(null);
 $('addSpecBtn').onclick = specForm;
-$('backBtn').onclick = () => go('employees');
+// replace: кнопка нарисована шевроном «влево» и читается как «назад», поэтому
+// новую запись заводить нельзя — иначе системное «назад» возвращало бы в только
+// что закрытую карточку, и выход из программы шёл пинг-понгом список↔карточка.
+$('backBtn').onclick = () => go('employees', true);
 $('logoutBtn').innerHTML = ICONS.out;
 // finally: выход должен ВЫГЛЯДЕТЬ выходом даже если signOut упал по сети. Иначе экран
 // остаётся «внутри программы», хотя store.logout() уже снял пользователя и ключ дня.
 $('logoutBtn').onclick = async () => {
   try { await store.logout(); }
-  finally { document.body.classList.remove('authed'); renderLogin(); }
+  finally {
+    document.body.classList.remove('authed');
+    // Гасим адрес и ПЕРЕЗАГРУЖАЕМСЯ. Снятие класса только ПРЯЧЕТ приложение (CSS),
+    // разметка предыдущего человека остаётся в DOM — и следующий, войдя, видел бы
+    // её всё то время, пока идёт refresh() (первый коннект бывает секундами). На
+    // «Расчёте» это зарплаты всех, включая строку СЕО, которую прячет миграция 040.
+    // Перезагрузка чистит и разметку, и ростер в памяти, и адрес предыдущего.
+    // Сессию она не вернёт: store.logout() снимает ключ дня ВСЕГДА (даже если
+    // signOut не достучался до сети), а store.init() без ключа дня входить не даёт.
+    clearHash();
+    // Нонс сеанса снимаем ЗДЕСЬ, а не полагаемся на перезагрузку: если она не
+    // случится (офлайн, бросок history по троттлингу), записи прошлого человека
+    // всё равно опознаются как чужие. restoredSession — по той же причине.
+    try { sessionStorage.removeItem(SID_KEY); } catch (e) {}
+    restoredSession = false;
+    renderLogin();          // если reload не случится (бросок/офлайн) — форма входа всё равно на месте
+    location.reload();
+  }
 };
 
 // Суточный сброс входа отрабатывает в store.init(), то есть при ЗАГРУЗКЕ страницы. Программа,
@@ -2577,7 +2900,16 @@ $('logoutBtn').onclick = async () => {
 // покрывает именно возврат в программу.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !store.dayExpired()) return;
-  if ($('modalOv').classList.contains('show') || $('modalOv2').classList.contains('show')) return;
+  if (modalOpen()) return;
+  // Адрес гасим ДО перезагрузки. Сброс существует ради забытого/потерянного
+  // телефона — то есть ровно ради случая, когда вернулся НЕ тот же человек;
+  // иначе экран входа остался бы с #/kartochka/17 и выдал бы, чью карточку
+  // смотрели, а после входа туда же и высадил.
+  clearHash();
+  // Класс снимаем СРАЗУ, не дожидаясь перезагрузки: на холодном мобильном коннекте
+  // «Расчёт» предыдущего висел бы на экране всё это время, а офлайн — навсегда.
+  // Это и есть сценарий потерянного телефона, ради которого сброс существует.
+  document.body.classList.remove('authed');
   location.reload();
 });
 applyIcons();
@@ -2592,10 +2924,19 @@ applyIcons();
       store.init(),
       new Promise((_, rej) => setTimeout(() => rej(new Error('база не ответила за 20 сек')), 20000)),   // холодный первый коннект к supabase.co (за Cloudflare) бывает 7–11с; после прогрева — <300мс
     ]);
-    if (store.me()) await enter();  // если уже была сессия — входим; иначе форма уже показана
+    if (store.me()) { restoredSession = true; await enter(); }  // сессия жива — тот же человек, входим; иначе форма уже показана
   } catch (e) {
     console.error('[init]', e);
     const libFail = /библиотек|supabase\.js|is not defined|undefined/i.test(String(e.message || e));
     toast(libFail ? 'Не удалось подключиться к базе — обновите страницу (Cmd/Ctrl+R).' : 'База отвечает медленно (' + String(e.message || e) + '). Вход по паролю должен работать.', true);
+  }
+  // Загрузились на экран входа, а в строке висит НАШ прежний адрес (#/kartochka/17).
+  // Выход и суточный сброс гасят его сами, но остаются пути, где его никто не гасил:
+  // проверка версии внизу index.html, обычный F5, переоткрытие программы наутро —
+  // сессия истекла внутри store.init(), а адрес остался и выдаёт, чью карточку
+  // смотрели. Приземлиться туда следующему уже не даёт stale в enter(); здесь
+  // убираем сам след. Присланную ссылку не трогаем: у неё state пуст.
+  if (!store.me() && history.state?.own && location.hash) {
+    clearHash();
   }
 })();
