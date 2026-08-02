@@ -267,7 +267,8 @@ export class MockStore {
         // Демо обязано считать так же, как прод, иначе оно врёт увереннее прода.
         // перенос с прошлого месяца (067) — со знаком, как в бою
         carry_kop: ((this.db.carry || []).find(x => x.employee_id === e.id && x.period === period) || {}).amount_kop || 0,
-        delta_kop: salaryFinal + premia + (((this.db.carry || []).find(x => x.employee_id === e.id && x.period === period) || {}).amount_kop || 0)
+        bolnich_nach_kop: sum('bolnich_nach'),
+        delta_kop: salaryFinal + premia + sum('bolnich_nach') + (((this.db.carry || []).find(x => x.employee_id === e.id && x.period === period) || {}).amount_kop || 0)
           - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')),
         norm_days: my.reduce((s, l) => s + l.planned, 0), fact_days: my.reduce((s, l) => s + l.worked, 0),
         flag_no_rate: !(e.lines || []).some(l => !l.valid_to), flag_partial_month: false,
