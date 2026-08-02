@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=82';
+import { makeStore, lineLabel, sameRate } from './store.js?v=84';
 
 const $ = id => document.getElementById(id);
 
@@ -1968,7 +1968,7 @@ function factClass(c) {                                             // клас�
    долгим нажатием (на телефоне правой кнопки нет).
    ⚠ Суммы пока зашиты здесь. Дарина просила вынести их в настройку отдельной
    задачей — «спочатку ввести це, а потім думати як змінювати в майбутньому». */
-const SAN_AMOUNTS = [320000, 370000, 505000];                    // 3200 / 3700 / 5050 ₽ в копейках
+const SAN_AMOUNTS = [230000, 320000, 370000, 450000, 505000];    // 2300 / 3200 / 3700 / 4500 / 5050 ₽
 /* Кому клетка платит суммой. Правило выведено из ДАННЫХ, а не из должности: у
    всех шестерых санитарок основная специальность «Санитарка», но у Казаковой и
    Мазур есть ещё и оклад — их основная работа считается по нему как раньше, а
@@ -2008,6 +2008,33 @@ function cacheAmount(empId, day, pos, kop) {
     scheduleRows.push({ employee_id: empId, work_date: d, position: pos, amount_kop: kop, plan_kind: null, fact: null });
   }
 }
+/* Хвост «суммовой» строки. Часов у таких смен нет вовсе, поэтому «Смен 0 / Факт 0ч»
+   было бы не нулём работы, а неверным вопросом: считаем смены С СУММОЙ и их сумму
+   за месяц. Пересчитывается на лету при каждом клике — Дарина просила, чтобы итоги
+   не ждали перезагрузки. */
+function amountTotals(empId, pos) {
+  let cnt = 0, kop = 0;
+  for (const r of scheduleRows || []) {
+    if (r.employee_id !== empId || (r.position || 'main') !== pos) continue;
+    if (!r.amount_kop || String(r.work_date).slice(0, 7) !== curPeriod) continue;
+    cnt++; kop += r.amount_kop;
+  }
+  return { cnt, kop };
+}
+function amountTail(empId, pos) {
+  const t = amountTotals(empId, pos);
+  return `<div class="gr-sum s-cnt" data-tot="${empId}|${pos}|cnt">${t.cnt}</div>`
+    + `<div class="gr-sum s-delta"></div>`
+    + `<div class="gr-sum s-norm"><span class="muted">—</span></div>`
+    + `<div class="gr-sum s-fact amt-tot" data-tot="${empId}|${pos}|kop" title="сумма за месяц">${t.cnt ? esc(rubShort(t.kop)) : '—'}</div>`;
+}
+function repaintAmountTotals(empId, pos) {
+  const t = amountTotals(empId, pos);
+  const c = document.querySelector(`[data-tot="${empId}|${pos}|cnt"]`);
+  const k = document.querySelector(`[data-tot="${empId}|${pos}|kop"]`);
+  if (c) c.textContent = t.cnt;
+  if (k) k.textContent = t.cnt ? rubShort(t.kop) : '—';
+}
 async function cycleAmountCell(empId, day, pos) {
   const cur = (scheduleRows || []).find(s => s.employee_id === empId
     && s.work_date === cellDate(day) && (s.position || 'main') === pos);
@@ -2015,11 +2042,17 @@ async function cycleAmountCell(empId, day, pos) {
   const at = SAN_AMOUNTS.indexOf(was);
   // цикл: 3200 -> 3700 -> 5050 -> пусто -> 3200
   const next = at < 0 ? SAN_AMOUNTS[0] : (at + 1 < SAN_AMOUNTS.length ? SAN_AMOUNTS[at + 1] : null);
+  const bare = !cur || (!cur.plan_kind && (cur.fact ?? null) === null);   // в клетке была только сумма
+  const patch = next == null && bare
+    ? { plan_kind: null, plan_start: null, fact: null, amount_kop: null }   // убрать клетку целиком
+    : { amount_kop: next };                                                // тронуть только деньги
   cacheAmount(empId, day, pos, next); paintAmountCell(empId, day, pos, next);
+  repaintAmountTotals(empId, pos);
   try {
-    await store.setScheduleCell(empId, cellDate(day), { amount_kop: next }, pos);
+    await store.setScheduleCell(empId, cellDate(day), patch, pos);
   } catch (err) {
     cacheAmount(empId, day, pos, was); paintAmountCell(empId, day, pos, was);
+    repaintAmountTotals(empId, pos);
     toast('Не сохранилось: ' + (err.message || err), true);
   }
 }
@@ -2038,9 +2071,17 @@ function amountCellPopup(e, day, pos) {
       <button class="btn btn-ghost btn-sm" id="saNo">Отмена</button>
       ${cur?.amount_kop ? `<button class="btn btn-ghost btn-sm" id="saClear">Убрать</button>` : ''}
       <button class="btn btn-primary btn-sm" id="saOk">${ICONS.check}Сохранить</button></div>`);
+  const bare = !cur || (!cur.plan_kind && (cur.fact ?? null) === null);
   const save = async kop => {
-    try { await store.setScheduleCell(e.id, cellDate(day), { amount_kop: kop }, pos);
-      closeModal(); await renderSchedule(); }
+    // «Убрать» на клетке, где кроме суммы ничего не было, чистит её целиком;
+    // если под суммой стоит настоящая смена — снимаем только деньги.
+    const patch = kop == null && bare
+      ? { plan_kind: null, plan_start: null, fact: null, amount_kop: null }
+      : { amount_kop: kop };
+    try { await store.setScheduleCell(e.id, cellDate(day), patch, pos);
+      cacheAmount(e.id, day, pos, kop); paintAmountCell(e.id, day, pos, kop);
+      repaintAmountTotals(e.id, pos);
+      closeModal(); }
     catch (err) { toast(err.message || err, true); }
   };
   $('saNo').onclick = closeModal;
@@ -2230,6 +2271,9 @@ function drawSchedule() {
         : !nMan ? 'Норма по производственному календарю РФ. Клик — изменить'
         : nCal != null ? `Норма задана вручную (по календарю ${fmtH(nCal)}). Клик — изменить`
         : 'Норма задана вручную: сменный график, календарь для него нормы не даёт. Клик — изменить';
+      if (amtRow) {
+        rows += amountTail(e.id, 'main');
+      } else
       rows += `<div class="gr-sum s-cnt">${cnt}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}" title="${nh != null ? `факт ${fmtH(factPast)} − норма ${fmtH(nh)}` : `факт ${fmtH(factPast)} − план смен ${fmtH(planPast)} (норма не задана)`}">${ds}</div><div class="gr-sum s-norm${nMan ? ' n-man' : ''}${canEditNorm ? ' tap' : ''}" data-emp="${e.id}" title="${esc(canEditNorm ? nTitle : nTitle.replace(/\. Клик.*$/, ''))}">${nh == null ? '<span class="muted">—</span>' : fmtH(nh)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div>`;
       // ── ВТОРАЯ РАБОТА: своя строка графика ──────────────────────────────────
       // Появляется, только если в карточке заполнено поле «Вторая работа»

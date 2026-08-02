@@ -867,10 +867,13 @@ export class SupabaseStore {
   // onConflict обязан её повторять: по старой паре запрос теперь падает, потому
   // что такого ограничения больше нет.
   async setScheduleCell(employeeId, work_date, cell, position = 'main') {
-    // amount_kop входит в проверку «пусто»: у санитарок смена может состоять
-    // ТОЛЬКО из суммы (ни вида, ни времени), и без этого такая клетка считалась
-    // бы пустой и удалялась сразу после записи.
-    const empty = (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null
+    // «Пусто» считаем ТОЛЬКО когда вызывающий действительно чистит смену, то есть
+    // прислал поля плана/факта. Иначе частичное обновление (одна лишь сумма)
+    // читалось как пустая клетка и УДАЛЯЛО строку целиком: клик до «пусто» у
+    // санитарки сносил вместе с суммой и саму смену 12ч, а с ней норму и факт
+    // дня. Терялось молча — на экране клетка и так становится пустой.
+    const touchesShift = 'plan_kind' in cell || 'plan_start' in cell || 'fact' in cell;
+    const empty = touchesShift && (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null
       && (cell.fact ?? null) === null && (cell.amount_kop ?? null) === null;
     if (empty) {   // очистка = удаление строки, чтобы таблица не копила пустышки
       const { error } = await this.sb.from('schedule').delete()
