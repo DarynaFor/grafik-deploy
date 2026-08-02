@@ -2804,7 +2804,7 @@ function drawPayroll(filter = '') {
       curCat = cat;
       const inCat = rows.filter(x => catOf(x) === cat);
       const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="16"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="17"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
@@ -2859,7 +2859,7 @@ function drawPayroll(filter = '') {
     <td class="num fin pw-carry"><b class="money${sum('carry_kop') < 0 ? ' neg' : ''}">${sum('carry_kop') ? rub(sum('carry_kop')) : '—'}</b></td>
     <td class="num pw-pay fin"><b class="money">${rub(toGive)}</b></td></tr>
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
-      <td colspan="14" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
+      <td colspan="15" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
       <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td></tr>` : ''}</tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
