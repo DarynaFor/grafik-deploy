@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=85';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=86';
 
 const $ = id => document.getElementById(id);
 
@@ -2700,9 +2700,11 @@ const monthStartMSK = () => new Date(Date.now() + 3 * 3600e3).toISOString().slic
 const openPeriod = () => [workPeriod, payPeriod, curPeriod, ovPeriod]
   .find(p => /^\d{4}-\d{2}$/.test(p || '')) || null;
 const rateStartDefault = () => { const p = openPeriod(); return p ? p + '-01' : monthStartMSK(); };
-/* Границы даты «действует с» — те же, что проверяет база в reconcile_employee_rates:
-   не раньше начала прошлого месяца (иначе переписываются уже отработанные месяцы)
-   и не дальше трёх месяцев вперёд (там это почти всегда опечатка в годе).
+/* Границы даты «действует с» — те же, что проверяет база (rate_edit_floor,
+   миграция 081): не раньше начала прошлого месяца (глубже месяцы посчитаны и
+   выплачены) и не дальше трёх месяцев вперёд (там это почти всегда опечатка в
+   годе). Прошлый месяц доступен ВСЕГДА: после 6-го числа он не закрывается, а
+   требует отметки «осознанно» — см. backdateNeedsOk.
    На СОЗДАНИИ карточки ставки вставляются прямым INSERT, мимо RPC, — там эта
    проверка вообще единственная. */
 function rateBounds() {
@@ -2712,13 +2714,27 @@ function rateBounds() {
   return { min: iso(new Date(Date.UTC(y, m - 1, 1))), max: iso(new Date(Date.UTC(y, m + 3, d))) };
 }
 /* Дата раньше текущего месяца — это правка уже посчитанного и, возможно,
-   выплаченного. Молча так делать нельзя: предупреждаем словами. */
+   выплаченного. Молча так делать нельзя: предупреждаем словами.
+   По 6-е число включительно предупреждения достаточно: по прошлому месяцу ещё
+   идут подсчёты, и правка — обычная работа. С 7-го просим отметку «осознанно».
+   То же правило проверяет база (rate_backdate_needs_ok, миграция 081) — здесь
+   оно не для безопасности, а чтобы человек не наткнулся на отказ вслепую. */
 function rateBackWarn(d) {
-  const cur = monthStartMSK();
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(d)) && d < cur
-    ? `<div class="rc-warn">${ICONS.lock} Это <b>задним числом</b>: месяц уже посчитан,
-       по нему могли быть выплаты. Суммы пересчитаются.</div>`
-    : '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d)) || d >= monthStartMSK()) return '';
+  const warn = `<div class="rc-warn">${ICONS.lock} Это <b>задним числом</b>: месяц уже посчитан,
+       по нему могли быть выплаты. Суммы пересчитаются.</div>`;
+  // Галочка перерисовывается вместе с датой и сбрасывается — подтверждают именно
+  // ту дату, которая стоит в поле, а не какую-то отмеченную до её изменения.
+  return backdateNeedsOk(d)
+    ? warn + `<label class="rc-ok"><input type="checkbox" id="rbOk">
+       <span>Да, ставлю дату <b>задним числом</b> осознанно — правка попадёт в журнал с моим именем</span></label>`
+    : warn;
+}
+/* Общая проверка для обоих диалогов: без отметки дальше не пускаем. */
+function backdateBlocked(d) {
+  if (!backdateNeedsOk(d) || $('rbOk')?.checked) return false;
+  toast('Отметьте, что ставите дату задним числом осознанно', true);
+  return true;
 }
 /* Предупреждение под полем даты: если ставка стартует ПОЗЖЕ открытого месяца,
    за этот месяц не начислится ничего — ровно тот случай, что мы разбирали. */
@@ -2765,6 +2781,7 @@ function rateStartDialog(fresh, removed = 0) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(inp.value)) { toast('Укажите дату', true); return; }
       if (inp.value < b.min) { toast('Слишком далеко в прошлом: те месяцы уже посчитаны и выплачены', true); return; }
       if (inp.value > b.max) { toast('Слишком далеко в будущем — проверьте год', true); return; }
+      if (backdateBlocked(inp.value)) return;
       resolve(inp.value); closeModal2();
     };
   });
@@ -2808,6 +2825,7 @@ function rateChangeDialog(emp, oldLine, newLine) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(inp.value)) { toast('Укажите дату', true); return; }
       if (inp.value < b.min) { toast('Слишком далеко в прошлом: те месяцы уже посчитаны и выплачены', true); return; }
       if (inp.value > b.max) { toast('Слишком далеко в будущем — проверьте год', true); return; }
+      if (backdateBlocked(inp.value)) return;
       resolve(inp.value); closeModal();
     };
   });

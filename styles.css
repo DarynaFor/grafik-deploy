@@ -575,6 +575,13 @@ body.authed .login-stage{display:none}
    добавляя процентнику сменную ставку, молча закрывал бы его процент) */
 .rc-warn{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.35);border-radius:10px;padding:10px 12px;margin:10px 0 4px;font-size:13px;line-height:1.5}
 .rc-warn b{color:var(--red-d)}
+/* Отметка «осознанно» под предупреждением: правка прошлого месяца после 6-го
+   числа. Крупная зона нажатия — её жмут с телефона, и промах здесь стоит денег. */
+.rc-ok{display:flex;align-items:flex-start;gap:9px;cursor:pointer;
+  padding:9px 12px;margin:0 0 4px;border-radius:10px;font-size:13px;line-height:1.45;
+  background:rgba(255,107,107,.06);border:1px solid rgba(255,107,107,.28)}
+.rc-ok input{width:18px;height:18px;margin:1px 0 0;flex:0 0 auto;accent-color:var(--red-d);cursor:pointer}
+.rc-ok b{color:var(--red-d)}
 
 /* ── Расчёт: СМЕШАННАЯ таблица ────────────────────────────────────────
    Слева по строкам начисления (видно, из чего сложилась сумма), справа одно

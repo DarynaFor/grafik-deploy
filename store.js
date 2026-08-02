@@ -32,6 +32,15 @@ const mskDay = () => new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10
 // МСК, а не UTC: toISOString() между 00:00 и 03:00 по Москве дал бы вчерашнюю дату.
 const rateFrom = () => mskDay().slice(0, 8) + '01';
 
+/* Правка задним числом ПОСЛЕ 6-го числа требует явной отметки «осознанно»: по 6-е
+   включительно по прошлому месяцу ещё идут подсчёты, и правка — обычная работа, а
+   дальше это уже вмешательство в закрытый расчёт. То же правило проверяет база
+   (rate_backdate_needs_ok, миграция 081), и такая правка попадает в журнал с
+   пометкой «ЗАДНИМ ЧИСЛОМ» и автором. Определение ОДНО на весь клиент: и диалоги
+   в app.js, и вызовы RPC ниже берут его отсюда, чтобы не разъехались. */
+export const backdateNeedsOk = d =>
+  /^\d{4}-\d{2}-\d{2}$/.test(String(d)) && d < rateFrom() && +mskDay().slice(8, 10) > 6;
+
 const DEMO_USERS = [
   { id: 'u-milena', name: 'Милена', role: 'owner' },
   { id: 'u-alena',  name: 'Алёна',  role: 'operator' },
@@ -811,7 +820,8 @@ export class SupabaseStore {
         amount: l.amount ?? null, amount_night: l.amount_night ?? null, percent: l.percent ?? null,
       }));
       const { error: eR } = await this.sb.rpc('reconcile_employee_rates',
-        { p_employee_id: id, p_keep_ids, p_new_lines, p_valid_from: validFrom || null });
+        { p_employee_id: id, p_keep_ids, p_new_lines, p_valid_from: validFrom || null,
+          p_backdate_ok: backdateNeedsOk(validFrom) });
       if (eR) throw new Error(rateError(eR));
     }
   }
@@ -832,6 +842,7 @@ export class SupabaseStore {
       p_amount_night: line.amount_night ?? null,
       p_percent:      line.percent ?? null,
       p_valid_from:   validFrom || null,
+      p_backdate_ok:  backdateNeedsOk(validFrom),
     });
     if (error) throw new Error(rateError(error));
     return Array.isArray(data) ? data[0] : data;
