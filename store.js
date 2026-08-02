@@ -428,13 +428,13 @@ export class MockStore {
     const pre = period + '-';   // period = 'YYYY-MM'
     return this.db.schedule.filter(s => String(s.work_date).startsWith(pre)).map(s => ({ ...s }));
   }
-  async setScheduleCell(employeeId, work_date, cell) {
+  async setScheduleCell(employeeId, work_date, cell, position = 'main') {
     if (this.user?.role === 'operator' && this._dayClosed(work_date)) throw new Error('День закрыт — правку вносит владелец (или Алёна по СМС, этап 5б)');
     const empty = (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null && (cell.fact ?? null) === null;
-    const idx = this.db.schedule.findIndex(s => s.employee_id === employeeId && s.work_date === work_date);
+    const idx = this.db.schedule.findIndex(s => s.employee_id === employeeId && s.work_date === work_date && (s.position || 'main') === position);
     if (empty) { if (idx >= 0) this.db.schedule.splice(idx, 1); this._save(); return null; }   // очистка = удаление строки
     let row = idx >= 0 ? this.db.schedule[idx] : null;
-    if (!row) { row = { id: this.db.nextId.schedule++, employee_id: employeeId, work_date, plan_start: null, plan_end: null, plan_kind: null, fact: null, source: 'manual' }; this.db.schedule.push(row); }
+    if (!row) { row = { id: this.db.nextId.schedule++, employee_id: employeeId, work_date, position, plan_start: null, plan_end: null, plan_kind: null, fact: null, source: 'manual' }; this.db.schedule.push(row); }
     if ('plan_start' in cell) row.plan_start = cell.plan_start ?? null;
     if ('plan_end' in cell) row.plan_end = cell.plan_end ?? null;   // ручная правка = старт+код, диапазон импорта сбрасываем
     if ('plan_kind' in cell) row.plan_kind = cell.plan_kind ?? null;
@@ -446,9 +446,10 @@ export class MockStore {
     const op = this.user?.role === 'operator';
     for (const c of cells) {
       if (op && this._dayClosed(c.work_date)) continue;   // закрытый день оператор шаблоном не переписывает (зеркалит RLS)
-      const idx = this.db.schedule.findIndex(s => s.employee_id === c.employee_id && s.work_date === c.work_date);
+      const pos = c.position || 'main';
+      const idx = this.db.schedule.findIndex(s => s.employee_id === c.employee_id && s.work_date === c.work_date && (s.position || 'main') === pos);
       let row = idx >= 0 ? this.db.schedule[idx] : null;
-      if (!row) { row = { id: this.db.nextId.schedule++, employee_id: c.employee_id, work_date: c.work_date, plan_start: null, plan_kind: null, plan_end: null, fact: null, source: c.source || 'template' }; this.db.schedule.push(row); }
+      if (!row) { row = { id: this.db.nextId.schedule++, employee_id: c.employee_id, work_date: c.work_date, position: pos, plan_start: null, plan_kind: null, plan_end: null, fact: null, source: c.source || 'template' }; this.db.schedule.push(row); }
       row.plan_kind = c.plan_kind ?? null;
       row.plan_start = c.plan_start ?? null;
       row.plan_end = c.plan_end ?? null;
@@ -457,19 +458,19 @@ export class MockStore {
     }
     this._save(); return cells.length;
   }
-  async clearScheduleMonth(employeeId, period) {   // удалить весь месяц у сотрудника (закрытые дни у оператора не трогаем)
+  async clearScheduleMonth(employeeId, period, position = 'main') {   // удалить месяц ОДНОЙ позиции (закрытые дни у оператора не трогаем)
     const pre = period + '-', before = this.db.schedule.length, op = this.user?.role === 'operator';
-    this.db.schedule = this.db.schedule.filter(s => !(s.employee_id === employeeId && String(s.work_date).startsWith(pre) && !(op && this._dayClosed(s.work_date))));
+    this.db.schedule = this.db.schedule.filter(s => !(s.employee_id === employeeId && (s.position || 'main') === position && String(s.work_date).startsWith(pre) && !(op && this._dayClosed(s.work_date))));
     this._save(); return before - this.db.schedule.length;
   }
-  async setScheduleFact(employeeId, work_date, fact) {   // табель: null=по плану · 'x'=не вышел · число=факт.часы
+  async setScheduleFact(employeeId, work_date, fact, position = 'main') {   // табель: null=по плану · 'x'=не вышел · число=факт.часы
     if (this.user?.role === 'operator' && this._dayClosed(work_date)) throw new Error('День закрыт — правку вносит владелец (или Алёна по СМС, этап 5б)');
-    const idx = this.db.schedule.findIndex(s => s.employee_id === employeeId && s.work_date === work_date);
+    const idx = this.db.schedule.findIndex(s => s.employee_id === employeeId && s.work_date === work_date && (s.position || 'main') === position);
     let row = idx >= 0 ? this.db.schedule[idx] : null;
     const old = row ? (row.fact ?? null) : null;
     if (!row) {
       if (fact == null) return null;                     // нет ни плана, ни факта — нечего отмечать
-      row = { id: this.db.nextId.schedule++, employee_id: employeeId, work_date, plan_start: null, plan_kind: null, plan_end: null, fact: null, source: 'manual' };
+      row = { id: this.db.nextId.schedule++, employee_id: employeeId, work_date, position, plan_start: null, plan_kind: null, plan_end: null, fact: null, source: 'manual' };
       this.db.schedule.push(row);
     }
     row.fact = fact ?? null;
@@ -844,49 +845,65 @@ export class SupabaseStore {
     }
     return all;
   }
-  async setScheduleCell(employeeId, work_date, cell) {
+  // position — какая из работ человека: 'main' (основная) или 'dezh' (дежурство).
+  // Ключ таблицы с миграции 072 — тройка (employee_id, work_date, position), и
+  // onConflict обязан её повторять: по старой паре запрос теперь падает, потому
+  // что такого ограничения больше нет.
+  async setScheduleCell(employeeId, work_date, cell, position = 'main') {
     const empty = (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null && (cell.fact ?? null) === null;
     if (empty) {   // очистка = удаление строки, чтобы таблица не копила пустышки
-      const { error } = await this.sb.from('schedule').delete().eq('employee_id', employeeId).eq('work_date', work_date);
+      const { error } = await this.sb.from('schedule').delete()
+        .eq('employee_id', employeeId).eq('work_date', work_date).eq('position', position);
       if (error) throw error; return null;
     }
-    const row = { employee_id: employeeId, work_date, source: 'manual', updated_by: this.user.id };
+    const row = { employee_id: employeeId, work_date, position, source: 'manual', updated_by: this.user.id };
     if ('plan_start' in cell) row.plan_start = cell.plan_start ?? null;
     if ('plan_end' in cell) row.plan_end = cell.plan_end ?? null;   // ручная правка = старт+код, диапазон импорта сбрасываем
     if ('plan_kind' in cell) row.plan_kind = cell.plan_kind ?? null;
     if ('fact' in cell) row.fact = cell.fact ?? null;
-    const { data, error } = await this.sb.from('schedule').upsert(row, { onConflict: 'employee_id,work_date' }).select().single();
+    const { data, error } = await this.sb.from('schedule')
+      .upsert(row, { onConflict: 'employee_id,work_date,position' }).select().single();
     if (error) throw error; return data;
   }
   async setScheduleBulk(cells) {   // массовое заполнение (шаблон/импорт). fact не трогаем — это план
-    const rows = cells.map(c => ({ employee_id: c.employee_id, work_date: c.work_date, plan_kind: c.plan_kind ?? null, plan_start: c.plan_start ?? null, plan_end: c.plan_end ?? null, source: c.source || 'template', updated_by: this.user.id }));
-    const { error } = await this.sb.from('schedule').upsert(rows, { onConflict: 'employee_id,work_date' });
+    const rows = cells.map(c => ({ employee_id: c.employee_id, work_date: c.work_date,
+      position: c.position || 'main',
+      plan_kind: c.plan_kind ?? null, plan_start: c.plan_start ?? null, plan_end: c.plan_end ?? null,
+      source: c.source || 'template', updated_by: this.user.id }));
+    const { error } = await this.sb.from('schedule').upsert(rows, { onConflict: 'employee_id,work_date,position' });
     if (error) throw error; return rows.length;
   }
-  async clearScheduleMonth(employeeId, period) {
+  // Чистим ОДНУ позицию: «Очистить месяц» в шаблоне относится к той строке
+  // графика, из которой его вызвали, а не к обеим работам человека.
+  async clearScheduleMonth(employeeId, period, position = 'main') {
     const start = period + '-01';
     const [y, m] = period.split('-').map(Number);
     const next = (m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01');
-    const { error } = await this.sb.from('schedule').delete().eq('employee_id', employeeId).gte('work_date', start).lt('work_date', next);
+    const { error } = await this.sb.from('schedule').delete()
+      .eq('employee_id', employeeId).eq('position', position).gte('work_date', start).lt('work_date', next);
     if (error) throw error; return true;
   }
-  async setScheduleFact(employeeId, work_date, fact) {   // табель: пишем ТОЛЬКО факт (source/план не трогаем — сохраняем 'import')
+  async setScheduleFact(employeeId, work_date, fact, position = 'main') {   // табель: пишем ТОЛЬКО факт (source/план не трогаем — сохраняем 'import')
     // Журнал правок факта пишет триггер schedule_journal (migrations/002) — здесь ничего не нужно
     //   (перезаписывается при след. правке). Для анти-фрода нужна неизменяемая история кто/когда отметил.
+    // eq('position') обязателен во ВСЕХ трёх запросах: без него отметка факта по
+    // основной работе задела бы и строку дежурства за тот же день.
     const { data: upd, error } = await this.sb.from('schedule')
-      .update({ fact: fact ?? null, updated_by: this.user.id }).eq('employee_id', employeeId).eq('work_date', work_date).select();
+      .update({ fact: fact ?? null, updated_by: this.user.id })
+      .eq('employee_id', employeeId).eq('work_date', work_date).eq('position', position).select();
     if (error) throw error;
     if (upd && upd.length) {
       const r = upd[0];
       if (!r.plan_kind && (r.fact ?? null) === null) {   // ни плана, ни факта — не держим пустышку (как setScheduleCell)
-        const { error: dErr } = await this.sb.from('schedule').delete().eq('employee_id', employeeId).eq('work_date', work_date);
+        const { error: dErr } = await this.sb.from('schedule').delete()
+          .eq('employee_id', employeeId).eq('work_date', work_date).eq('position', position);
         if (dErr) throw dErr; return null;
       }
       return r;
     }
     if (fact == null) return null;                       // строки нет и писать нечего
     const { data: ins, error: e2 } = await this.sb.from('schedule')   // вышел без плана — новая строка
-      .insert({ employee_id: employeeId, work_date, fact, source: 'manual', updated_by: this.user.id }).select().single();
+      .insert({ employee_id: employeeId, work_date, position, fact, source: 'manual', updated_by: this.user.id }).select().single();
     if (e2) throw e2; return ins;
   }
   // Нормы часов месяца. Считает БАЗА (v_month_norm, migrations/056): ручное
