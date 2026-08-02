@@ -586,7 +586,24 @@ export class MockStore {
   async listJournal({ filter = 'all', beforeId = null, limit = 50 } = {}) {
     let arr = (this.db.journal || []).filter(j => journalMatch(j, filter)).sort((a, b) => (b.id || 0) - (a.id || 0));
     if (beforeId != null) arr = arr.filter(j => (j.id || 0) < beforeId);
-    const rows = arr.slice(0, limit);
+    // Зеркало вьюхи v_journal_named (миграция 070): демо обязано показывать журнал
+    // так же, как прод, иначе на нём нельзя проверить именно то, ради чего 070 и
+    // делалась. Правила те же: часть сущностей кладёт в entity_id самого
+    // сотрудника, часть — номер своей строки, и его надо разрешать поиском.
+    const BY_EMP = ['employee', 'employee_month_norm', 'month_carry', 'salary_override', 'doctor_month_revenue'];
+    const SRC = { schedule: 'schedule', money_line: 'money', rate_line: null };
+    const rows = arr.slice(0, limit).map(j => {
+      let subject_id = j.employee_id ?? null, subject_date = j.ref_date ?? null;
+      if (subject_id == null) {
+        if (BY_EMP.includes(j.entity)) subject_id = j.entity_id;
+        else if (SRC[j.entity]) {
+          const row = (this.db[SRC[j.entity]] || []).find(r => r.id === j.entity_id);
+          if (row) { subject_id = row.employee_id ?? null; subject_date = subject_date ?? (row.work_date || row.period || null); }
+        }
+      }
+      const emp = subject_id == null ? null : (this.db.employees || []).find(e => e.id === subject_id);
+      return { ...j, subject_id, subject_date, subject_fio: emp ? emp.fio : null };
+    });
     return { rows, hasMore: arr.length > limit, lastId: rows.length ? rows[rows.length - 1].id : null };
   }
 }
@@ -975,7 +992,11 @@ export class SupabaseStore {
   // одинаков, id строго монотонен и без коллизий. Тянем limit+1, чтобы узнать,
   // есть ли ещё, без отдельного count.
   async listJournal({ filter = 'all', beforeId = null, limit = 50 } = {}) {
-    let q = this.sb.from('journal').select('*, actor_user:app_user(display_name)')
+    // v_journal_named, а не сама таблица: вьюха доносит, У КОГО правка (subject_fio)
+    // и за какой день (subject_date). У старых записей сотрудник достаётся поиском
+    // по entity_id, пока жива исходная строка, — миграция 070. security_invoker=on,
+    // так что RLS журнала (только владелец) действует ровно как на таблице.
+    let q = this.sb.from('v_journal_named').select('*')
       .order('id', { ascending: false }).limit(limit + 1);
     if (filter === 'red') q = q.eq('red', true);
     else if (filter === 'money') q = q.in('entity', ['money_line', 'patient_payment']);
@@ -987,7 +1008,7 @@ export class SupabaseStore {
     const { data, error } = await q;
     if (error) throw error;
     const hasMore = data.length > limit;
-    const rows = (hasMore ? data.slice(0, limit) : data).map(j => ({ ...j, actor: j.actor_user?.display_name || j.actor }));
+    const rows = (hasMore ? data.slice(0, limit) : data).map(j => ({ ...j, actor: j.actor_name || j.actor }));
     return { rows, hasMore, lastId: rows.length ? rows[rows.length - 1].id : null };
   }
 

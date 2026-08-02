@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=80';
+import { makeStore, lineLabel, sameRate } from './store.js?v=81';
 
 const $ = id => document.getElementById(id);
 
@@ -2064,7 +2064,10 @@ function drawSchedule() {
   // колл-центра норма — договорённость (180 ч), а не то, что успели расставить в
   // табеле. Δ при этом СТАВИТ прежний вопрос — «вышел ли так, как назначено», —
   // и потому по-прежнему считается от плана, а не от нормы.
-  head += '<div class="gr-day sum s-cnt">Смен</div><div class="gr-day sum s-norm" title="норма часов в месяц — задаётся вручную">Норма</div><div class="gr-day sum s-fact">Факт</div><div class="gr-day sum s-delta" title="факт − норма (у кого норма задана); иначе факт − план смен за прошедшие дни">Δ</div>';
+  // Порядок хвоста: Смен · Δ · Норма · Факт. Δ переехала ЛЕВЕЕ намеренно —
+  // приморозить можно только КРАЙНИЕ справа колонки подряд, а Дарина попросила
+  // держать на виду именно «Норму» и «Факт» (02.08). Δ осталась рядом с ними.
+  head += '<div class="gr-day sum s-cnt">Смен</div><div class="gr-day sum s-delta" title="факт − норма (у кого норма задана); иначе факт − план смен за прошедшие дни">Δ</div><div class="gr-day sum s-norm" title="норма часов в месяц — задаётся вручную">Норма</div><div class="gr-day sum s-fact">Факт</div>';
   let rows = '', shown = 0;
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
@@ -2101,7 +2104,7 @@ function drawSchedule() {
         : !nMan ? 'Норма по производственному календарю РФ. Клик — изменить'
         : nCal != null ? `Норма задана вручную (по календарю ${fmtH(nCal)}). Клик — изменить`
         : 'Норма задана вручную: сменный график, календарь для него нормы не даёт. Клик — изменить';
-      rows += `<div class="gr-sum s-cnt">${cnt}</div><div class="gr-sum s-norm${nMan ? ' n-man' : ''}${canEditNorm ? ' tap' : ''}" data-emp="${e.id}" title="${esc(canEditNorm ? nTitle : nTitle.replace(/\. Клик.*$/, ''))}">${nh == null ? '<span class="muted">—</span>' : fmtH(nh)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}" title="${nh != null ? `факт ${fmtH(factPast)} − норма ${fmtH(nh)}` : `факт ${fmtH(factPast)} − план смен ${fmtH(planPast)} (норма не задана)`}">${ds}</div>`;
+      rows += `<div class="gr-sum s-cnt">${cnt}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}" title="${nh != null ? `факт ${fmtH(factPast)} − норма ${fmtH(nh)}` : `факт ${fmtH(factPast)} − план смен ${fmtH(planPast)} (норма не задана)`}">${ds}</div><div class="gr-sum s-norm${nMan ? ' n-man' : ''}${canEditNorm ? ' tap' : ''}" data-emp="${e.id}" title="${esc(canEditNorm ? nTitle : nTitle.replace(/\. Клик.*$/, ''))}">${nh == null ? '<span class="muted">—</span>' : fmtH(nh)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div>`;
     }
   }
   const grid = $('scheduleGrid');
@@ -3806,7 +3809,29 @@ function journalRowHtml(j) {
   const act = J_ACTION[j.action] ? `<b class="jact">${esc(J_ACTION[j.action])}</b> · ` : '';
   if (j.action === 'created') what = `${J_ENTITY[j.entity] || esc(j.entity)} создана: <b>${esc(j.new_value || '')}</b>`;
   else what = `${act}${J_ENTITY[j.entity] || esc(j.entity)} · ${J_FIELD[j.field] || esc(j.field || '')}: ${j.old_value ? `<s>${esc(j.old_value)}</s> → ` : ''}<b>${esc(j.new_value || '—')}</b>`;
-  return `<div class="jrow${j.red ? ' jred' : ''}"><div style="flex:1"><div>${what}</div><div class="who">${esc(j.actor)}</div></div><div class="jt">${esc(fmtDT(j.at))}</div></div>`;
+  // У КОГО и за какой день — главное, чего журналу не хватало: строка «клетка:
+  // → day 08:00» не давала ни имени, ни даты, и красный флаг «правка после
+  // закрытия» некому было предъявить (Дарина 02.08, миграция 070).
+  // У записей до 070 сотрудник достаётся поиском по entity_id и находится не
+  // всегда: если строку графика или выплату удалили, восстанавливать нечего.
+  // Тогда пишем это прямо, а не подставляем догадку — журнал должен либо знать,
+  // либо честно молчать.
+  // Молчание и «не определён» — РАЗНОЕ. Справочник специальностей или заведение
+  // пользователя ни к какому сотруднику не относятся, там строки быть не должно.
+  // А вот правка графика или выплаты всегда чья-то: если имя не нашлось (строку
+  // удалили до 070), это надо сказать вслух, иначе запись читается как «ничья».
+  const PERSONAL = ['schedule', 'money_line', 'rate_line', 'employee', 'employee_month_norm',
+    'month_carry', 'salary_override', 'doctor_month_revenue', 'payout'];
+  const кто = j.subject_fio ? esc(j.subject_fio)
+    : (PERSONAL.includes(j.entity) ? '<span class="muted">сотрудник не определён</span>' : '');
+  const когда = j.subject_date ? esc(dm(j.subject_date)) : '';
+  const subj = кто || когда
+    ? `<div class="jsubj">${кто}${кто && когда ? ' · ' : ''}${когда}</div>`
+    : '';
+  // Порядок строк: У КОГО (крупно, первым — это то, что ищут глазами) → что на
+  // что → кто правил. Раньше первой шла сущность, и записи сливались в столбец
+  // одинаковых «График · клетка».
+  return `<div class="jrow${j.red ? ' jred' : ''}"><div style="flex:1">${subj}<div>${what}</div><div class="who">${esc(j.actor)}</div></div><div class="jt">${esc(fmtDT(j.at))}</div></div>`;
 }
 
 // reset=true — сменили фильтр или зашли заново: тянем с начала. reset=false —

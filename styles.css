@@ -167,6 +167,10 @@ body.authed .login-stage{display:none}
 .jrow:last-child{border:none}
 .jrow .jt{font-size:11px;color:var(--ink-3);white-space:nowrap;margin-left:auto;font-variant-numeric:tabular-nums}
 .jrow .who{color:var(--ink-2);font-size:12px;margin-top:2px;font-weight:600}
+/* «У кого» — первая и самая заметная строка записи: именно её ищут глазами,
+   когда разбирают, кто кому что поправил. Автор правки остаётся ниже и бледнее:
+   он важен, но вторым (070). */
+.jrow .jsubj{font-weight:700;font-size:13.5px;margin-bottom:2px}
 .jrow s{color:var(--ink-3)} .jrow b{color:var(--green-d)}
 /* красные записи журнала: премия (её не ловит сверка), сторно, деньги уволенному,
    старый период, смена правила расчёта — то, на что владелец должен смотреть сам */
@@ -338,18 +342,17 @@ body.authed .login-stage{display:none}
 .gr-day.sum{font-size:9px;letter-spacing:0}
 .gr-sum{padding:6px 4px;text-align:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--hair);font-variant-numeric:tabular-nums;font-weight:700;font-size:11px;color:var(--ink-2);display:flex;align-items:center;justify-content:center;background:var(--surf-1)}
 /* норма правится кликом (владелец/СЕО) — показываем это курсором и подсветкой */
-/* Итоги (Смен · Норма · Факт · Δ) ПРИМОРОЖЕНЫ справа. Ради них таблицу и мотали:
-   в месяце 31 колонка, и чтобы увидеть норму с фактом, надо было доехать до конца
-   (Дарина 02.08). Теперь видно сразу — как «Осталось выдать» на «Расчёте», где
-   та же приморозка уже сделана (.pw-pay).
-   Прижимаются справа налево, каждая на свою ширину. Ширина ОБЯЗАНА быть
-   фиксированной (--gr-sum-w в шаблоне колонок): от auto нельзя посчитать
-   right-смещение, и колонки наехали бы друг на друга. */
-.gr-sum,.gr-day.sum{position:sticky;z-index:2;background:var(--surf-1)}
-.gr-sum.s-delta,.gr-day.sum.s-delta{right:0}
-.gr-sum.s-fact,.gr-day.sum.s-fact{right:var(--gr-sum-w,50px)}
-.gr-sum.s-norm,.gr-day.sum.s-norm{right:calc(var(--gr-sum-w,50px)*2)}
-.gr-sum.s-cnt,.gr-day.sum.s-cnt{right:calc(var(--gr-sum-w,50px)*3);border-left:1px solid var(--glass-bd)}
+/* ПРИМОРОЖЕНЫ справа только «Норма» и «Факт» — их Дарина назвала главными
+   (02.08). Ради них таблицу и мотали: в месяце 31 колонка. Тот же приём, что на
+   «Расчёте» у «Осталось выдать» (.pw-pay).
+   Приморозить можно лишь КРАЙНИЕ справа колонки подряд — поэтому Δ переставлена
+   левее «Нормы» (порядок хвоста задаётся в drawSchedule). «Смен» и Δ едут вместе
+   с днями: на телефоне каждая примороженная колонка — это минус день видимости.
+   Ширина хвоста ОБЯЗАНА быть фиксированной (--gr-sum-w в шаблоне колонок): от
+   auto нельзя посчитать right-смещение, и колонки наехали бы друг на друга. */
+.gr-sum.s-norm,.gr-day.sum.s-norm,.gr-sum.s-fact,.gr-day.sum.s-fact{position:sticky;z-index:2;background:var(--surf-1)}
+.gr-sum.s-fact,.gr-day.sum.s-fact{right:0}
+.gr-sum.s-norm,.gr-day.sum.s-norm{right:var(--gr-sum-w,50px);border-left:1px solid var(--glass-bd)}
 .gr-sum.s-norm.tap{cursor:pointer;transition:.12s}
 .gr-sum.s-norm.tap:hover{background:var(--fill-hi);color:var(--green)}
 /* норма, правленная рукой: календарное и ручное число обязаны отличаться на
@@ -606,13 +609,6 @@ body.authed .login-stage{display:none}
    съедать экран. 130+78 = 208 из ~350, середина остаётся достижимой скроллом. */
 @media (max-width:720px){
   :root{--gr-name-w:165px;--gr-sum-w:42px}
-  /* Примороженного хвоста на телефоне держим ТРИ колонки, не четыре: 4×42 плюс
-     имя — это весь экран, дней бы не осталось вовсе. «Смен» отпускаем скроллиться
-     (её и спрашивали меньше всего), Норма/Факт/Δ остаются на месте — ради них
-     всё и делалось. Отпущенная перестаёт быть липкой, значит и граница слева
-     переезжает на «Норму», иначе стык рисовался бы в пустоте. */
-  .gr-sum.s-cnt,.gr-day.sum.s-cnt{position:static;border-left:0}
-  .gr-sum.s-norm,.gr-day.sum.s-norm{border-left:1px solid var(--glass-bd)}
   .me-add{grid-template-columns:1fr}
   .pw{font-size:12.5px}
   .pw td,.pw th{padding:7px 8px}
