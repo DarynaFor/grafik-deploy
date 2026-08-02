@@ -656,6 +656,16 @@ async function refresh() {
 /* ── сотрудники ── */
 const specName = id => specialties.find(s => s.id === id)?.name || '—';
 const specCat = id => specialties.find(s => s.id === id)?.category || 'Прочие';
+// Человек может работать у нас на ДВУХ работах (employee.specialty_id_2,
+// миграция 072). Фильтр по отделению обязан находить его по любой из них —
+// иначе дежурант-врач пропадает из «Врачей», когда вторая работа в другой
+// категории, и наоборот. Группируется он при этом по ОСНОВНОЙ (specCat).
+// picked=true — отделение выбрано явно: ищем по ЛЮБОЙ из работ, чтобы дежурант
+// не пропадал из «Врачей». picked=false — рисуем все категории подряд, и тогда
+// человек должен попасть РОВНО в одну (свою основную), иначе задвоится в списке.
+const inCat = (e, cat, picked) => picked
+  ? (specCat(e.specialty_id) === cat || (e.specialty_id_2 != null && specCat(e.specialty_id_2) === cat))
+  : specCat(e.specialty_id) === cat;
 /* Шапка ЛЮБОГО окна про человека — одна на все окна, чтобы везде было одинаково:
    ФИО ЦЕЛИКОМ (с отчеством) + специальность + строка контекста. «Фамилия Имя»
    не показывает отчества, а однофамильцы различаются только им — в «Расчёте»
@@ -734,7 +744,7 @@ function renderEmployees(filter = '') {
   let html = arch.length ? `<div style="margin:0 0 10px"><button class="btn btn-ghost btn-sm" id="archToggle">${showArch ? 'Скрыть архив' : 'Архив · ' + arch.length}</button></div>` : '';
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
-    let list = all.filter(e => specCat(e.specialty_id) === cat && String(e.fio || "").toLowerCase().includes(f));
+    let list = all.filter(e => inCat(e, cat, !!catF) && String(e.fio || "").toLowerCase().includes(f));
     if (gapF) list = list.filter(e => cardGaps(e)[gapF]);
     else if (onlyInc) list = list.filter(isIncomplete);
     if (!list.length) continue;
@@ -1758,10 +1768,16 @@ function toggleArchive(e) {
 }
 function employeeForm(e) {
   const so = specialties.map(s => `<option value="${s.id}" ${e?.specialty_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+  // Дежурство — ВТОРАЯ специальность. Пустая строка первой: у большинства
+  // дежурства нет, и поле должно оставаться пустым по умолчанию.
+  const so2 = `<option value="">— нет —</option>` +
+    specialties.map(s => `<option value="${s.id}" ${e?.specialty_id_2 === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
   showModal(`<h3>${e ? 'Редактировать карточку' : 'Новая карточка'}</h3><div class="msub">${ICONS.lock} ФИО, телефон и ставки заводит владелец — изменения попадут в журнал</div>
     <label class="flbl">ФИО</label><input class="input" id="mFio" value="${esc(e?.fio || '')}" placeholder="Фамилия Имя Отчество">
     <div class="frow"><div><label class="flbl">Специальность</label><select class="input" id="mSpec">${so}</select></div>
     <div><label class="flbl">Должность</label><input class="input" id="mPos" value="${esc(e?.position === FIO_SENTINEL ? '' : (e?.position || ''))}" placeholder="напр. Заведующий"></div></div>
+    <label class="flbl">Вторая работа</label><select class="input" id="mSpec2">${so2}</select>
+    <div class="msub" style="margin-top:-4px">Заполните, если человек работает у нас на ДВУХ работах — дежурит по ночам или совмещает вторую должность. В «Графике» появится вторая строка: свои смены, свои часы, отдельная оплата по ставке-совместителю.</div>
     <label class="flbl">Телефон (для СМС)</label><input class="input" id="mPhone" type="tel" inputmode="tel" value="${esc(fmtPhone(e?.phone) || '')}" placeholder="+7 921 554-12-31">
     <div class="frow"><div><label class="flbl">Принят</label><input class="input" id="mHired" type="date" value="${esc(e?.hired_on || '')}"></div>
     <div><label class="flbl">Уволен</label><input class="input" id="mLeft" type="date" value="${esc(e?.left_on || '')}"></div></div>
@@ -1793,7 +1809,8 @@ function employeeForm(e) {
         $('mLeft').focus(); btn.disabled = false;
         toast('Дата увольнения не может быть раньше даты приёма', true); return;
       }
-      const patch = { fio, position: $('mPos').value.trim(), phone: phoneNorm || null, specialty_id: +$('mSpec').value || null, hired_on, left_on };
+      const patch = { fio, position: $('mPos').value.trim(), phone: phoneNorm || null,
+        specialty_id: +$('mSpec').value || null, specialty_id_2: +$('mSpec2').value || null, hired_on, left_on };
       const lines = collectLines(box);
       // Крупная ставка в карточке → тоже переспросить, не опечатка ли.
       const big = bigAmounts(lines);
@@ -1874,7 +1891,7 @@ const daysInMonth = p => { const [y, m] = p.split('-').map(Number); return new D
 // ISO-даты сравниваются лексикографически — это и есть сравнение по дате.
 const nextPeriodStart = p => { let [y, m] = p.split('-').map(Number); if (++m > 12) { m = 1; y++; } return y + '-' + String(m).padStart(2, '0') + '-01'; };
 const cellDate = day => curPeriod + '-' + String(day).padStart(2, '0');
-const cellOf = (empId, day) => scheduleRows.find(s => s.employee_id === empId && s.work_date === cellDate(day));
+const cellOf = (empId, day, pos = 'main') => scheduleRows.find(s => s.employee_id === empId && s.work_date === cellDate(day) && (s.position || 'main') === pos);
 // Гос. праздники РФ — ТОЛЬКО фиксированные по ТК РФ ст.112 (одни и те же каждый год),
 // БЕЗ ежегодных переносов выходных. Причина двойная: переносы меняются постановлением
 // каждый год (моё знание про конкретный год ненадёжно), и здесь пометки нужны ЛИШЬ для
@@ -1941,9 +1958,16 @@ function factClass(c) {                                             // клас�
     return Math.abs(parseFloat(fx) - planHoursOf(c)) > 0.05 ? ' f-dev' : ' f-ok';   // часы = плановым → «по плану», не расхождение
   return (p && !isRest(p)) ? ' f-ok' : ' f-rest';
 }
-function schedCellInner(c, past) {                                  // содержимое клетки: план (мини) + факт (цвет)
+// Дежурство читается БУКВОЙ, а не часом начала: смен там всего три, и «Н/С/—»
+// с одного взгляда отличимы, тогда как «18» и «8» глаз путает с обычной сменой.
+const DEZH_LETTER = { night12: 'Н', day24: 'С', absent: '—' };
+function schedCellInner(c, past, pos = 'main') {                   // содержимое клетки: план (мини) + факт (цвет)
   const p = c && c.plan_kind, fx = c ? (c.fact ?? null) : null;
   if (!p && fx === null) return '';
+  if (pos === 'dezh') {
+    const L = DEZH_LETTER[p] || (p ? cellText(c) : '');
+    return `<span class="iv mini dz-l${p === 'absent' ? ' miss' : ''}">${esc(L)}</span>`;
+  }
   const planTxt = cellText(c);                                     // «9–17» / «В» / «С» / «—»
   if (!past) return `<span class="iv mini">${esc(planTxt)}</span>`;               // будущее — только план
   const isWork = p && !isRest(p);
@@ -2048,8 +2072,8 @@ function drawSchedule() {
   }
 
   // индекс клетки для O(1) (иначе find по всем строкам на каждую из ~3700 клеток)
-  const byKey = new Map(scheduleRows.map(s => [s.employee_id + '|' + s.work_date, s]));
-  const cget = (id, d) => byKey.get(id + '|' + cellDate(d)) || null;
+  const byKey = new Map(scheduleRows.map(s => [s.employee_id + '|' + s.work_date + '|' + (s.position || 'main'), s]));
+  const cget = (id, d, pos = 'main') => byKey.get(id + '|' + cellDate(d) + '|' + pos) || null;
 
   let head = '<div class="gr-corner">Сотрудник</div>';
   for (let d = 1; d <= nd; d++) {
@@ -2071,7 +2095,7 @@ function drawSchedule() {
   let rows = '', shown = 0;
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
-    const list = active.filter(e => specCat(e.specialty_id) === cat && String(e.fio || "").toLowerCase().includes(f));
+    const list = active.filter(e => inCat(e, cat, !!catF) && String(e.fio || "").toLowerCase().includes(f));
     if (!list.length) continue;
     rows += `<div class="gr-group"><span><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${list.length}</span></div>`;
     for (const e of list) {
@@ -2105,6 +2129,26 @@ function drawSchedule() {
         : nCal != null ? `Норма задана вручную (по календарю ${fmtH(nCal)}). Клик — изменить`
         : 'Норма задана вручную: сменный график, календарь для него нормы не даёт. Клик — изменить';
       rows += `<div class="gr-sum s-cnt">${cnt}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}" title="${nh != null ? `факт ${fmtH(factPast)} − норма ${fmtH(nh)}` : `факт ${fmtH(factPast)} − план смен ${fmtH(planPast)} (норма не задана)`}">${ds}</div><div class="gr-sum s-norm${nMan ? ' n-man' : ''}${canEditNorm ? ' tap' : ''}" data-emp="${e.id}" title="${esc(canEditNorm ? nTitle : nTitle.replace(/\. Клик.*$/, ''))}">${nh == null ? '<span class="muted">—</span>' : fmtH(nh)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div>`;
+      // ── ВТОРАЯ РАБОТА: своя строка графика ──────────────────────────────────
+      // Появляется, только если в карточке заполнено поле «Вторая работа»
+      // (employee.specialty_id_2, миграция 072). Клетки те же, но пишутся с
+      // position='dezh' — своя строка, свои часы, отдельная оплата.
+      if (e.specialty_id_2) {
+        rows += `<div class="gr-name gr-dezh" data-emp="${e.id}" data-pos="dezh" title="${esc(specName(e.specialty_id_2))} — вторая работа · клик по клетке листает Н (ночь) → С (сутки) → «не вышел» → пусто · правая кнопка (на телефоне долгое нажатие) — обычный диалог со сменами и часами">`
+          + `<span class="dz-tag">${ICONS.moon}</span>${esc(specName(e.specialty_id_2))}</div>`;
+        let dCnt = 0, dFact = 0;
+        for (let d = 1; d <= nd; d++) {
+          const c = cget(e.id, d, 'dezh'), pst = pastDay(d);
+          const empty = !(c && (c.plan_kind || (c.fact ?? null) !== null));
+          if (pst) { const fh = factHoursOf(c); dFact += fh; if (fh > 0) dCnt++; }
+          const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
+          rows += `<div class="gr-cell sc2 dz${bg}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}" data-pos="dezh">${schedCellInner(c, pst, 'dezh')}</div>`;
+        }
+        // Порядок колонок ТОТ ЖЕ, что у основной строки (master переставил их
+        // на cnt · Δ · норма · факт) — иначе итоги съедут по сетке.
+        // Нормы у второй работы нет: она сверх основной, сравнивать не с чем.
+        rows += `<div class="gr-sum s-cnt">${dCnt}</div><div class="gr-sum s-delta"></div><div class="gr-sum s-norm"><span class="muted">—</span></div><div class="gr-sum s-fact">${fmtH(dFact)}</div>`;
+      }
     }
   }
   const grid = $('scheduleGrid');
@@ -2122,13 +2166,55 @@ function drawSchedule() {
     grid.querySelectorAll('.gr-cell').forEach(cell => cell.onclick = () => {
       const emp = +cell.dataset.emp, d = +cell.dataset.day;
       if (!canEditDay(d)) return;                 // #70: СМС убрана — закрытые дни правят напрямую (в журнал)
+      // Дежурство ставится ОДНИМ кликом (решение Дарины 05.08): смены там всего
+      // три, и открывать ради них модалку — лишний шаг на каждую клетку.
+      // Подробности (часы, замена) остаются на правой кнопке / долгом тапе.
+      if (cell.dataset.pos === 'dezh') { cycleDezhCell(emp, d); return; }
       pastDay(d) ? scheduleFactPopup(emp, d) : scheduleCellPopup(emp, d);   // прошлое → факт, будущее → план
+    });
+    // Правая кнопка на дежурстве — обычный диалог. На телефоне правой кнопки нет,
+    // поэтому то же самое вешаем на долгое нажатие.
+    grid.querySelectorAll('.gr-cell.dz').forEach(cell => {
+      const open = ev => {
+        ev.preventDefault();
+        const emp = +cell.dataset.emp, d = +cell.dataset.day;
+        if (!canEditDay(d)) return;
+        pastDay(d) ? scheduleFactPopup(emp, d, 'dezh') : scheduleCellPopup(emp, d, 'dezh');
+      };
+      cell.oncontextmenu = open;
+      let t = null;
+      cell.addEventListener('touchstart', ev => { t = setTimeout(() => { t = null; open(ev); }, 500); }, { passive: true });
+      const cancel = () => { if (t) { clearTimeout(t); t = null; } };
+      cell.addEventListener('touchend', cancel);
+      cell.addEventListener('touchmove', cancel);
     });
     grid.querySelectorAll('.gr-day.tapday').forEach(h => h.onclick = () => scheduleDayDialog(+h.dataset.day));
   }
   if (editable) grid.querySelectorAll('.gr-name.tap').forEach(n => n.onclick = () => scheduleTemplateDialog(+n.dataset.emp));
   if (canEditNorm) grid.querySelectorAll('.s-norm.tap').forEach(n => n.onclick = () => normDialog(+n.dataset.emp));
 }
+/* Дежурство одним кликом: Н (ночь) → С (сутки) → «не вышел» → пусто → Н…
+   Три состояния и очистка — весь словарь дежурства, поэтому модалка тут лишняя.
+   Пишем ВСЕГДА планом: дежурство назначают, а не отмечают задним числом; факт
+   «не вышел» выражаем видом 'absent' — он нерабочий и не оплачивается (043). */
+const DEZH_CYCLE = [
+  { kind: 'night12', start: '18:00', label: 'ночь' },
+  { kind: 'day24',   start: '08:00', label: 'сутки' },
+  { kind: 'absent',  start: null,    label: 'не вышел' },
+  { kind: null,      start: null,    label: 'пусто' },
+];
+async function cycleDezhCell(empId, day) {
+  const cur = (scheduleRows || []).find(s => s.employee_id === empId
+    && s.work_date === cellDate(day) && (s.position || 'main') === 'dezh');
+  const at = DEZH_CYCLE.findIndex(x => x.kind === (cur?.plan_kind ?? null));
+  const next = DEZH_CYCLE[(at + 1) % DEZH_CYCLE.length];
+  try {
+    await store.setScheduleCell(empId, cellDate(day),
+      { plan_kind: next.kind, plan_start: next.start, plan_end: null, fact: null }, 'dezh');
+    await renderSchedule();
+  } catch (err) { toast(err.message || err, true); }
+}
+
 /* Норма часов месяца. Решение Дарины 31.07: «проставить по календарю РФ, но с
    возможностью исправить вручную на клетке». Отсюда два поля в одном диалоге:
      • ТИП НЕДЕЛИ — свойство человека (40/36/24 или сменный график). По нему
@@ -2217,9 +2303,9 @@ function scheduleDayDialog(day) {
     $('dCancel').onclick = closeModal;
   }
 }
-function scheduleCellPopup(empId, day) {
+function scheduleCellPopup(empId, day, pos = 'main') {
   const e = employees.find(x => x.id === empId); if (!e) return;
-  const date = cellDate(day), c = cellOf(empId, day);
+  const date = cellDate(day), c = cellOf(empId, day, pos);
   const opts = shiftKinds.filter(k => k.code !== 'custom').map(k => `<option value="${k.code}" ${c && c.plan_kind === k.code ? 'selected' : ''}>${esc(k.label)}</option>`).join('');   // custom без конца смены = 0ч → исключаем (как в шаблоне)
   showModal(`${personHead(e, `${day} ${esc(periodLabel(curPeriod))} · смена = тип + время начала`)}
     <label class="flbl">Тип смены</label><select class="input" id="scKind"><option value="">— пусто —</option>${opts}</select>
@@ -2229,11 +2315,11 @@ function scheduleCellPopup(empId, day) {
   $('scSave').onclick = async () => {
     const btn = $('scSave'); if (btn.disabled) return; btn.disabled = true;
     const kind = $('scKind').value || null;   // время без типа смены не сохраняем (иначе невидимая строка-пустышка)
-    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, plan_end: null, fact: null }); closeModal(); toast(ICONS.check + 'Сохранено'); renderSchedule(); }
+    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, plan_end: null, fact: null }, pos); closeModal(); toast(ICONS.check + 'Сохранено'); renderSchedule(); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
   $('scClear').onclick = async () => {
-    try { await store.setScheduleCell(empId, date, { plan_kind: null, plan_start: null, plan_end: null, fact: null }); closeModal(); toast('Очищено'); renderSchedule(); }
+    try { await store.setScheduleCell(empId, date, { plan_kind: null, plan_start: null, plan_end: null, fact: null }, pos); closeModal(); toast('Очищено'); renderSchedule(); }
     catch (err) { toast(err.message || err, true); }
   };
 }
@@ -2270,9 +2356,9 @@ function vacationDialog(empId, startDay) {
 // Табель: отметка факта за прошедший день. Вышел по плану = сброс (null); прочерк = 'x'; свои часы = число.
 // Если планового выхода НЕТ (пусто/выходной/не вышел), а человек ВЫШЕЛ на замену — Алёна добавляет смену:
 // выбирает ТИП (сутки/12ч/оклад/…) → оплата по его ставке за этот тип; либо вписывает часы (почасово).
-function scheduleFactPopup(empId, day) {
+function scheduleFactPopup(empId, day, pos = 'main') {
   const e = employees.find(x => x.id === empId); if (!e) return;
-  const date = cellDate(day), c = cellOf(empId, day);
+  const date = cellDate(day), c = cellOf(empId, day, pos);
   const p = c && c.plan_kind, isWork = p && !isRest(p);
   const cur = c ? (c.fact ?? null) : null;
   const planLine = p ? `план: <b>${esc(cellText(c))}</b>${isWork ? ' · ' + fmtH(planHoursOf(c)) : ''}` : 'плана нет';
@@ -2300,7 +2386,7 @@ function scheduleFactPopup(empId, day) {
     <div class="modal-foot"><span class="msub">сейчас: <b>${now}</b></span><button class="btn btn-ghost btn-sm" id="fVac">Отпуск…</button><button class="btn btn-ghost btn-sm" id="fClear">Сбросить</button></div>`);
   $('fVac').onclick = () => vacationDialog(empId, day);
   const apply = async fact => {
-    try { await store.setScheduleFact(empId, date, fact); closeModal(); toast(ICONS.check + 'Факт отмечен'); renderSchedule(); }
+    try { await store.setScheduleFact(empId, date, fact, pos); closeModal(); toast(ICONS.check + 'Факт отмечен'); renderSchedule(); }
     catch (err) { toast(err.message || err, true); }
   };
   $('modalBox').querySelectorAll('.fact-btn').forEach(b => b.onclick = () => apply(b.dataset.f === 'plan' ? null : b.dataset.f));
@@ -2309,7 +2395,7 @@ function scheduleFactPopup(empId, day) {
   if (kb) kb.onclick = async () => {
     const kind = $('fKind').value; if (!kind) return toast('Выберите тип смены', true);
     if (kb.disabled) return; kb.disabled = true;
-    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: $('fKindStart').value || null, plan_end: null, fact: null }); closeModal(); toast(ICONS.check + 'Смена добавлена'); renderSchedule(); }
+    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: $('fKindStart').value || null, plan_end: null, fact: null }, pos); closeModal(); toast(ICONS.check + 'Смена добавлена'); renderSchedule(); }
     catch (err) { kb.disabled = false; toast(err.message || err, true); }
   };
   $('fClear').onclick = () => apply(null);
@@ -2582,7 +2668,7 @@ function renderRates(filter = '') {
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
   let html = '';
   for (const cat of cats) {
-    let list = active.filter(e => specCat(e.specialty_id) === cat && String(e.fio || "").toLowerCase().includes(f));
+    let list = active.filter(e => inCat(e, cat, false) && String(e.fio || "").toLowerCase().includes(f));
     if (onlyEmpty) list = list.filter(e => !primaryLine(e));
     if (!list.length) continue;
     html += `<div class="group-label"><span class="caps">${esc(cat)} · ${list.length}</span><span class="line"></span></div>` + list.map(rtRow).join('');

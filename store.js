@@ -145,11 +145,11 @@ export class MockStore {
   }
 
   async listEmployees() { return structuredClone(this.db.employees); }
-  async createEmployee({ fio, position, phone, specialty_id, hired_on, left_on, lines, valid_from }) {
+  async createEmployee({ fio, position, phone, specialty_id, specialty_id_2, hired_on, left_on, lines, valid_from }) {
     const vfrom = valid_from || rateFrom();
     const e = {
       id: this.db.nextId.employee++, fio, position: position || '', phone: phone || '',
-      specialty_id: specialty_id || null, status: 'active',
+      specialty_id: specialty_id || null, specialty_id_2: specialty_id_2 || null, status: 'active',
       hired_on: hired_on || null, left_on: left_on || null,
       created_at: new Date().toISOString(),
       lines: (lines || []).map(l => ({ ...l, id: this.db.nextId.line++, valid_from: vfrom, valid_to: null })),
@@ -775,9 +775,9 @@ export class SupabaseStore {
     if (error) throw error;
     return data.map(e => ({ ...e, lines: e.lines || [] }));
   }
-  async createEmployee({ fio, position, phone, specialty_id, hired_on, left_on, lines, valid_from }) {
+  async createEmployee({ fio, position, phone, specialty_id, specialty_id_2, hired_on, left_on, lines, valid_from }) {
     const { data: e, error } = await this.sb.from('employee')
-      .insert({ fio, position, phone, specialty_id, hired_on: hired_on || null, left_on: left_on || null, created_by: this.user.id }).select().single();
+      .insert({ fio, position, phone, specialty_id, specialty_id_2: specialty_id_2 || null, hired_on: hired_on || null, left_on: left_on || null, created_by: this.user.id }).select().single();
     if (error) throw new Error(employeeError(error));
     if (lines?.length) {
       const vfrom = valid_from || rateFrom();
