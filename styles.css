@@ -477,7 +477,11 @@ body.authed .login-stage{display:none}
 
 /* санитарская смена: в клетке деньги, а не часы — читаются как сумма, не как время */
 .gr-cell.amt{cursor:pointer}
-.amt-v{font-size:12px;font-weight:600;color:var(--green);letter-spacing:-.01em}
+.amt-v{font-size:12.5px;font-weight:800;letter-spacing:-.2px;line-height:1.1}
+.amt-v.a0{color:var(--green-d)}                       /* 3200 */
+.amt-v.a1{color:var(--blue-d,#2b6cb0)}                /* 3700 */
+.amt-v.a2{color:var(--violet-d,#6b46c1)}              /* 5050 */
+.amt-v.ax{color:var(--amber-d,#b7791f)}               /* своя сумма */
 .gr-cell.amt:hover{background:linear-gradient(var(--fill-hi),var(--fill-hi)),var(--surf-2)}
 @keyframes updIn{from{opacity:0;transform:translateX(-50%) translateY(12px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 /* Полоса дней: узкие клетки в ряд, перенос по ширине карточки. Это не табель на

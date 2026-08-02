@@ -1982,16 +1982,46 @@ function isAmountCell(e, pos) {
   return !activeLines(e).some(l => l.pay_kind === 'оклад');
 }
 const rubShort = kop => (kop / 100).toLocaleString('ru-RU');
+/* Клик по клетке отвечает МГНОВЕННО: рисуем новое значение сразу, запрос уходит
+   следом. Раньше ждали ответа сервера и потом перезагружали ВЕСЬ график — 119
+   человек x 31 день из базы после каждого клика; на небыстром интернете это
+   секунда с лишним ожидания на каждую клетку, а проставлять их надо десятками.
+   Если запись не прошла — возвращаем прежнее значение и говорим об этом вслух:
+   молча показывать несохранённое нельзя, это деньги. */
+function paintAmountCell(empId, day, pos, kop) {
+  const sel = `.gr-cell[data-emp="${empId}"][data-day="${day}"]` +
+    (pos === 'second' ? '[data-pos="second"]' : ':not([data-pos="second"])');
+  const el = document.querySelector(sel);
+  if (!el) return;
+  const i = kop ? SAN_AMOUNTS.indexOf(kop) : -1;
+  el.innerHTML = kop ? `<span class="amt-v a${i < 0 ? 'x' : i}">${esc(rubShort(kop))}</span>` : '';
+}
+function cacheAmount(empId, day, pos, kop) {
+  const d = cellDate(day);
+  const i = (scheduleRows || []).findIndex(s => s.employee_id === empId
+    && s.work_date === d && (s.position || 'main') === pos);
+  if (i >= 0) {
+    const row = scheduleRows[i];
+    if (kop == null && !row.plan_kind && (row.fact ?? null) === null) scheduleRows.splice(i, 1);
+    else scheduleRows[i] = { ...row, amount_kop: kop };
+  } else if (kop != null) {
+    scheduleRows.push({ employee_id: empId, work_date: d, position: pos, amount_kop: kop, plan_kind: null, fact: null });
+  }
+}
 async function cycleAmountCell(empId, day, pos) {
   const cur = (scheduleRows || []).find(s => s.employee_id === empId
     && s.work_date === cellDate(day) && (s.position || 'main') === pos);
-  const at = SAN_AMOUNTS.indexOf(cur?.amount_kop ?? null);
-  // цикл: 3200 → 3700 → 5050 → пусто → 3200
+  const was = cur?.amount_kop ?? null;
+  const at = SAN_AMOUNTS.indexOf(was);
+  // цикл: 3200 -> 3700 -> 5050 -> пусто -> 3200
   const next = at < 0 ? SAN_AMOUNTS[0] : (at + 1 < SAN_AMOUNTS.length ? SAN_AMOUNTS[at + 1] : null);
+  cacheAmount(empId, day, pos, next); paintAmountCell(empId, day, pos, next);
   try {
     await store.setScheduleCell(empId, cellDate(day), { amount_kop: next }, pos);
-    await renderSchedule();
-  } catch (err) { toast(err.message || err, true); }
+  } catch (err) {
+    cacheAmount(empId, day, pos, was); paintAmountCell(empId, day, pos, was);
+    toast('Не сохранилось: ' + (err.message || err), true);
+  }
 }
 /* Своя сумма — правой кнопкой или долгим нажатием. */
 function amountCellPopup(e, day, pos) {
@@ -2030,7 +2060,10 @@ function schedCellInner(c, past, pos = 'main') {                   // содер
   const p = c && c.plan_kind, fx = c ? (c.fact ?? null) : null;
   // Санитарская смена: в клетке ДЕНЬГИ, а не часы. Показываем их и выходим —
   // ни плана, ни факта у такой смены нет, сумма и есть всё содержимое.
-  if (c && c.amount_kop) return `<span class="iv amt-v">${esc(rubShort(c.amount_kop))}</span>`;
+  if (c && c.amount_kop) {
+    const i = SAN_AMOUNTS.indexOf(c.amount_kop);
+    return `<span class="amt-v a${i < 0 ? 'x' : i}">${esc(rubShort(c.amount_kop))}</span>`;
+  }
   if (!p && fx === null) return '';
   if (pos === 'second') {
     const L = SECOND_LETTER[p] || (p ? cellText(c) : '');
