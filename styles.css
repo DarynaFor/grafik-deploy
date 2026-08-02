@@ -296,7 +296,12 @@ body.authed .login-stage{display:none}
    в клинике их хватает. Ширину подняли до 190px, перенос по словам. */
 .gr-name{position:sticky;left:0;z-index:2;background:var(--surf-2);padding:8px 12px;font-weight:600;white-space:normal;overflow-wrap:anywhere;line-height:1.25;max-width:var(--gr-name-w);min-width:var(--gr-name-w);display:flex;align-items:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
 .gr-name.tap{cursor:pointer;transition:.12s}
-.gr-name.tap:hover{background:var(--fill-hi);color:var(--green)}
+/* Подсветку кладём СЛОЕМ поверх непрозрачного фона, а не вместо него. --fill-hi
+   полупрозрачный: подставленный как единственный фон, он делал примороженную
+   колонку просвечивающей, и сквозь ФИО лезли уехавшие под неё клетки (Дарина
+   02.08, скриншот с «Гулевский Роман Александрович» поверх смен).
+   Ровно так уже сделано в «Расчёте» — .pw-row:hover .pw-name ниже. */
+.gr-name.tap:hover{background:linear-gradient(var(--fill-hi),var(--fill-hi)),var(--surf-2);color:var(--green)}
 .gr-cell{padding:7px 3px;text-align:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--hair);cursor:pointer;min-height:38px;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;transition:.1s;font-weight:600;color:var(--ink-3)}
 .gr-cell:hover{background:var(--fill-hi);color:var(--ink)}
 .gr-cell.today{box-shadow:inset 0 0 0 1px rgba(52,201,124,.35)}
@@ -354,11 +359,18 @@ body.authed .login-stage{display:none}
 .gr-sum.s-fact,.gr-day.sum.s-fact{right:0}
 .gr-sum.s-norm,.gr-day.sum.s-norm{right:var(--gr-sum-w,50px);border-left:1px solid var(--glass-bd)}
 .gr-sum.s-norm.tap{cursor:pointer;transition:.12s}
-.gr-sum.s-norm.tap:hover{background:var(--fill-hi);color:var(--green)}
+/* То же и здесь: «Норма» приморожена справа, и на наведении сквозь неё
+   просвечивали бы уезжающие под неё дни. Базовый фон у неё --surf-1. */
+.gr-sum.s-norm.tap:hover{background:linear-gradient(var(--fill-hi),var(--fill-hi)),var(--surf-1);color:var(--green)}
 /* норма, правленная рукой: календарное и ручное число обязаны отличаться на
    вид — иначе «184» и «180» выглядят одинаково достоверно. Точка, а не цвет:
    цветом в этой сетке говорят факт/расхождение, занимать его нельзя. */
-.gr-sum.s-norm.n-man{position:relative}
+/* ⚠ Здесь СТОЯЛО position:relative — ради точки ниже. У правила три класса, у
+   приморозки два, и по специфичности relative побеждал sticky: колонка «Норма»
+   переставала липнуть РОВНО У ТЕХ, кому норму задали вручную, и съезжала на
+   колонку влево, под заголовок «Δ» (Дарина 02.08 — «з'їхала норма»).
+   Точке relative не нужен: sticky сам создаёт систему координат для absolute. */
+.gr-sum.s-norm.n-man{position:sticky}
 .gr-sum.s-norm.n-man::after{content:"";position:absolute;top:4px;right:4px;width:4px;height:4px;border-radius:50%;background:var(--amber-d)}
 .gr-sum.s-fact{color:var(--green-d)}
 .gr-sum.s-delta.neg{color:var(--red-d)}
