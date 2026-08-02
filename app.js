@@ -1960,9 +1960,76 @@ function factClass(c) {                                             // клас�
 }
 // Дежурство читается БУКВОЙ, а не часом начала: смен там всего три, и «Н/С/—»
 // с одного взгляда отличимы, тогда как «18» и «8» глаз путает с обычной сменой.
+/* ── САНИТАРКИ: смена оплачивается СУММОЙ, а не часами ──────────────────────
+   Сумма зависит от локации, поэтому живёт в самой клетке (schedule.amount_kop,
+   миграция 074), а не в ставке человека: ставка одна на все смены, а тут у
+   каждого дня своя. Клик листает три ходовые суммы, своя — правой кнопкой или
+   долгим нажатием (на телефоне правой кнопки нет).
+   ⚠ Суммы пока зашиты здесь. Дарина просила вынести их в настройку отдельной
+   задачей — «спочатку ввести це, а потім думати як змінювати в майбутньому». */
+const SAN_AMOUNTS = [320000, 370000, 505000];                    // 3200 / 3700 / 5050 ₽ в копейках
+/* Кому клетка платит суммой. Правило выведено из ДАННЫХ, а не из должности: у
+   всех шестерых санитарок основная специальность «Санитарка», но у Казаковой и
+   Мазур есть ещё и оклад — их основная работа считается по нему как раньше, а
+   санитарные смены идут второй строкой. Значит: основная строка платит суммой,
+   только если оклада нет; вторая строка — если вторая работа санитарская. */
+function isAmountCell(e, pos) {
+  if (!e) return false;
+  const san = id => /санитар/i.test(specName(id));
+  if (pos === 'second') return san(e.specialty_id_2);
+  if (!san(e.specialty_id)) return false;
+  return !activeLines(e).some(l => l.pay_kind === 'оклад');
+}
+const rubShort = kop => (kop / 100).toLocaleString('ru-RU');
+async function cycleAmountCell(empId, day, pos) {
+  const cur = (scheduleRows || []).find(s => s.employee_id === empId
+    && s.work_date === cellDate(day) && (s.position || 'main') === pos);
+  const at = SAN_AMOUNTS.indexOf(cur?.amount_kop ?? null);
+  // цикл: 3200 → 3700 → 5050 → пусто → 3200
+  const next = at < 0 ? SAN_AMOUNTS[0] : (at + 1 < SAN_AMOUNTS.length ? SAN_AMOUNTS[at + 1] : null);
+  try {
+    await store.setScheduleCell(empId, cellDate(day), { amount_kop: next }, pos);
+    await renderSchedule();
+  } catch (err) { toast(err.message || err, true); }
+}
+/* Своя сумма — правой кнопкой или долгим нажатием. */
+function amountCellPopup(e, day, pos) {
+  const cur = (scheduleRows || []).find(s => s.employee_id === e.id
+    && s.work_date === cellDate(day) && (s.position || 'main') === pos);
+  showModal(`${personHead(e, `${day} ${esc(periodLabel(curPeriod))} · оплата за смену`)}
+    <label class="flbl">Сумма за смену</label>
+    <input class="input" id="saVal" inputmode="numeric" autocomplete="off"
+      value="${cur?.amount_kop ? rubShort(cur.amount_kop) : ''}" placeholder="напр. 3 200">
+    <div class="msub" style="margin-top:8px">Ходовые: ${SAN_AMOUNTS.map(a =>
+      `<button class="btn btn-ghost btn-sm sa-quick" data-kop="${a}">${rubShort(a)}</button>`).join(' ')}</div>
+    <div class="msub" style="margin-top:8px">Часы у такой смены не считаются — платим ровно эту сумму.</div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost btn-sm" id="saNo">Отмена</button>
+      ${cur?.amount_kop ? `<button class="btn btn-ghost btn-sm" id="saClear">Убрать</button>` : ''}
+      <button class="btn btn-primary btn-sm" id="saOk">${ICONS.check}Сохранить</button></div>`);
+  const save = async kop => {
+    try { await store.setScheduleCell(e.id, cellDate(day), { amount_kop: kop }, pos);
+      closeModal(); await renderSchedule(); }
+    catch (err) { toast(err.message || err, true); }
+  };
+  $('saNo').onclick = closeModal;
+  document.querySelectorAll('.sa-quick').forEach(b => b.onclick = () => save(+b.dataset.kop));
+  if (cur?.amount_kop) $('saClear').onclick = () => save(null);
+  $('saVal').onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); $('saOk').click(); } };
+  $('saOk').onclick = () => {
+    let v;
+    try { v = parseNum($('saVal').value, { thousands: true, field: 'сумму', max: 100000 }); }
+    catch (err) { toast(err.message || err, true); return; }
+    if (!v) { toast('Укажите сумму', true); return; }
+    save(Math.round(v * 100));
+  };
+}
 const SECOND_LETTER = { night12: 'Н', day24: 'С', absent: '—' };
 function schedCellInner(c, past, pos = 'main') {                   // содержимое клетки: план (мини) + факт (цвет)
   const p = c && c.plan_kind, fx = c ? (c.fact ?? null) : null;
+  // Санитарская смена: в клетке ДЕНЬГИ, а не часы. Показываем их и выходим —
+  // ни плана, ни факта у такой смены нет, сумма и есть всё содержимое.
+  if (c && c.amount_kop) return `<span class="iv amt-v">${esc(rubShort(c.amount_kop))}</span>`;
   if (!p && fx === null) return '';
   if (pos === 'second') {
     const L = SECOND_LETTER[p] || (p ? cellText(c) : '');
@@ -2108,7 +2175,7 @@ function drawSchedule() {
         if (pst) { planPast += planHoursOf(c); const fh = factHoursOf(c); factPast += fh; if (fh > 0) cnt++; }
         const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
         const addable = empty && canEditDay(d) && (pst || d === todayD);   // пустая клетка прошлого/сегодня, куда можно ДОБАВИТЬ смену (замена) — подсказка «+»
-        rows += `<div class="gr-cell sc2${bg}${c && c.plan_kind === 'отпуск' ? ' k-vac' : ''}${addable ? ' addable' : ''}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
+        rows += `<div class="gr-cell sc2${bg}${amtRow ? ' amt' : ''}${c && c.plan_kind === 'отпуск' ? ' k-vac' : ''}${addable ? ' addable' : ''}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
       }
       // numeric из Supabase приходит строкой — parseFloat обязателен
       const nrm = monthNorms.get(e.id), nh = nrm && nrm.hours != null ? parseFloat(nrm.hours) : null;
@@ -2142,7 +2209,7 @@ function drawSchedule() {
           const empty = !(c && (c.plan_kind || (c.fact ?? null) !== null));
           if (pst) { const fh = factHoursOf(c); dFact += fh; if (fh > 0) dCnt++; }
           const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
-          rows += `<div class="gr-cell sc2 sec${bg}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}" data-pos="second">${schedCellInner(c, pst, 'second')}</div>`;
+          rows += `<div class="gr-cell sc2 sec${amtRow2 ? ' amt' : ''}${bg}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}" data-pos="second">${schedCellInner(c, pst, 'second')}</div>`;
         }
         // Порядок колонок ТОТ ЖЕ, что у основной строки (master переставил их
         // на cnt · Δ · норма · факт) — иначе итоги съедут по сетке.
@@ -2169,16 +2236,24 @@ function drawSchedule() {
       // Дежурство ставится ОДНИМ кликом (решение Дарины 05.08): смены там всего
       // три, и открывать ради них модалку — лишний шаг на каждую клетку.
       // Подробности (часы, замена) остаются на правой кнопке / долгом тапе.
-      if (cell.dataset.pos === 'second') { cycleSecondCell(emp, d); return; }
+      const pos = cell.dataset.pos || 'main';
+      // Санитарская смена платится СУММОЙ: клик листает ходовые 3200/3700/5050,
+      // своя — правой кнопкой или долгим нажатием. Часы у такой клетки не спрашиваем.
+      const who = employees.find(x => x.id === emp);
+      if (isAmountCell(who, pos)) { cycleAmountCell(emp, d, pos); return; }
+      if (pos === 'second') { cycleSecondCell(emp, d); return; }
       pastDay(d) ? scheduleFactPopup(emp, d) : scheduleCellPopup(emp, d);   // прошлое → факт, будущее → план
     });
     // Правая кнопка на дежурстве — обычный диалог. На телефоне правой кнопки нет,
     // поэтому то же самое вешаем на долгое нажатие.
-    grid.querySelectorAll('.gr-cell.sec').forEach(cell => {
+    grid.querySelectorAll('.gr-cell.sec, .gr-cell.amt').forEach(cell => {
       const open = ev => {
         ev.preventDefault();
         const emp = +cell.dataset.emp, d = +cell.dataset.day;
         if (!canEditDay(d)) return;
+        const p2 = cell.dataset.pos || 'main';
+        const who = employees.find(x => x.id === emp);
+        if (isAmountCell(who, p2)) { amountCellPopup(who, d, p2); return; }
         pastDay(d) ? scheduleFactPopup(emp, d, 'second') : scheduleCellPopup(emp, d, 'second');
       };
       cell.oncontextmenu = open;

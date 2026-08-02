@@ -867,7 +867,11 @@ export class SupabaseStore {
   // onConflict обязан её повторять: по старой паре запрос теперь падает, потому
   // что такого ограничения больше нет.
   async setScheduleCell(employeeId, work_date, cell, position = 'main') {
-    const empty = (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null && (cell.fact ?? null) === null;
+    // amount_kop входит в проверку «пусто»: у санитарок смена может состоять
+    // ТОЛЬКО из суммы (ни вида, ни времени), и без этого такая клетка считалась
+    // бы пустой и удалялась сразу после записи.
+    const empty = (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null
+      && (cell.fact ?? null) === null && (cell.amount_kop ?? null) === null;
     if (empty) {   // очистка = удаление строки, чтобы таблица не копила пустышки
       const { error } = await this.sb.from('schedule').delete()
         .eq('employee_id', employeeId).eq('work_date', work_date).eq('position', position);
@@ -878,6 +882,7 @@ export class SupabaseStore {
     if ('plan_end' in cell) row.plan_end = cell.plan_end ?? null;   // ручная правка = старт+код, диапазон импорта сбрасываем
     if ('plan_kind' in cell) row.plan_kind = cell.plan_kind ?? null;
     if ('fact' in cell) row.fact = cell.fact ?? null;
+    if ('amount_kop' in cell) row.amount_kop = cell.amount_kop ?? null;   // оплата за смену целиком (074)
     const { data, error } = await this.sb.from('schedule')
       .upsert(row, { onConflict: 'employee_id,work_date,position' }).select().single();
     if (error) throw error; return data;
