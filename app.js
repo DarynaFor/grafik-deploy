@@ -3807,8 +3807,13 @@ let journalFilter = 'all', journalRows = [], journalLastId = null, journalHasMor
 function journalRowHtml(j) {
   let what;
   const act = J_ACTION[j.action] ? `<b class="jact">${esc(J_ACTION[j.action])}</b> · ` : '';
+  // Триггеры денег кладут ФИО прямо в текст поля («Иванов И.И. · июль 2026 · зп на
+  // карту»). Теперь имя стоит отдельной строкой сверху, и в тексте оно повторялось
+  // дважды подряд. Срезаем повтор — трогаем только показ, сам журнал не меняем.
+  const fld = String(j.field || '');
+  const fldShort = j.subject_fio && fld.startsWith(j.subject_fio + ' · ') ? fld.slice(j.subject_fio.length + 3) : fld;
   if (j.action === 'created') what = `${J_ENTITY[j.entity] || esc(j.entity)} создана: <b>${esc(j.new_value || '')}</b>`;
-  else what = `${act}${J_ENTITY[j.entity] || esc(j.entity)} · ${J_FIELD[j.field] || esc(j.field || '')}: ${j.old_value ? `<s>${esc(j.old_value)}</s> → ` : ''}<b>${esc(j.new_value || '—')}</b>`;
+  else what = `${act}${J_ENTITY[j.entity] || esc(j.entity)} · ${J_FIELD[fldShort] || esc(fldShort)}: ${j.old_value ? `<s>${esc(j.old_value)}</s> → ` : ''}<b>${esc(j.new_value || '—')}</b>`;
   // У КОГО и за какой день — главное, чего журналу не хватало: строка «клетка:
   // → day 08:00» не давала ни имени, ни даты, и красный флаг «правка после
   // закрытия» некому было предъявить (Дарина 02.08, миграция 070).
@@ -3824,7 +3829,10 @@ function journalRowHtml(j) {
     'month_carry', 'salary_override', 'doctor_month_revenue', 'payout'];
   const кто = j.subject_fio ? esc(j.subject_fio)
     : (PERSONAL.includes(j.entity) ? '<span class="muted">сотрудник не определён</span>' : '');
-  const когда = j.subject_date ? esc(dm(j.subject_date)) : '';
+  // Дату показываем ТОЛЬКО у графика: там это настоящий день правки. У денег и
+  // норм дата — это первое число месяца, и «01.07» читалось бы как «первого
+  // июля», хотя речь про весь июль. Месяц у них и так написан словами в тексте.
+  const когда = j.entity === 'schedule' && j.subject_date ? esc(dm(j.subject_date)) : '';
   const subj = кто || когда
     ? `<div class="jsubj">${кто}${кто && когда ? ' · ' : ''}${когда}</div>`
     : '';
