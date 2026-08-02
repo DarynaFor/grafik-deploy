@@ -137,6 +137,8 @@
         <div class="search"><span data-ic="search"></span><input id="payrollSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
         <div id="payrollCat" class="cselect"></div>
         <label class="rt-toggle" title="Показать только тех, кому за месяц ничего не начислено"><input type="checkbox" id="payOnlyZero"> без начисления</label>
+        <button class="btn btn-ghost btn-sm" id="carryPrev" hidden
+          title="Перенести остатки предыдущего месяца в колонку «С прошлого мес.»">Перенести остатки</button>
         <div id="payrollStat" class="sched-stat"></div>
       </div>
       <div id="payrollNote"></div>
@@ -187,7 +189,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=94"></script>
+<script type="module" src="app.js?v=95"></script>
 <!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
      без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
      index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —

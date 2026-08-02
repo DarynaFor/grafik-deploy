@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=77';
+import { makeStore, lineLabel, sameRate } from './store.js?v=79';
 
 const $ = id => document.getElementById(id);
 
@@ -2868,6 +2868,13 @@ function drawPayroll(filter = '') {
   });
   // Ячейка переноса — своё окно. stopPropagation, иначе поверх откроется ещё и
   // окно всей строки, и человеку придётся закрывать два подряд.
+  {
+    const cb = $('carryPrev');
+    if (cb) {
+      cb.hidden = !isStaff();
+      cb.onclick = () => carryFromPrev(payPeriod, () => renderPayroll($('payrollSearch')?.value || ''));
+    }
+  }
   $('payrollTable').querySelectorAll('.pw-carry.pw-tap[data-carry]').forEach(td => {
     td.onclick = e => { e.stopPropagation(); editCarry(+td.dataset.carry, payPeriod, () => renderPayroll($('payrollSearch')?.value || '')); };
   });
@@ -3062,6 +3069,50 @@ async function undoAllPayouts(empId, per, onDone) {
    переплаты — так его прислала Дарина в файле и так его считают на бумаге, — а в
    базу пишем со знаком минус: перенос складывается с остальными деньгами в общей
    формуле, без отдельных ветвлений. Плюс в базе означает недоплату клиники. */
+/* Перенос остатков предыдущего месяца одним действием. Не делаем это само собой
+   при открытии месяца: пока прошлый месяц не сведён, его цифры ещё двигаются —
+   Дарина как раз вписывала суммы, пока я работал, — и записанный заранее перенос
+   молча устарел бы. Кнопка даёт момент, когда человек решает «прошлый месяц
+   готов». Уже проставленные вручную переносы не трогаем. */
+async function carryFromPrev(per, onDone) {
+  let r;
+  try { r = await store.listPrevRemainder(per); }
+  catch (e) { toast(e.message || e, true); return; }
+  const have = new Set(payrollRows.filter(x => x.carry_kop).map(x => x.employee_id));
+  const fresh = r.rows.filter(x => !have.has(x.employee_id));
+  const sum = fresh.reduce((a, x) => a + x.delta_kop, 0);
+  if (!r.rows.length) { toast(`За ${periodLabel(r.prev)} переплат нет — переносить нечего`); return; }
+  if (!fresh.length) { toast('Все переносы за этот месяц уже проставлены'); return; }
+  const list = fresh.slice(0, 12).map(x =>
+    `<div class="me-row"><span class="muted">${esc(x.fio)}</span><b class="money neg">${rub(x.delta_kop)} ₽</b></div>`).join('');
+  showModal2(`<h3>Перенести остатки за ${esc(periodLabel(r.prev))}?</h3>
+    <div class="msub">${fresh.length} чел на <b>${rub(Math.abs(sum))} ₽</b> — эта сумма уменьшит «Осталось выдать»
+      за ${esc(periodLabel(per))}${have.size ? `. Уже проставленные вручную (${have.size}) не трогаем` : ''}.</div>
+    <div class="rc-diff" style="max-height:220px;overflow:auto">${list}${
+      fresh.length > 12 ? `<div class="muted small">…и ещё ${fresh.length - 12}</div>` : ''}</div>
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="cpNo">Отмена</button>
+      <button class="btn btn-primary btn-sm" id="cpYes">${ICONS.check}Перенести</button></div>`);
+  modalOnClose2 = () => {};
+  $('cpNo').onclick = closeModal2;
+  $('cpYes').onclick = async () => {
+    const b = $('cpYes'); if (b.disabled) return; b.disabled = true;
+    b.textContent = 'Переношу…';
+    let done = 0;
+    try {
+      // по одному, а не пачкой: у каждой записи свой журнальный след, и если
+      // на середине что-то отвалится, уже перенесённое останется на месте
+      for (const x of fresh) {
+        await store.setCarry(x.employee_id, per, x.delta_kop, `остаток за ${periodLabel(r.prev)}`);
+        done++;
+      }
+      closeModal2(); toast(ICONS.check + `Перенесено: ${done} чел`); if (onDone) await onDone();
+    } catch (err) {
+      closeModal2();
+      toast(`Перенесено ${done} из ${fresh.length}, дальше ошибка: ${err.message || err}`, true);
+      if (onDone) await onDone();
+    }
+  };
+}
 async function editCarry(empId, per, onDone, row) {
   const src = row || payrollRows.find(x => x.employee_id === empId) || {};
   const fio = src.fio || '';

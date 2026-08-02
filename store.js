@@ -376,6 +376,14 @@ export class MockStore {
     const r = (this.db.salaryOverride || []).find(x => x.employee_id === employee_id && x.period === period);
     return r ? r.amount_kop : null;
   }
+  async listPrevRemainder(period) {
+    const [y, m] = period.split('-').map(Number);
+    const pm = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+    const rows = (await this.listPayroll(pm)).filter(r => (r.delta_kop || 0) < 0)
+      .map(r => ({ employee_id: r.employee_id, fio: r.fio, delta_kop: r.delta_kop }))
+      .sort((a, b) => a.delta_kop - b.delta_kop);
+    return { prev: pm, rows };
+  }
   async setCarry(employee_id, period, amount_kop, note) {
     this.db.carry = this.db.carry || [];
     const i = this.db.carry.findIndex(x => x.employee_id === employee_id && x.period === period);
@@ -1105,6 +1113,17 @@ export class SupabaseStore {
       .select('amount_kop').eq('employee_id', employee_id).eq('period', period + '-01').maybeSingle();
     if (error) throw error;
     return data ? data.amount_kop : null;
+  }
+  /* Кто ушёл в минус в предыдущем месяце — кандидаты на перенос. Считаем на
+     лету, а не храним: пока месяц не закрыт, его цифры ещё двигаются, и
+     заранее записанный перенос устарел бы молча. */
+  async listPrevRemainder(period) {
+    const [y, m] = period.split('-').map(Number);
+    const pm = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+    const { data, error } = await this.sb.from('v_month_total')
+      .select('employee_id, fio, delta_kop').eq('period', pm + '-01').lt('delta_kop', 0).order('delta_kop');
+    if (error) throw error;
+    return { prev: pm, rows: data || [] };
   }
   /* Перенос остатка с прошлого месяца (миграция 067). Сумма СО ЗНАКОМ:
      минус — переплатили вперёд, плюс — недоплатили. null убирает перенос. */
