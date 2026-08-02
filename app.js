@@ -2295,7 +2295,8 @@ function drawSchedule() {
         // Порядок колонок ТОТ ЖЕ, что у основной строки (master переставил их
         // на cnt · Δ · норма · факт) — иначе итоги съедут по сетке.
         // Нормы у второй работы нет: она сверх основной, сравнивать не с чем.
-        rows += `<div class="gr-sum s-cnt">${dCnt}</div><div class="gr-sum s-delta"></div><div class="gr-sum s-norm"><span class="muted">—</span></div><div class="gr-sum s-fact">${fmtH(dFact)}</div>`;
+        rows += amtRow2 ? amountTail(e.id, 'second')
+          : `<div class="gr-sum s-cnt">${dCnt}</div><div class="gr-sum s-delta"></div><div class="gr-sum s-norm"><span class="muted">—</span></div><div class="gr-sum s-fact">${fmtH(dFact)}</div>`;
       }
     }
   }
