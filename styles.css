@@ -695,10 +695,10 @@ body.authed .login-stage{display:none}
    Визуально это ПОДстрока основной, а не самостоятельный человек: имя мельче,
    с отступом и приглушённое, чтобы взгляд читал «тот же сотрудник, другая
    работа», а не «ещё один сотрудник». */
-.gr-name.gr-dezh{font-weight:600;font-size:12px;color:var(--ink-2);padding-left:22px;gap:6px;
+.gr-name.gr-second{font-weight:600;font-size:12px;color:var(--ink-2);padding-left:22px;gap:6px;
   background:var(--surf-1);box-shadow:inset 3px 0 0 var(--blue)}
-.gr-name.gr-dezh .dz-tag{display:inline-grid;place-items:center;color:var(--blue-d);flex-shrink:0}
-.gr-cell.dz{background:rgba(98,166,255,.05)}
-.gr-cell.dz:hover{background:rgba(98,166,255,.16)}
-.gr-cell.dz .dz-l{font-weight:800;font-size:13px;color:var(--blue-d)}
-.gr-cell.dz .dz-l.miss{color:var(--red-d)}
+.gr-name.gr-second .sec-tag{display:inline-grid;place-items:center;color:var(--blue-d);flex-shrink:0}
+.gr-cell.sec{background:rgba(98,166,255,.05)}
+.gr-cell.sec:hover{background:rgba(98,166,255,.16)}
+.gr-cell.sec .sec-l{font-weight:800;font-size:13px;color:var(--blue-d)}
+.gr-cell.sec .sec-l.miss{color:var(--red-d)}

@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=81';
+import { makeStore, lineLabel, sameRate } from './store.js?v=82';
 
 const $ = id => document.getElementById(id);
 
@@ -1960,13 +1960,13 @@ function factClass(c) {                                             // клас�
 }
 // Дежурство читается БУКВОЙ, а не часом начала: смен там всего три, и «Н/С/—»
 // с одного взгляда отличимы, тогда как «18» и «8» глаз путает с обычной сменой.
-const DEZH_LETTER = { night12: 'Н', day24: 'С', absent: '—' };
+const SECOND_LETTER = { night12: 'Н', day24: 'С', absent: '—' };
 function schedCellInner(c, past, pos = 'main') {                   // содержимое клетки: план (мини) + факт (цвет)
   const p = c && c.plan_kind, fx = c ? (c.fact ?? null) : null;
   if (!p && fx === null) return '';
-  if (pos === 'dezh') {
-    const L = DEZH_LETTER[p] || (p ? cellText(c) : '');
-    return `<span class="iv mini dz-l${p === 'absent' ? ' miss' : ''}">${esc(L)}</span>`;
+  if (pos === 'second') {
+    const L = SECOND_LETTER[p] || (p ? cellText(c) : '');
+    return `<span class="iv mini sec-l${p === 'absent' ? ' miss' : ''}">${esc(L)}</span>`;
   }
   const planTxt = cellText(c);                                     // «9–17» / «В» / «С» / «—»
   if (!past) return `<span class="iv mini">${esc(planTxt)}</span>`;               // будущее — только план
@@ -2132,17 +2132,17 @@ function drawSchedule() {
       // ── ВТОРАЯ РАБОТА: своя строка графика ──────────────────────────────────
       // Появляется, только если в карточке заполнено поле «Вторая работа»
       // (employee.specialty_id_2, миграция 072). Клетки те же, но пишутся с
-      // position='dezh' — своя строка, свои часы, отдельная оплата.
+      // position='second' — своя строка, свои часы, отдельная оплата.
       if (e.specialty_id_2) {
-        rows += `<div class="gr-name gr-dezh" data-emp="${e.id}" data-pos="dezh" title="${esc(specName(e.specialty_id_2))} — вторая работа · клик по клетке листает Н (ночь) → С (сутки) → «не вышел» → пусто · правая кнопка (на телефоне долгое нажатие) — обычный диалог со сменами и часами">`
-          + `<span class="dz-tag">${ICONS.moon}</span>${esc(specName(e.specialty_id_2))}</div>`;
+        rows += `<div class="gr-name gr-second" data-emp="${e.id}" data-pos="second" title="${esc(specName(e.specialty_id_2))} — вторая работа · клик по клетке листает Н (ночь) → С (сутки) → «не вышел» → пусто · правая кнопка (на телефоне долгое нажатие) — обычный диалог со сменами и часами">`
+          + `<span class="sec-tag">${ICONS.moon}</span>${esc(specName(e.specialty_id_2))}</div>`;
         let dCnt = 0, dFact = 0;
         for (let d = 1; d <= nd; d++) {
-          const c = cget(e.id, d, 'dezh'), pst = pastDay(d);
+          const c = cget(e.id, d, 'second'), pst = pastDay(d);
           const empty = !(c && (c.plan_kind || (c.fact ?? null) !== null));
           if (pst) { const fh = factHoursOf(c); dFact += fh; if (fh > 0) dCnt++; }
           const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
-          rows += `<div class="gr-cell sc2 dz${bg}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}" data-pos="dezh">${schedCellInner(c, pst, 'dezh')}</div>`;
+          rows += `<div class="gr-cell sc2 sec${bg}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}" data-pos="second">${schedCellInner(c, pst, 'second')}</div>`;
         }
         // Порядок колонок ТОТ ЖЕ, что у основной строки (master переставил их
         // на cnt · Δ · норма · факт) — иначе итоги съедут по сетке.
@@ -2169,17 +2169,17 @@ function drawSchedule() {
       // Дежурство ставится ОДНИМ кликом (решение Дарины 05.08): смены там всего
       // три, и открывать ради них модалку — лишний шаг на каждую клетку.
       // Подробности (часы, замена) остаются на правой кнопке / долгом тапе.
-      if (cell.dataset.pos === 'dezh') { cycleDezhCell(emp, d); return; }
+      if (cell.dataset.pos === 'second') { cycleSecondCell(emp, d); return; }
       pastDay(d) ? scheduleFactPopup(emp, d) : scheduleCellPopup(emp, d);   // прошлое → факт, будущее → план
     });
     // Правая кнопка на дежурстве — обычный диалог. На телефоне правой кнопки нет,
     // поэтому то же самое вешаем на долгое нажатие.
-    grid.querySelectorAll('.gr-cell.dz').forEach(cell => {
+    grid.querySelectorAll('.gr-cell.sec').forEach(cell => {
       const open = ev => {
         ev.preventDefault();
         const emp = +cell.dataset.emp, d = +cell.dataset.day;
         if (!canEditDay(d)) return;
-        pastDay(d) ? scheduleFactPopup(emp, d, 'dezh') : scheduleCellPopup(emp, d, 'dezh');
+        pastDay(d) ? scheduleFactPopup(emp, d, 'second') : scheduleCellPopup(emp, d, 'second');
       };
       cell.oncontextmenu = open;
       let t = null;
@@ -2197,20 +2197,20 @@ function drawSchedule() {
    Три состояния и очистка — весь словарь дежурства, поэтому модалка тут лишняя.
    Пишем ВСЕГДА планом: дежурство назначают, а не отмечают задним числом; факт
    «не вышел» выражаем видом 'absent' — он нерабочий и не оплачивается (043). */
-const DEZH_CYCLE = [
+const SECOND_CYCLE = [
   { kind: 'night12', start: '18:00', label: 'ночь' },
   { kind: 'day24',   start: '08:00', label: 'сутки' },
   { kind: 'absent',  start: null,    label: 'не вышел' },
   { kind: null,      start: null,    label: 'пусто' },
 ];
-async function cycleDezhCell(empId, day) {
+async function cycleSecondCell(empId, day) {
   const cur = (scheduleRows || []).find(s => s.employee_id === empId
-    && s.work_date === cellDate(day) && (s.position || 'main') === 'dezh');
-  const at = DEZH_CYCLE.findIndex(x => x.kind === (cur?.plan_kind ?? null));
-  const next = DEZH_CYCLE[(at + 1) % DEZH_CYCLE.length];
+    && s.work_date === cellDate(day) && (s.position || 'main') === 'second');
+  const at = SECOND_CYCLE.findIndex(x => x.kind === (cur?.plan_kind ?? null));
+  const next = SECOND_CYCLE[(at + 1) % SECOND_CYCLE.length];
   try {
     await store.setScheduleCell(empId, cellDate(day),
-      { plan_kind: next.kind, plan_start: next.start, plan_end: null, fact: null }, 'dezh');
+      { plan_kind: next.kind, plan_start: next.start, plan_end: null, fact: null }, 'second');
     await renderSchedule();
   } catch (err) { toast(err.message || err, true); }
 }
