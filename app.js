@@ -2064,7 +2064,7 @@ function drawSchedule() {
   // колл-центра норма — договорённость (180 ч), а не то, что успели расставить в
   // табеле. Δ при этом СТАВИТ прежний вопрос — «вышел ли так, как назначено», —
   // и потому по-прежнему считается от плана, а не от нормы.
-  head += '<div class="gr-day sum">Смен</div><div class="gr-day sum" title="норма часов в месяц — задаётся вручную">Норма</div><div class="gr-day sum">Факт</div><div class="gr-day sum" title="факт − норма (у кого норма задана); иначе факт − план смен за прошедшие дни">Δ</div>';
+  head += '<div class="gr-day sum s-cnt">Смен</div><div class="gr-day sum s-norm" title="норма часов в месяц — задаётся вручную">Норма</div><div class="gr-day sum s-fact">Факт</div><div class="gr-day sum s-delta" title="факт − норма (у кого норма задана); иначе факт − план смен за прошедшие дни">Δ</div>';
   let rows = '', shown = 0;
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
@@ -2101,7 +2101,7 @@ function drawSchedule() {
         : !nMan ? 'Норма по производственному календарю РФ. Клик — изменить'
         : nCal != null ? `Норма задана вручную (по календарю ${fmtH(nCal)}). Клик — изменить`
         : 'Норма задана вручную: сменный график, календарь для него нормы не даёт. Клик — изменить';
-      rows += `<div class="gr-sum">${cnt}</div><div class="gr-sum s-norm${nMan ? ' n-man' : ''}${canEditNorm ? ' tap' : ''}" data-emp="${e.id}" title="${esc(canEditNorm ? nTitle : nTitle.replace(/\. Клик.*$/, ''))}">${nh == null ? '<span class="muted">—</span>' : fmtH(nh)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}" title="${nh != null ? `факт ${fmtH(factPast)} − норма ${fmtH(nh)}` : `факт ${fmtH(factPast)} − план смен ${fmtH(planPast)} (норма не задана)`}">${ds}</div>`;
+      rows += `<div class="gr-sum s-cnt">${cnt}</div><div class="gr-sum s-norm${nMan ? ' n-man' : ''}${canEditNorm ? ' tap' : ''}" data-emp="${e.id}" title="${esc(canEditNorm ? nTitle : nTitle.replace(/\. Клик.*$/, ''))}">${nh == null ? '<span class="muted">—</span>' : fmtH(nh)}</div><div class="gr-sum s-fact">${fmtH(factPast)}</div><div class="gr-sum s-delta ${delta < -0.05 ? 'neg' : delta > 0.05 ? 'pos' : ''}" title="${nh != null ? `факт ${fmtH(factPast)} − норма ${fmtH(nh)}` : `факт ${fmtH(factPast)} − план смен ${fmtH(planPast)} (норма не задана)`}">${ds}</div>`;
     }
   }
   const grid = $('scheduleGrid');
@@ -2112,7 +2112,7 @@ function drawSchedule() {
   // Ширину первой колонки берём из CSS (--gr-name-w), а не числом здесь: когда
   // имена расширили до 190px ради ФИО в две строки, эта строка осталась на 150px,
   // и колонка с именами наезжала на первое число месяца.
-  grid.style.gridTemplateColumns = `var(--gr-name-w, 190px) repeat(${nd}, minmax(44px, 1fr)) repeat(4, minmax(46px, auto))`;
+  grid.style.gridTemplateColumns = `var(--gr-name-w, 190px) repeat(${nd}, minmax(44px, 1fr)) repeat(4, var(--gr-sum-w, 50px))`;
   grid.innerHTML = shown ? head + rows : `<div class="empty" style="padding:40px">${active.length ? 'Никого не найдено' : 'Нет сотрудников'}</div>`;
   if (wrap) { wrap.scrollLeft = keepL; wrap.scrollTop = keepT; }
   if (anyEdit) {

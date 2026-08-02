@@ -272,6 +272,11 @@ body.authed .login-stage{display:none}
 /* max() — страховка: если 100vh почему-то окажется крошечным, таблица не
    схлопнется в ноль, а просто получит минимальную высоту */
 .gridwrap{overflow-y:auto;max-height:max(320px, calc(100vh - 250px))}
+/* Полоса горизонтальной прокрутки в macOS/iOS рисуется ПОВЕРХ содержимого, а не
+   рядом с ним. На отфильтрованном по одному человеку графике строка ровно одна —
+   и полоса ложилась прямо на неё, закрывая часы (Дарина 02.08). Оставляем ей
+   собственную полосу снизу, внутри прокрутки: содержимое она больше не задевает. */
+.gridwrap{padding-bottom:12px}
 @media (max-width:900px){ .gridwrap{max-height:max(280px, calc(100vh - 210px))} }
 #scheduleGrid{display:grid;min-width:max-content;font-size:12px}
 .gr-corner{position:sticky;left:0;z-index:3;min-width:var(--gr-name-w);max-width:var(--gr-name-w);box-sizing:border-box;background:var(--surf-1);padding:10px 12px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;font-size:10px;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
@@ -333,6 +338,18 @@ body.authed .login-stage{display:none}
 .gr-day.sum{font-size:9px;letter-spacing:0}
 .gr-sum{padding:6px 4px;text-align:center;border-bottom:1px solid var(--hair);border-right:1px solid var(--hair);font-variant-numeric:tabular-nums;font-weight:700;font-size:11px;color:var(--ink-2);display:flex;align-items:center;justify-content:center;background:var(--surf-1)}
 /* норма правится кликом (владелец/СЕО) — показываем это курсором и подсветкой */
+/* Итоги (Смен · Норма · Факт · Δ) ПРИМОРОЖЕНЫ справа. Ради них таблицу и мотали:
+   в месяце 31 колонка, и чтобы увидеть норму с фактом, надо было доехать до конца
+   (Дарина 02.08). Теперь видно сразу — как «Осталось выдать» на «Расчёте», где
+   та же приморозка уже сделана (.pw-pay).
+   Прижимаются справа налево, каждая на свою ширину. Ширина ОБЯЗАНА быть
+   фиксированной (--gr-sum-w в шаблоне колонок): от auto нельзя посчитать
+   right-смещение, и колонки наехали бы друг на друга. */
+.gr-sum,.gr-day.sum{position:sticky;z-index:2;background:var(--surf-1)}
+.gr-sum.s-delta,.gr-day.sum.s-delta{right:0}
+.gr-sum.s-fact,.gr-day.sum.s-fact{right:var(--gr-sum-w,50px)}
+.gr-sum.s-norm,.gr-day.sum.s-norm{right:calc(var(--gr-sum-w,50px)*2)}
+.gr-sum.s-cnt,.gr-day.sum.s-cnt{right:calc(var(--gr-sum-w,50px)*3);border-left:1px solid var(--glass-bd)}
 .gr-sum.s-norm.tap{cursor:pointer;transition:.12s}
 .gr-sum.s-norm.tap:hover{background:var(--fill-hi);color:var(--green)}
 /* норма, правленная рукой: календарное и ручное число обязаны отличаться на
@@ -588,7 +605,14 @@ body.authed .login-stage{display:none}
 /* Телефон владельца — главный сценарий: две примороженные колонки НЕ должны
    съедать экран. 130+78 = 208 из ~350, середина остаётся достижимой скроллом. */
 @media (max-width:720px){
-  :root{--gr-name-w:165px}
+  :root{--gr-name-w:165px;--gr-sum-w:42px}
+  /* Примороженного хвоста на телефоне держим ТРИ колонки, не четыре: 4×42 плюс
+     имя — это весь экран, дней бы не осталось вовсе. «Смен» отпускаем скроллиться
+     (её и спрашивали меньше всего), Норма/Факт/Δ остаются на месте — ради них
+     всё и делалось. Отпущенная перестаёт быть липкой, значит и граница слева
+     переезжает на «Норму», иначе стык рисовался бы в пустоте. */
+  .gr-sum.s-cnt,.gr-day.sum.s-cnt{position:static;border-left:0}
+  .gr-sum.s-norm,.gr-day.sum.s-norm{border-left:1px solid var(--glass-bd)}
   .me-add{grid-template-columns:1fr}
   .pw{font-size:12.5px}
   .pw td,.pw th{padding:7px 8px}
