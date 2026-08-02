@@ -2169,6 +2169,7 @@ function drawSchedule() {
       shown++;
       rows += `<div class="gr-name${editable ? ' tap' : ''}" data-emp="${e.id}" title="${editable ? 'Шаблон на месяц: ' : ''}${esc(e.fio)}" style="box-shadow:inset 3px 0 0 ${catColor(cat)}">${esc(e.fio)}</div>`;
       let planPast = 0, factPast = 0, cnt = 0;
+      const amtRow = isAmountCell(e, 'main');          // санитарка без оклада — смены суммой
       for (let d = 1; d <= nd; d++) {
         const c = cget(e.id, d), pst = pastDay(d);
         const empty = !(c && (c.plan_kind || (c.fact ?? null) !== null));
@@ -2204,6 +2205,7 @@ function drawSchedule() {
         rows += `<div class="gr-name gr-second" data-emp="${e.id}" data-pos="second" title="${esc(specName(e.specialty_id_2))} — вторая работа · клик по клетке листает Н (ночь) → С (сутки) → «не вышел» → пусто · правая кнопка (на телефоне долгое нажатие) — обычный диалог со сменами и часами">`
           + `<span class="sec-tag">${ICONS.moon}</span>${esc(specName(e.specialty_id_2))}</div>`;
         let dCnt = 0, dFact = 0;
+        const amtRow2 = isAmountCell(e, 'second');     // вторая работа санитарская — тоже суммой
         for (let d = 1; d <= nd; d++) {
           const c = cget(e.id, d, 'second'), pst = pastDay(d);
           const empty = !(c && (c.plan_kind || (c.fact ?? null) !== null));

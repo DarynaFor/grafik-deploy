@@ -462,6 +462,11 @@ body.authed .login-stage{display:none}
 .pw-carry{background:linear-gradient(var(--fill-1),var(--fill-1)),var(--surface)}
 .pw-tap{cursor:pointer;transition:background .12s}
 .pw-tap:hover{background:linear-gradient(var(--fill-hi),var(--fill-hi)),var(--surface)}
+
+/* санитарская смена: в клетке деньги, а не часы — читаются как сумма, не как время */
+.gr-cell.amt{cursor:pointer}
+.amt-v{font-size:12px;font-weight:600;color:var(--green);letter-spacing:-.01em}
+.gr-cell.amt:hover{background:linear-gradient(var(--fill-hi),var(--fill-hi)),var(--surf-2)}
 @keyframes updIn{from{opacity:0;transform:translateX(-50%) translateY(12px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 /* Полоса дней: узкие клетки в ряд, перенос по ширине карточки. Это не табель на
    119 человек, а один месяц одного — сетка с прокруткой была бы тут лишней. */
