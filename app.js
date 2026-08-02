@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate } from './store.js?v=75';
+import { makeStore, lineLabel, sameRate } from './store.js?v=77';
 
 const $ = id => document.getElementById(id);
 
@@ -855,7 +855,10 @@ async function loadCardPanel(id) {
       ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
       ${payRow('Отпускные на карту', r.otpusk_kop, 'otpusk', canEdit)}
       ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
-      <div class="me-row me-sum"><span>Осталось выдать</span><b class="money">${rub(r.delta_kop)} ₽</b></div>
+      ${r.carry_kop || canEdit ? `<div class="me-row cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
+        <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
+        ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
+      <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
     </div>
     ${canEdit ? `<div class="me-jump"><button class="btn btn-ghost btn-sm" id="cpAdd">${ICONS.plus || '+'}Внести деньги</button></div>` : ''}
   </div>`;
@@ -863,6 +866,7 @@ async function loadCardPanel(id) {
 
   const redraw = () => loadCardPanel(id);
   box.querySelectorAll('.me-row.me-tap[data-kind]').forEach(el => el.onclick = () => editPayout(id, per, el.dataset.kind, redraw));
+  box.querySelectorAll('.cp-carry.me-tap').forEach(el => el.onclick = () => editCarry(id, per, redraw, r));
   if ($('cpSalary')) $('cpSalary').onclick = () => editSalary(id, per, r, redraw);
   if ($('cpAdd')) $('cpAdd').onclick = () => { payrollDialog(id); };
   if ($('cpRevSave')) $('cpRevSave').onclick = async () => {
@@ -2787,7 +2791,7 @@ function drawPayroll(filter = '') {
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
     <th class="num sep">Зарплата</th><th class="num">Аванс нал.</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num">Расчёт на карту</th><th class="num">Наличка</th>
-    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
+    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по категории,
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
@@ -2817,7 +2821,9 @@ function drawPayroll(filter = '') {
       <td class="num fin">${rub(r.otpusk_kop)}</td>
       <td class="num fin">${rub(r.otpusk_cash_kop)}</td>
       <td class="num fin">${rub(r.premia_kop)}</td>
-      <td class="num pw-pay fin"><b class="money">${rub(r.delta_kop)}</b></td>`;
+      <td class="num fin pw-carry${isStaff() ? ' pw-tap' : ''}" data-carry="${r.employee_id}"${isStaff() ? ' title="Изменить или убрать перенос"' : ''}>${
+        r.carry_kop ? `<b class="money${r.carry_kop < 0 ? ' neg' : ''}">${rub(r.carry_kop)}</b>` : '<span class="muted">—</span>'}</td>
+      <td class="num pw-pay fin"><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)}</b></td>`;
     if (!my.length) {
       body += `<tr class="pw-row" data-id="${r.employee_id}"><td class="pw-name"><span class="pw-fio">${esc(r.fio)}</span>${flags}</td>
         <td colspan="4" class="muted small">${r.flag_no_rate ? 'нет ставки' : 'нет начислений за месяц'}</td>${right}</tr>`;
@@ -2850,14 +2856,20 @@ function drawPayroll(filter = '') {
     <td class="num fin">${rub(sum('card_uvol_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('otpusk_cash_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
+    <td class="num fin pw-carry"><b class="money${sum('carry_kop') < 0 ? ' neg' : ''}">${sum('carry_kop') ? rub(sum('carry_kop')) : '—'}</b></td>
     <td class="num pw-pay fin"><b class="money">${rub(toGive)}</b></td></tr>
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
-      <td colspan="13" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
+      <td colspan="14" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
       <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td></tr>` : ''}</tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
   $('payrollTable').querySelectorAll('.pw-row').forEach(tr => {
     tr.onclick = () => payrollDialog(+tr.dataset.id);
+  });
+  // Ячейка переноса — своё окно. stopPropagation, иначе поверх откроется ещё и
+  // окно всей строки, и человеку придётся закрывать два подряд.
+  $('payrollTable').querySelectorAll('.pw-carry.pw-tap[data-carry]').forEach(td => {
+    td.onclick = e => { e.stopPropagation(); editCarry(+td.dataset.carry, payPeriod, () => renderPayroll($('payrollSearch')?.value || '')); };
   });
   renderPayrollStat(rows);
 }
@@ -3046,6 +3058,49 @@ async function undoAllPayouts(empId, per, onDone) {
    нельзя стереть, только погасить встречной. А итоговая зарплата — не событие,
    а решение «сколько человек заработал»; оно одно на месяц, и его меняют.
    Каждое изменение и так видно владельцу в журнале. */
+/* Перенос остатка с прошлого месяца (миграция 067). Вводим ПОЛОЖИТЕЛЬНОЕ число
+   переплаты — так его прислала Дарина в файле и так его считают на бумаге, — а в
+   базу пишем со знаком минус: перенос складывается с остальными деньгами в общей
+   формуле, без отдельных ветвлений. Плюс в базе означает недоплату клиники. */
+async function editCarry(empId, per, onDone, row) {
+  const src = row || payrollRows.find(x => x.employee_id === empId) || {};
+  const fio = src.fio || '';
+  const cur = src.carry_kop || 0;
+  const over = cur < 0;                                   // переплата — обычный случай
+  showModal2(`<h3>С прошлого месяца</h3>
+    <div class="msub">${esc(fio)} · ${esc(periodLabel(per))}${cur ? ` · сейчас <b>${rub(cur)} ₽</b>` : ''}</div>
+    <label class="flbl">Переплатили в прошлом месяце</label>
+    <input class="input" id="ecVal" inputmode="numeric" autocomplete="off" value="${cur ? fmt(Math.round(Math.abs(cur) / 100)) : ''}" placeholder="напр. 19 589">
+    <input class="input" id="ecNote" placeholder="причина (необязательно)" autocomplete="off" style="margin-top:8px" value="">
+    <div class="msub" style="margin-top:8px">Эта сумма <b>вычтется</b> из «Осталось выдать» за месяц.
+      Если переплата больше начисления, остаток снова уйдёт в минус и перейдёт дальше.
+      Каждое изменение видно владельцу в журнале.</div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost btn-sm" id="ecNo">Отмена</button>
+      ${cur ? `<button class="btn btn-ghost btn-sm" id="ecClear">Убрать</button>` : ''}
+      <button class="btn btn-primary btn-sm" id="ecOk">${ICONS.check}Сохранить</button></div>`);
+  modalOnClose2 = () => {};
+  $('ecNo').onclick = closeModal2;
+  $('ecVal').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('ecOk').click(); } };
+  if (cur) $('ecClear').onclick = async () => {
+    const b = $('ecClear'); if (b.disabled) return; b.disabled = true;
+    try { await store.setCarry(empId, per, null); closeModal2();
+      toast(ICONS.check + 'Перенос убран'); if (onDone) await onDone(); }
+    catch (err) { b.disabled = false; toast(err.message || err, true); }
+  };
+  $('ecOk').onclick = async () => {
+    const b = $('ecOk'); if (b.disabled) return;
+    let v;
+    try { v = parseNum($('ecVal').value, { thousands: true, field: 'сумму', max: RATE_ABSURD }); }
+    catch (err) { toast(err.message || err, true); return; }
+    if (!v) { toast('Укажите сумму переплаты', true); return; }
+    b.disabled = true;
+    try {
+      await store.setCarry(empId, per, -Math.round(v * 100), $('ecNote').value.trim() || null);
+      closeModal2(); toast(ICONS.check + 'Перенос записан'); if (onDone) await onDone();
+    } catch (err) { b.disabled = false; toast(err.message || err, true); }
+  };
+}
 async function editSalary(empId, per, r, onDone) {
   const calc = (r.salary_kop || 0) / 100;
   let cur = null;
@@ -3155,7 +3210,10 @@ async function payrollDialog(empId) {
       ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
       ${payRow('Отпускные на карту', r.otpusk_kop, 'otpusk', canEdit)}
       ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
-      <div class="me-row me-sum"><span>Осталось выдать</span><b class="money">${rub(r.delta_kop)} ₽</b></div>
+      ${r.carry_kop || canEdit ? `<div class="me-row cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
+        <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
+        ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
+      <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
       <div class="me-row"><span class="muted small">Зарплата минус уже выданное (карта/наличные). Столько ещё раздать — в основном наличными. Отпускные в эту разницу не входят: на карту они уже выплачены, а наличные идут отдельной строкой в кассу.</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
     ${pctLine && canEdit ? `<label class="flbl">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё</label>
@@ -3190,6 +3248,7 @@ async function payrollDialog(empId) {
   $('modalBox').dataset.guard = '1';                    // деньги — не закрывать случайным кликом
   const reopen = async () => { await renderPayroll($('payrollSearch')?.value || ''); closeModal(); payrollDialog(empId); };
   $('modalBox').querySelectorAll('.me-row.me-tap[data-kind]').forEach(el => el.onclick = () => editPayout(empId, per, el.dataset.kind, reopen));
+  $('modalBox').querySelectorAll('.cp-carry.me-tap').forEach(el => el.onclick = () => editCarry(empId, per, reopen, r));
   if ($('pmSalaryRow')) $('pmSalaryRow').onclick = () => editSalary(empId, per, r, reopen);
   if ($('pmUndoAll')) $('pmUndoAll').onclick = () => undoAllPayouts(empId, per, reopen);
   if ($('pmToCard')) $('pmToCard').onclick = () => focusOn('employees', empId) || openCard(empId);

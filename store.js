@@ -265,7 +265,10 @@ export class MockStore {
         unchecked_kop: premia + otpuskCash,
         // + премия: она деньги, которые человеку ЕЩЁ надо выдать (миграция 059).
         // Демо обязано считать так же, как прод, иначе оно врёт увереннее прода.
-        delta_kop: salaryFinal + premia - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')),
+        // перенос с прошлого месяца (067) — со знаком, как в бою
+        carry_kop: ((this.db.carry || []).find(x => x.employee_id === e.id && x.period === period) || {}).amount_kop || 0,
+        delta_kop: salaryFinal + premia + (((this.db.carry || []).find(x => x.employee_id === e.id && x.period === period) || {}).amount_kop || 0)
+          - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')),
         norm_days: my.reduce((s, l) => s + l.planned, 0), fact_days: my.reduce((s, l) => s + l.worked, 0),
         flag_no_rate: !(e.lines || []).some(l => !l.valid_to), flag_partial_month: false,
         flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false, flag_manual_salary: !!ovr };
@@ -372,6 +375,18 @@ export class MockStore {
   async getSalaryOverride(employee_id, period) {
     const r = (this.db.salaryOverride || []).find(x => x.employee_id === employee_id && x.period === period);
     return r ? r.amount_kop : null;
+  }
+  async setCarry(employee_id, period, amount_kop, note) {
+    this.db.carry = this.db.carry || [];
+    const i = this.db.carry.findIndex(x => x.employee_id === employee_id && x.period === period);
+    if (amount_kop == null) {
+      if (i >= 0) { this.db.carry.splice(i, 1); this._log('updated', 'month_carry', employee_id, 'с прошлого месяца', null, '(убран)'); }
+      this._save(); return null;
+    }
+    const row = { employee_id, period, amount_kop, note: note || null };
+    if (i >= 0) this.db.carry[i] = row; else this.db.carry.push(row);
+    this._log('updated', 'month_carry', employee_id, 'с прошлого месяца', null, (amount_kop / 100) + ' ₽');
+    this._save(); return row;
   }
   async setSalaryOverride(employee_id, period, amount_kop, note) {
     this.db.salaryOverride = this.db.salaryOverride || [];
@@ -1090,6 +1105,22 @@ export class SupabaseStore {
       .select('amount_kop').eq('employee_id', employee_id).eq('period', period + '-01').maybeSingle();
     if (error) throw error;
     return data ? data.amount_kop : null;
+  }
+  /* Перенос остатка с прошлого месяца (миграция 067). Сумма СО ЗНАКОМ:
+     минус — переплатили вперёд, плюс — недоплатили. null убирает перенос. */
+  async setCarry(employee_id, period, amount_kop, note) {
+    if (amount_kop == null) {
+      const { error } = await this.sb.from('month_carry')
+        .delete().eq('employee_id', employee_id).eq('period', period + '-01');
+      if (error) throw new Error(moneyError(error));
+      return null;
+    }
+    const { data, error } = await this.sb.from('month_carry')
+      .upsert({ employee_id, period: period + '-01', amount_kop, note: note || null, entered_by: this.user.id },
+              { onConflict: 'employee_id,period' })
+      .select().single();
+    if (error) throw new Error(moneyError(error));
+    return data;
   }
   async setSalaryOverride(employee_id, period, amount_kop, note) {
     if (amount_kop == null) {                                  // убрать → вернуть расчёт
