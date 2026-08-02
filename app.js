@@ -3107,6 +3107,13 @@ function drawPayroll(filter = '') {
     <td class="num fin">${rub(sum('bolnich_nach_kop'))}</td>
     <td class="num fin pw-carry"><b class="money${sum('carry_kop') < 0 ? ' neg' : ''}">${sum('carry_kop') ? rub(sum('carry_kop')) : '—'}</b></td>
     <td class="num pw-pay fin"><b class="money">${rub(toGive)}</b></td></tr>
+    <tr class="pw-total pw-accrued"><td class="pw-name">Всего начислено</td>
+      <td colspan="15" class="muted small">зарплата ${rub(sum('salary_kop'))}${
+        sum('premia_kop') ? ' + премии ' + rub(sum('premia_kop')) : ''}${
+        sum('otpusk_nach_kop') ? ' + отпускные ' + rub(sum('otpusk_nach_kop')) : ''}${
+        sum('bolnich_nach_kop') ? ' + больничные ' + rub(sum('bolnich_nach_kop')) : ''}</td>
+      <td class="num pw-carry"></td>
+      <td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop'))}</b></td></tr>
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
       <td colspan="16" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
       <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td></tr>` : ''}</tfoot>`;
@@ -3732,18 +3739,39 @@ function drawOverview() {
   // входят (033), а подстрочник героя тождеством никогда и не был.
   const card = sum('card_rasch_kop') + sum('card_avans_kop') + sum('card_uvol_kop') + sum('otpusk_kop');
   const paid = sum('paid_kop');
+  // «Начислено» — это ВСЁ, что человеку причитается за месяц, а не одна зарплата:
+  // премия, начисленные отпускные и больничные — тоже начисления, и без них
+  // главная цифра занижена. За июль зарплата 7 317 731, а начислено 8 044 829.
+  const premia = sum('premia_kop'), otpNach = sum('otpusk_nach_kop'), bol = sum('bolnich_nach_kop');
+  const accrued = salary + premia + otpNach + bol;
+  const carry = sum('carry_kop');                                   // перенос с прошлого месяца, со знаком
+  const cash = sum('cash_kop') + sum('cash_avans_kop') + sum('otpusk_cash_kop');
   const people = rows.filter(r => r.status === 'active').length;
 
   // hero + плитки. Главное число — «Осталось выдать» = Δ (начислено − выданное),
   // т.е. сколько ещё раздать людям (в осн. наличными), если все вышли по графику.
   const metric = (l, v, cls, gc) => `<div class="ov-metric${cls ? ' ' + cls : ''}"${gc ? ` style="--gc:${gc}"` : ''}><div class="l">${l}</div><div class="v">${v}</div></div>`;
+  // Полная раскладка месяца: начислено → выдано → осталось. Раньше в подстрочнике
+  // стояла только зарплата и карта, и сойтись это ни с чем не могло: премия,
+  // отпускные, больничные и перенос в них не входили.
+  const line = (l, v, cls) => `<div class="ov-line${cls ? ' ' + cls : ''}"><span>${l}</span><b>${v}</b></div>`;
   const hero = `<div class="ov-hero"><div class="l">Осталось выдать · ${esc(periodLabel(ovData.period))}</div>`
-    + `<div class="v">${rub(toGive)} <small>₽</small></div>`
+    + `<div class="v big">${rub(toGive)} <small>₽</small></div>`
     + (overpaid ? `<div class="ov-over">Переплата вперёд: <b>−${rub(Math.abs(overpaid))} ₽</b>`
         + `<span class="muted small"> · ${overCnt} чел · выдано больше начисленного, перейдёт на следующий месяц</span></div>` : '')
-    + `<div class="ov-sub">начислено <b>${rub(salary)} ₽</b> · уже на карту <b>${rub(card)} ₽</b></div></div>`;
+    + `<div class="ov-break">`
+      + line('Начислено всего', rub(accrued) + ' ₽', 'sum')
+      + line('· зарплата', rub(salary) + ' ₽', 'sub')
+      + (premia ? line('· премии', rub(premia) + ' ₽', 'sub') : '')
+      + (otpNach ? line('· отпускные', rub(otpNach) + ' ₽', 'sub') : '')
+      + (bol ? line('· больничные', rub(bol) + ' ₽', 'sub') : '')
+      + (carry ? line('С прошлого месяца', (carry < 0 ? '−' : '') + rub(Math.abs(carry)) + ' ₽', 'sub neg') : '')
+      + line('Выдано', rub(card + cash) + ' ₽', 'sum')
+      + line('· на карту', rub(card) + ' ₽', 'sub')
+      + (cash ? line('· наличными', rub(cash) + ' ₽', 'sub') : '')
+    + `</div></div>`;
   const bento = `<div class="ov-bento">`
-    + metric('Начислено всего', rub(salary) + ' ₽', '', 'rgba(139,123,232,.34)')
+    + metric('Начислено всего', rub(accrued) + ' ₽', '', 'rgba(139,123,232,.34)')
     + metric('Официально на карту', rub(card) + ' ₽', '', 'rgba(62,115,216,.34)')
     + metric('Выдано наличными', rub(paid) + ' ₽', '', 'rgba(31,165,101,.4)')
     + metric('Сотрудников', fmt(people), '', 'rgba(224,153,42,.34)')

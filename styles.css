@@ -453,6 +453,26 @@ body.authed .login-stage{display:none}
 .ov-over{margin-top:6px;font-size:13.5px;color:var(--red-d)}
 .ov-over b{font-weight:700}
 
+/* раскладка месяца под главной цифрой: начислено → выдано → осталось.
+   Итоговые строки крупнее и темнее, слагаемые — тише и с отступом:
+   глаз должен цеплять суммы, а не перечитывать список. */
+.ov-break{margin-top:14px;padding-top:12px;border-top:1px solid var(--hair)}
+.ov-line{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:3px 0;font-size:13px;color:var(--ink-2)}
+.ov-line b{font-variant-numeric:tabular-nums;color:var(--ink);font-weight:600}
+.ov-line.sum{font-size:14.5px;color:var(--ink);font-weight:700;padding-top:7px}
+.ov-line.sum b{font-size:16px;font-weight:800}
+.ov-line.sum + .ov-line.sub{padding-top:1px}
+.ov-line.sub{padding-left:10px;font-size:12.5px}
+.ov-line.sub b{font-weight:600;color:var(--ink-2)}
+.ov-line.neg b{color:var(--red-d)}
+/* главная цифра — заметно крупнее остального */
+.ov-hero .v.big{font-size:40px;letter-spacing:-.5px}
+/* «Всего начислено» в подвале расчёта — приход, а не выдача: свой оттенок,
+   чтобы не путался с «Осталось выдать» строкой ниже */
+.pw-accrued td{background:linear-gradient(var(--fill-1),var(--fill-1)),var(--surf-1)}
+.pw-accrued .money{color:var(--violet-d,#6b46c1)}
+@media (max-width:720px){ .ov-hero .v.big{font-size:32px} }
+
 /* плашка «вышло обновление» — снизу по центру, поверх всего, но не перекрывает
    работу: это приглашение, а не модалка */
 .upd-bar{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:300;
