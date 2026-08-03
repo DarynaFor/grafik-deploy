@@ -947,10 +947,12 @@ async function loadCardPanel(id) {
       ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
       ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
       ${payRow('Отпускные на карту', r.otpusk_kop, 'otpusk', canEdit)}
+      ${payRow('Больничные на карту', r.bolnich_kop, 'bolnich', canEdit)}
       ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
       ${r.carry_kop || canEdit ? `<div class="me-row cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
         ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
+      ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
     </div>
     ${canEdit ? `<div class="me-jump"><button class="btn btn-ghost btn-sm" id="cpAdd">${ICONS.plus || '+'}Внести деньги</button></div>` : ''}
@@ -3001,6 +3003,13 @@ const J_ACTION = { 'сторно': 'СТОРНО', 'правило расчёт�
 // «Отпускные начислено» стоит последним и подписан «не выплата» НАМЕРЕННО: это
 // единственный вид в списке, который денег никому не двигает, и перепутать его
 // с выплатой — значит записать человеку выданное, чего не выдавали.
+/* «Всего на карту» — сумма ВЫДАННОГО безналом: ЗП, аванс, отпускные и
+   больничные. Начисления (otpusk_nach, bolnich_nach) сюда НЕ входят — Дарина
+   03.08: «нарахування не йдуть туди у все на карту», это ещё не деньги на
+   руках. «Расчёт при увольнении» тоже карточный, но в перечень не назван —
+   не подмешиваем молча, добавим явно, если понадобится. */
+const cardTotal = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0)
+  + (r.otpusk_kop || 0) + (r.bolnich_kop || 0);
 const MONEY_KINDS = [
   ['cash', 'Наличные'], ['cash_avans', 'Аванс наличными'], ['otpusk_cash', 'Отпускные наличными'],
   ['premia', 'Премия'],
@@ -3008,6 +3017,7 @@ const MONEY_KINDS = [
   ['otpusk', 'Отпускные на карту'], ['card_uvol', 'Расчёт на карту (увольнение)'],
   ['otpusk_nach', 'Отпускные начислено (не выплата)'],
   ['bolnich_nach', 'Больничные начислено (не выплата)'],
+  ['bolnich', 'Больничные на карту'],
 ];
 const moneyKindLabel = k => (MONEY_KINDS.find(x => x[0] === k) || [k, k])[1];
 // Показываем только то, что роль реально может записать: политика ml_ins
@@ -3141,7 +3151,7 @@ function drawPayroll(filter = '') {
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
     <th class="num sep">Зарплата</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
-    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больничные</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
+    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num">Больн. карта</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по категории,
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
@@ -3154,7 +3164,7 @@ function drawPayroll(filter = '') {
       curCat = cat;
       const inCat = rows.filter(x => catOf(x) === cat);
       const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="18"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="20"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
@@ -3172,6 +3182,8 @@ function drawPayroll(filter = '') {
       <td class="num fin">${rub(r.otpusk_cash_kop)}</td>
       <td class="num fin">${rub(r.premia_kop)}</td>
       <td class="num fin">${rub(r.bolnich_nach_kop)}</td>
+      <td class="num fin">${rub(r.bolnich_kop)}</td>
+      <td class="num fin pw-cardtot"><b>${rub(cardTotal(r))}</b></td>
       <td class="num fin pw-carry${isStaff() ? ' pw-tap' : ''}" data-carry="${r.employee_id}"${isStaff() ? ' title="Изменить или убрать перенос"' : ''}>${
         r.carry_kop ? `<b class="money${r.carry_kop < 0 ? ' neg' : ''}">${rub(r.carry_kop)}</b>` : '<span class="muted">—</span>'}</td>
       <td class="num pw-pay fin"><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)}</b></td>`;
@@ -3208,17 +3220,19 @@ function drawPayroll(filter = '') {
     <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('otpusk_cash_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
     <td class="num fin">${rub(sum('bolnich_nach_kop'))}</td>
+    <td class="num fin">${rub(sum('bolnich_kop'))}</td>
+    <td class="num fin pw-cardtot"><b>${rub(sum('card_rasch_kop') + sum('card_avans_kop') + sum('otpusk_kop') + sum('bolnich_kop'))}</b></td>
     <td class="num fin pw-carry"><b class="money${sum('carry_kop') < 0 ? ' neg' : ''}">${sum('carry_kop') ? rub(sum('carry_kop')) : '—'}</b></td>
     <td class="num pw-pay fin"><b class="money">${rub(toGive)}</b></td></tr>
     <tr class="pw-total pw-accrued"><td class="pw-name">Всего начислено</td>
-      <td colspan="15" class="muted small">зарплата ${rub(sum('salary_kop'))}${
+      <td colspan="17" class="muted small">зарплата ${rub(sum('salary_kop'))}${
         sum('premia_kop') ? ' + премии ' + rub(sum('premia_kop')) : ''}${
         sum('otpusk_nach_kop') ? ' + отпускные ' + rub(sum('otpusk_nach_kop')) : ''}${
         sum('bolnich_nach_kop') ? ' + больничные ' + rub(sum('bolnich_nach_kop')) : ''}</td>
       <td class="num pw-carry"></td>
       <td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop'))}</b></td></tr>
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
-      <td colspan="16" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
+      <td colspan="18" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
       <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td></tr>` : ''}</tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
@@ -3622,10 +3636,12 @@ async function payrollDialog(empId) {
       ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
       ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
       ${payRow('Отпускные на карту', r.otpusk_kop, 'otpusk', canEdit)}
+      ${payRow('Больничные на карту', r.bolnich_kop, 'bolnich', canEdit)}
       ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
       ${r.carry_kop || canEdit ? `<div class="me-row cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
         ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
+      ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
       <div class="me-row"><span class="muted small">Зарплата минус уже выданное (карта/наличные). Столько ещё раздать — в основном наличными. Отпускные в эту разницу не входят: на карту они уже выплачены, а наличные идут отдельной строкой в кассу.</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
@@ -3842,7 +3858,8 @@ function drawOverview() {
   // графа «Отпуск. карта» с этим же числом. Это ИМЕННО ТА цифра, что показывает,
   // сколько прошло официально, — занижать её нельзя. В Δ отпускные по-прежнему не
   // входят (033), а подстрочник героя тождеством никогда и не был.
-  const card = sum('card_rasch_kop') + sum('card_avans_kop') + sum('card_uvol_kop') + sum('otpusk_kop');
+  const card = sum('card_rasch_kop') + sum('card_avans_kop') + sum('otpusk_kop') + sum('bolnich_kop');
+  const uvol = sum('card_uvol_kop');            // расчёт при увольнении — тоже безнал, но своей строкой
   const paid = sum('paid_kop');
   // «Начислено» — это ВСЁ, что человеку причитается за месяц, а не одна зарплата:
   // премия, начисленные отпускные и больничные — тоже начисления, и без них
@@ -3871,8 +3888,9 @@ function drawOverview() {
       + (otpNach ? line('· отпускные', rub(otpNach) + ' ₽', 'sub') : '')
       + (bol ? line('· больничные', rub(bol) + ' ₽', 'sub') : '')
       + (carry ? line('С прошлого месяца', (carry < 0 ? '−' : '') + rub(Math.abs(carry)) + ' ₽', 'sub neg') : '')
-      + line('Выдано', rub(card + cash) + ' ₽', 'sum')
+      + line('Выдано', rub(card + uvol + cash) + ' ₽', 'sum')
       + line('· на карту', rub(card) + ' ₽', 'sub')
+      + (uvol ? line('· расчёт при увольнении', rub(uvol) + ' ₽', 'sub') : '')
       + (cash ? line('· наличными', rub(cash) + ' ₽', 'sub') : '')
     + `</div></div>`;
   const bento = `<div class="ov-bento">`

@@ -483,6 +483,10 @@ body.authed .login-stage{display:none}
    чтобы не путался с «Осталось выдать» строкой ниже */
 .pw-accrued td{background:linear-gradient(var(--fill-1),var(--fill-1)),var(--surf-1)}
 .pw-accrued .money{color:var(--violet-d,#6b46c1)}
+/* итог «Всего на карту» — сумма выданного безналом, отделяем от слагаемых */
+.pw-cardtot{background:linear-gradient(var(--fill-1),var(--fill-1)),var(--surface)}
+.pw-cardtot b{color:var(--blue-d,#2b6cb0)}
+.me-card b{color:var(--blue-d,#2b6cb0)}
 @media (max-width:720px){ .ov-hero .v.big{font-size:32px} }
 
 /* плашка «вышло обновление» — снизу по центру, поверх всего, но не перекрывает
