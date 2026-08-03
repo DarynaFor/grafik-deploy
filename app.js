@@ -3237,6 +3237,18 @@ function drawPayroll(filter = '') {
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
   stickFooterRows($('payrollTable'));
+  /* Подвал приморожен к низу (tr.pw-total{position:sticky;bottom:0}). Строк там
+     ТРИ, и все прилипали на ОДНУ высоту — «ИТОГО» и «Всего начислено» уезжали
+     под «Переплату вперёд», а сквозь них просвечивали строки людей. Фон у них
+     непрозрачный, дело не в нём: они просто накладывались.
+     Раскладываем лесенкой: каждой строке bottom = сумма высот тех, что НИЖЕ.
+     Считаем после отрисовки, потому что высота зависит от текста — у «Всего
+     начислено» расшифровка переносится на вторую строку на узком экране. */
+  {
+    const foot = [...$('payrollTable').querySelectorAll('tfoot tr.pw-total')];
+    let below = 0;
+    for (const tr of foot.reverse()) { tr.style.bottom = below + 'px'; below += tr.offsetHeight; }
+  }
   $('payrollTable').querySelectorAll('.pw-row').forEach(tr => {
     tr.onclick = () => payrollDialog(+tr.dataset.id);
   });

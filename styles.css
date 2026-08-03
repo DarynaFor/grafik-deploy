@@ -808,6 +808,8 @@ body.authed .login-stage{display:none}
    каждой строке считает stickFooterRows в app.js: их две-три, и с общим bottom:0
    они легли бы друг на друга. */
 tr.pw-total{position:sticky;bottom:0;z-index:3}
+tr.pw-total.pw-accrued{z-index:4}
+tr.pw-total.pw-over{z-index:5}
 .pw-total .pw-name,.pw-total .pw-pay{z-index:4}
 
 @media(max-width:720px){
