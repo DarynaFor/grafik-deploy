@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=88';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=89';
 
 const $ = id => document.getElementById(id);
 
@@ -3222,6 +3222,7 @@ function drawPayroll(filter = '') {
       <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td></tr>` : ''}</tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
+  stickFooterRows($('payrollTable'));
   $('payrollTable').querySelectorAll('.pw-row').forEach(tr => {
     tr.onclick = () => payrollDialog(+tr.dataset.id);
   });
@@ -3915,6 +3916,21 @@ function drawOverview() {
     if (b.dataset.go === 'journal-red') { journalFilter = 'red'; go('journal'); renderJournal(true); }
     else go(b.dataset.go);
   });
+}
+
+/* Итоговые строки держатся внизу таблицы, а не ждут, пока домотаешь сотню
+   человек (Дарина 03.08). Строк ТРИ — «Итого», «Всего начислено», иногда
+   «Переплата вперёд», — и одним CSS их не приморозить: с bottom:0 они легли бы
+   друг на друга. Поэтому считаем каждой свой отступ снизу = высота строк под
+   ней. Пересчитываем после каждой отрисовки: состав строк и высоты меняются. */
+function stickFooterRows(host) {
+  const rows = [...host.querySelectorAll('tfoot tr')];
+  let acc = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const h = rows[i].getBoundingClientRect().height;
+    rows[i].style.bottom = acc + 'px';
+    acc += h;
+  }
 }
 
 /* ── «Кто в программе» ──────────────────────────────────────────────────

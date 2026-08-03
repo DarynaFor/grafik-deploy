@@ -777,3 +777,36 @@ body.authed .login-stage{display:none}
 .co-edit{display:flex;align-items:flex-start;gap:8px;line-height:1.4;margin:-4px 0 12px;padding:9px 12px;border-radius:12px;
   background:rgba(255,176,32,.14);color:var(--amber-d);font-size:12.5px;font-weight:600}
 .co-edit svg{flex:none;margin-top:1px}
+
+/* ── Экраны-таблицы во весь экран (Дарина 03.08) ──────────────────────────
+   Было: ширина резалась общим max-width:1080px (на 1280 оставалось 1044, справа
+   пустота), а высота задавалась угаданным calc(100vh - 250px). Над «Графиком»
+   на деле уходит под 400px — заголовок, месяц, фильтры и красная плашка, — и
+   сетке доставалось 190px из 620.
+
+   Теперь экран сам растягивается на всю высоту .main, а таблица забирает ВСЁ
+   оставшееся: подстраивается под любую шапку и любой экран, без магических чисел.
+   Текстовым экранам (Обзор, Сотрудники) ограничение оставляем — длинные строки
+   читать тяжело, а таблицы, наоборот, тем полезнее, чем шире. */
+#s-schedule.show,#s-payroll.show{display:flex;flex-direction:column;height:100%;
+  max-width:none;padding-bottom:14px;overflow:hidden}
+#s-schedule .gridwrap,#s-payroll .gridwrap{flex:1;min-height:220px;max-height:none}
+/* page-head и фильтры не должны сжиматься, когда таблица тянет на себя */
+#s-schedule>*:not(.gridwrap),#s-payroll>*:not(.gridwrap){flex:none}
+
+/* ИТОГО всегда на виду: раньше строка ждала внизу таблицы, и до контрольной
+   цифры надо было домотать сотню человек (Дарина 03.08). Липнет к низу
+   прокрутки — как «Норма/Факт» справа в «Графике».
+   z-index выше обычных ячеек, но ниже шапки; углы (имя и «осталось выдать»)
+   липнут по двум осям сразу, поэтому им ещё выше. */
+/* Липкость на СТРОКЕ, а не на ячейках: на <td> с bottom браузер её игнорирует
+   (проверено — итоги уезжали вниз), хотя на <th> с top работает. Отступ снизу
+   каждой строке считает stickFooterRows в app.js: их две-три, и с общим bottom:0
+   они легли бы друг на друга. */
+tr.pw-total{position:sticky;bottom:0;z-index:3}
+.pw-total .pw-name,.pw-total .pw-pay{z-index:4}
+
+@media(max-width:720px){
+  /* Нижнее меню перекрывает экран — таблице оставляем место под него */
+  #s-schedule.show,#s-payroll.show{padding-bottom:88px}
+}
