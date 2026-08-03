@@ -3065,7 +3065,7 @@ async function renderPayroll(filter = '') {
   const prevShown = payrollShown;                       // что реально лежит в payrollRows
   // Чипы гасим ВМЕСТЕ с таблицей: «Осталось выдать» — контрольная цифра владельца,
   // и висеть от прошлого месяца под новой подписью она не должна.
-  if (!sameMonth) { $('payrollTable').innerHTML = '<div class="empty">Загружаем расчёт…</div>'; $('payrollStat').innerHTML = ''; }
+  if (!sameMonth) $('payrollTable').innerHTML = '<div class="empty">Загружаем расчёт…</div>';
   // payrollShown ставим ТОЛЬКО после успеха (как schedShown/patShown/ovData.period).
   // Раньше он значил «загрузка началась»: два быстрых клика по ›, и второй вызов
   // брал prevShown = месяц, который никогда не грузился, — откат уводил бы ИМЕННО
@@ -3139,7 +3139,7 @@ function drawPayroll(filter = '') {
   if (!rows.length) {
     $('payrollTable').innerHTML = `<div class="empty">${onlyZero && payrollRows.length ? 'Всем за месяц что-то начислено 🎉'
       : payrollRows.length ? 'Никого не найдено' : 'За ' + esc(periodLabel(payPeriod)) + ' данных нет'}</div>`;
-    renderPayrollStat([]); return;
+    return;
   }
 
   // Каждый вид выплаты — своя графа (решение Дарины 31.07). Раньше «Карта» была
@@ -3264,7 +3264,6 @@ function drawPayroll(filter = '') {
   $('payrollTable').querySelectorAll('.pw-carry.pw-tap[data-carry]').forEach(td => {
     td.onclick = e => { e.stopPropagation(); editCarry(+td.dataset.carry, payPeriod, () => renderPayroll($('payrollSearch')?.value || '')); };
   });
-  renderPayrollStat(rows);
 }
 
 // Флаги — короткими чипами у имени. Это ПОДСКАЗКА «посмотри», а не приговор.
@@ -3296,22 +3295,13 @@ function payrollFlags(r) {
   return f.length ? `<span class="pw-flags">${f.map(([t, c]) => `<span class="pw-flag ${c}">${t}</span>`).join('')}</span>` : '';
 }
 
-function renderPayrollStat(rows) {
-  const s = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
-  const problems = rows.filter(r => r.flag_no_rate || r.flag_oklad_no_days).length;
-  // «Осталось выдать» = Σ Δ = начислено − выплачено (карта+нал). Главное число:
-  // сколько ещё раздать людям (в осн. наличными), если все вышли по графику.
-  $('payrollStat').innerHTML =
-    `<span class="mini-chip strong">Осталось выдать: <b class="money">${rub(s('delta_kop'))} ₽</b></span>
-     <span class="mini-chip">Начислено: <b>${rub(s('salary_kop'))} ₽</b></span>
-     <span class="mini-chip">Выдано на карту: <b>${rub(s('card_avans_kop') + s('card_rasch_kop') + s('card_uvol_kop'))} ₽</b></span>
-     ${s('cash_kop') + s('cash_avans_kop') ? `<span class="mini-chip">Выдано наличными: <b>${rub(s('cash_kop') + s('cash_avans_kop'))} ₽</b></span>` : ''}
-     ${/* Отпускные наличными и премия в «Выдано» не входят — они ещё НЕ выданы,
-           это наряд кассе. Без отдельного чипа сумма жила бы только в 14-й графе
-           таблицы с горизонтальным скроллом. */''}
-     ${s('to_pay_kop') ? `<span class="mini-chip">К выдаче наличными: <b>${rub(s('to_pay_kop'))} ₽</b></span>` : ''}
-     ${problems ? `<span class="mini-chip warn">Нужна ставка: <b>${problems}</b></span>` : ''}`;
-}
+/* Цветные плашки над «Расчётом» убраны (Дарина 03.08): «вони і місця багато
+   займають і зайві». Те же числа есть в таблице — строка ИТОГО теперь держится
+   внизу всегда (v=114), а «Осталось выдать» по отделениям стоит в заголовке
+   каждой группы. Освободившееся место отдано таблице.
+   Если понадобится вернуть — они были: Осталось выдать, Начислено, Выдано на
+   карту, Выдано наличными, К выдаче наличными, Нужна ставка; считались суммой
+   по колонкам delta_kop, salary_kop, card_… и cash_… из показанных строк. */
 
 /* Модалка человека: из чего сложилась зарплата, ввод ручных денег и ИСТОРИЯ
    «кто внёс и когда». История берётся из v_money_events — там уже видно, что
