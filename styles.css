@@ -276,11 +276,16 @@ body.authed .login-stage{display:none}
 /* max() — страховка: если 100vh почему-то окажется крошечным, таблица не
    схлопнется в ноль, а просто получит минимальную высоту */
 .gridwrap{overflow-y:auto;max-height:max(320px, calc(100vh - 250px))}
-/* Полоса горизонтальной прокрутки в macOS/iOS рисуется ПОВЕРХ содержимого, а не
-   рядом с ним. На отфильтрованном по одному человеку графике строка ровно одна —
-   и полоса ложилась прямо на неё, закрывая часы (Дарина 02.08). Оставляем ей
-   собственную полосу снизу, внутри прокрутки: содержимое она больше не задевает. */
-.gridwrap{padding-bottom:12px}
+/* Полоса горизонтальной прокрутки в macOS/iOS рисуется ПОВЕРХ содержимого. На
+   отфильтрованном по одному человеку графике строка ровно одна — и полоса
+   ложилась прямо на неё (Дарина 02.08). Даём ей свою полосу снизу.
+
+   ⚠ ТОЛЬКО «Графику». Нижний padding у прокручиваемого блока — это полоса НИЖЕ
+   всего, что приморожено к низу: строки проезжают в неё и выглядывают из-под
+   ИТОГО. Ровно так это и вылезло на «Расчёте» (Дарина 03.08) — и ровно так же
+   раньше в модалке под кнопкой «Закрыть». Правило: у блока с прокруткой, где
+   что-то приморожено снизу, нижнего padding быть НЕ ДОЛЖНО. */
+#s-schedule .gridwrap{padding-bottom:12px}
 @media (max-width:900px){ .gridwrap{max-height:max(280px, calc(100vh - 210px))} }
 #scheduleGrid{display:grid;min-width:max-content;font-size:12px}
 .gr-corner{position:sticky;left:0;z-index:3;min-width:var(--gr-name-w);max-width:var(--gr-name-w);box-sizing:border-box;background:var(--surf-1);padding:10px 12px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;font-size:10px;border-bottom:1px solid var(--hair);border-right:1px solid var(--glass-bd)}
