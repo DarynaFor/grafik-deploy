@@ -3055,7 +3055,7 @@ function drawPayroll(filter = '') {
   // не входит (migrations/046).
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
-    <th class="num sep">Зарплата</th><th class="num">Аванс нал.</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num">Расчёт на карту</th><th class="num">Наличка</th>
+    <th class="num sep">Зарплата</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
     <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больничные</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по категории,
@@ -3077,10 +3077,10 @@ function drawPayroll(filter = '') {
     const n = Math.max(1, my.length);
     const right = `
       <td class="num sep fin"><b>${rub(r.salary_kop)}</b></td>
-      <td class="num fin">${rub(r.cash_avans_kop)}</td>
       <td class="num fin">${rub(r.card_avans_kop)}</td>
       <td class="num fin">${rub(r.card_rasch_kop)}</td>
       <td class="num fin">${rub(r.card_uvol_kop)}</td>
+      <td class="num fin">${rub(r.cash_avans_kop)}</td>
       <td class="num fin">${rub(r.cash_kop)}</td>
       <td class="num fin">${rub(r.otpusk_nach_kop)}</td>
       <td class="num fin">${rub(r.otpusk_kop)}</td>
@@ -3117,9 +3117,9 @@ function drawPayroll(filter = '') {
   const total = `<tfoot><tr class="pw-total"><td class="pw-name">ИТОГО</td><td></td>
     <td></td><td></td><td></td>
     <td class="num sep fin"><b>${rub(sum('salary_kop'))}</b></td>
-    <td class="num fin">${rub(sum('cash_avans_kop'))}</td>
     <td class="num fin">${rub(sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('card_rasch_kop'))}</td>
-    <td class="num fin">${rub(sum('card_uvol_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
+    <td class="num fin">${rub(sum('card_uvol_kop'))}</td>
+    <td class="num fin">${rub(sum('cash_avans_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('otpusk_cash_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
     <td class="num fin">${rub(sum('bolnich_nach_kop'))}</td>
