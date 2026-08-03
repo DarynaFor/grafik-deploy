@@ -593,6 +593,24 @@ export class MockStore {
     return (this.db.payouts || []).filter(p => p.status === 'confirmed')
       .sort((a, b) => String(b.confirmed_at || '').localeCompare(String(a.confirmed_at || ''))).slice(0, limit);
   }
+  // Зеркало присутствия (083) для демо: одна «вкладка» — сам вошедший. Смысл не
+  // в многопользовательности, а в том, чтобы блок на «Обзоре» было на чём проверить.
+  async ping(state) {
+    if (!this.user) return;
+    this.db.presence = (this.db.presence || []).filter(p => p.user_id !== this.user.id);
+    this.db.presence.push({ user_id: this.user.id, display_name: this.user.name, role: this.user.role,
+      last_seen: new Date().toISOString(), screen: state.screen ?? null,
+      period: state.period ? state.period + '-01' : null, editing: state.editing ?? null,
+      editing_at: state.editing ? new Date().toISOString() : null });
+    this._save();
+  }
+  async listPresence() {
+    const now = Date.now();
+    return (this.db.presence || []).map(p => ({ ...p,
+      online: now - new Date(p.last_seen).getTime() < 90000,
+      edits_hour: (this.db.journal || []).filter(j => j.actor === p.display_name
+        && now - new Date(j.at).getTime() < 3600000).length }));
+  }
   async listJournal({ filter = 'all', beforeId = null, limit = 50 } = {}) {
     let arr = (this.db.journal || []).filter(j => journalMatch(j, filter)).sort((a, b) => (b.id || 0) - (a.id || 0));
     if (beforeId != null) arr = arr.filter(j => (j.id || 0) < beforeId);
@@ -1226,6 +1244,27 @@ export class SupabaseStore {
       .insert({ employee_id, text, author: this.user.id }).select().single();
     if (error) throw error;
     return data;
+  }
+  /* ── Кто в программе (миграция 083) ─────────────────────────────────────
+     Отметка «я здесь»: экран, месяц и что открыто на правку. Имя и роль
+     проставит триггер из app_user — клиент их не шлёт и подделать не может.
+     Ошибки ГЛОТАЕМ: присутствие — украшение, из-за него не должно падать
+     сохранение смены или тем более вход. */
+  async ping(state) {
+    if (!this.user) return;
+    try {
+      await this.sb.from('user_presence').upsert({
+        user_id: this.user.id,
+        screen: state.screen ?? null,
+        period: state.period ? state.period + '-01' : null,
+        editing: state.editing ?? null,
+      }, { onConflict: 'user_id' });
+    } catch (e) { console.warn('ping:', e); }
+  }
+  async listPresence() {
+    const { data, error } = await this.sb.from('v_presence').select('*');
+    if (error) throw error;
+    return data || [];
   }
 }
 

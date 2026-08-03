@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=86';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=88';
 
 const $ = id => document.getElementById(id);
 
@@ -321,6 +321,7 @@ function go(screen, replace) {
   // с него выходило из программы, а не оставляло пустой адрес.
   syncHash(!firstNav && !replace);
   firstNav = false;
+  presencePing();          // сменил экран — сразу видно, где он
 }
 
 /* ── Адрес экрана ───────────────────────────────────────────────────────
@@ -552,6 +553,86 @@ function applyHash() {
   if (t.s === 'schedule' && changedPeriod) renderSchedule();
 }
 window.addEventListener('hashchange', applyHash);
+
+/* ── Кто в программе прямо сейчас (миграция 083) ────────────────────────
+   Дарина 02.08: Милене надо видеть, кто онлайн, на каком экране и правит ли
+   что-то; остальным — просто кто онлайн. Плюс предупреждение «эту же карточку
+   уже открыли», как в гугл-доках.
+
+   Отметка, а не живой канал (её решение): «была 4 минуты назад» полезнее
+   зелёной точки, которая на плохом интернете мигает. Цена — задержка до
+   полминуты, но НЕ для правок: открыли или закрыли форму — отмечаемся сразу,
+   иначе предупреждение опаздывало бы ровно тогда, когда оно и нужно.
+
+   Пока вкладка скрыта, не отмечаемся вовсе: «онлайн» с телефона в кармане —
+   это ложь, а Милена по этому признаку решает, писать человеку или нет. */
+const PRESENCE_EVERY = 30000;
+let presence = { screen: null, period: null, editing: null };
+let presenceTimer = null, presenceRows = [];
+function presencePing() {
+  if (!store.me() || document.visibilityState !== 'visible') return;
+  presence.screen = curScreen;
+  presence.period = PERIOD_OF[curScreen] ? PERIOD_OF[curScreen].get() : workPeriod;
+  store.ping(presence);          // ошибки глотает сам store: присутствие не должно ронять работу
+}
+// Что человек держит открытым на правку. Ключ общий для всех: 'card:17',
+// 'payroll:17:2026-07' — по нему и сверяем, не сидят ли двое в одном месте.
+function setEditing(key) {
+  if (presence.editing === (key || null)) return;
+  presence.editing = key || null;
+  presencePing();
+  if (key) warnCoEdit(key);          // и сразу смотрим, не сидит ли тут кто-то ещё
+}
+/* Предупреждение «этим же сейчас занят кто-то ещё» — как в гугл-доках. Ставим
+   ВНУТРЬ формы, а не тостом: тост исчезнет, а решать надо в момент сохранения.
+   Список перечитываем при открытии и раз в 10 секунд, пока форма открыта: тот,
+   кто открыл ПОСЛЕ нас, иначе остался бы незамеченным. Правки друг друга это не
+   блокирует — программа не знает, кто прав; она лишь не даёт затереть молча. */
+async function warnCoEdit(key) {
+  await loadPresence();
+  if (presence.editing !== key || !modalOpen()) return;
+  const box = $('modalOv2').classList.contains('show') ? $('modalBox2') : $('modalBox');
+  box.querySelector('.co-edit')?.remove();
+  const кто = othersEditing(key).map(p => p.display_name).filter(Boolean);
+  if (!кто.length) return;
+  const first = box.querySelector('h3');
+  // Формулировки без рода: в программе есть и мужчины, и женщины, а угадывать по
+  // имени нельзя. «Кто сохранит последним» — и короче, и точнее описывает риск.
+  // Текст одним <span>: во flex-контейнере <b> стал бы отдельным элементом, и
+  // строка рвалась бы прямо посреди фразы, вокруг имени.
+  const html = `<div class="co-edit">${ICONS.alert || '⚠'}<span>Здесь же сейчас: <b>${esc(кто.join(', '))}</b> — кто сохранит последним, затрёт чужую правку</span></div>`;
+  if (first) first.insertAdjacentHTML('afterend', html); else box.insertAdjacentHTML('afterbegin', html);
+  applyIcons(box);
+  clearTimeout(warnCoEdit._t);
+  warnCoEdit._t = setTimeout(() => { if (presence.editing === key) warnCoEdit(key); }, 10000);
+}
+function presenceStart() {
+  clearInterval(presenceTimer);
+  presenceTimer = setInterval(() => { presencePing(); presenceRefreshUi(); }, PRESENCE_EVERY);
+  presencePing(); presenceRefreshUi();
+}
+// Показ обновляем тем же тактом: у владельца — блок на «Обзоре», у остальных —
+// строка в шапке. Каждый рисует только своё, лишних запросов нет.
+function presenceRefreshUi() {
+  if (!store.me()) return;
+  if (isOwner()) { if (curScreen === 'overview') drawPresenceBlock(); }
+  else drawPresenceTop();
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') presenceStart();
+  else clearInterval(presenceTimer);
+});
+// Кто ещё сидит на том же объекте. Протухшие вкладки (>2 мин) не считаем: человек
+// давно ушёл, а предупреждение «её правит Алёна» пугало бы зря.
+function othersEditing(key) {
+  const me = store.me()?.id;
+  return presenceRows.filter(p => p.editing === key && p.user_id !== me
+    && p.last_seen && Date.now() - new Date(p.last_seen).getTime() < 120000);
+}
+async function loadPresence() {
+  try { presenceRows = await store.listPresence(); } catch (e) { presenceRows = []; }
+  return presenceRows;
+}
 const ROLE_LABELS = { owner: 'владелец', operator: 'оператор', cashier1: 'касса · Бух 1', cashier2: 'карта / 1С · Бух 2', ceo: 'директор' };
 const isStaff = () => ['owner', 'operator', 'ceo'].includes(store.me()?.role);   // кто работает с карточками
 // График ведёт оператор (Алёна) с переданных головами отделений листов. Владелец
@@ -598,6 +679,7 @@ async function enter() {
   const target = t && !stale && allowedScreen(t.s) ? t : null;   // ссылка на чужой экран (роль его не видит) — молча на свой
   if (target?.period && PERIOD_OF[target.s]) PERIOD_OF[target.s].set(target.period);
   await refresh();
+  presenceStart();          // с этого момента остальные видят, что человек в программе
   if (target?.s === 'card') {
     if (openCard(target.id)) return;
     toast('Такой карточки нет', true);                 // ссылку прислали на удалённого/чужого — не молчим
@@ -1769,6 +1851,8 @@ function toggleArchive(e) {
   };
 }
 function employeeForm(e) {
+  // Ключ правки: по нему другие увидят «эту же карточку сейчас открыли».
+  setEditing(e ? 'card:' + e.id : 'card:new');
   const so = specialties.map(s => `<option value="${s.id}" ${e?.specialty_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
   // Дежурство — ВТОРАЯ специальность. Пустая строка первой: у большинства
   // дежурства нет, и поле должно оставаться пустым по умолчанию.
@@ -2461,6 +2545,7 @@ function scheduleDayDialog(day) {
   }
 }
 function scheduleCellPopup(empId, day, pos = 'main') {
+  setEditing('sched:' + empId + ':' + cellDate(day));
   const e = employees.find(x => x.id === empId); if (!e) return;
   const date = cellDate(day), c = cellOf(empId, day, pos);
   const opts = shiftKinds.filter(k => k.code !== 'custom').map(k => `<option value="${k.code}" ${c && c.plan_kind === k.code ? 'selected' : ''}>${esc(k.label)}</option>`).join('');   // custom без конца смены = 0ч → исключаем (как в шаблоне)
@@ -3500,6 +3585,7 @@ async function payrollDialog(empId) {
   // Пока ждали базу, месяц или экран могли смениться. Диалог тогда уже не про то,
   // что перед человеком: молча уходим, строку он откроет заново.
   if (payPeriod !== per || curScreen !== 'payroll') return;
+  setEditing('payroll:' + empId + ':' + per);   // деньги — самое дорогое место для двойной правки
   const breakdown = my.length
     ? my.map(l => `<div class="me-row"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}</span><b>${rub(l.money_kop)} ₽</b></div>`).join('')
     // При ручной сумме «Начислений за месяц нет · 0 ₽» стоял бы прямо над
@@ -3815,8 +3901,10 @@ function drawOverview() {
 
   $('overviewBody').innerHTML = hero + bento
     + `<div class="ov-sec">Требует внимания</div><div class="ov-alerts">${attention}</div>`
+    + `<div class="ov-sec">Кто в программе</div><div class="card" id="ovPresence"><span class="muted small" style="padding:14px 18px;display:block">смотрим…</span></div>`
     + `<div class="ov-sec">Последние выдачи</div><div class="card">${paysHtml}</div>`
     + `<div class="note ov-note">${ICONS.lock}Все суммы — из неизменяемого журнала</div>`;
+  drawPresenceBlock();
 
   $('overviewBody').querySelectorAll('[data-go]').forEach(b => b.onclick = () => {
     // Месяц «Обзора» переносим на целевой экран: плашка посчитана по ovPeriod, и
@@ -3827,6 +3915,49 @@ function drawOverview() {
     if (b.dataset.go === 'journal-red') { journalFilter = 'red'; go('journal'); renderJournal(true); }
     else go(b.dataset.go);
   });
+}
+
+/* ── «Кто в программе» ──────────────────────────────────────────────────
+   Владельцу — подробно: экран, месяц, сколько правок за час (из журнала, то есть
+   из аудита, а не со слов браузера). Остальным — просто кто онлайн: видимость
+   взаимная по решению Дарины, скрытое наблюдение стоило бы доверия дороже.
+
+   «Была 4 минуты назад» вместо голого «офлайн» — ради этого всё и делалось:
+   Милена заходит периодически и решает, писать человеку сейчас или он уже ушёл. */
+const SCREEN_RU = { overview: 'Обзор', gaps: 'Пробелы', employees: 'Сотрудники', card: 'Карточка',
+  schedule: 'График', payroll: 'Расчёт', rates: 'Ставки', patients: 'Оплаты пациентов',
+  import: 'Импорт', specialties: 'Специальности', journal: 'Журнал', soon: '—' };
+function agoRu(iso) {
+  const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (m < 1) return 'только что';
+  if (m < 60) return m + ' мин назад';
+  const h = Math.floor(m / 60);
+  return h < 24 ? h + ' ч назад' : Math.floor(h / 24) + ' дн назад';
+}
+async function drawPresenceBlock() {
+  const box = $('ovPresence'); if (!box) return;
+  const rows = (await loadPresence()).filter(p => p.user_id !== store.me()?.id);
+  if (!rows.length) { box.innerHTML = '<div class="jrow" style="border:none"><span class="muted small">Кроме вас сейчас никого</span></div>'; return; }
+  rows.sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0) || String(b.last_seen).localeCompare(String(a.last_seen)));
+  box.innerHTML = rows.map(p => {
+    const где = p.online && p.screen
+      ? esc(SCREEN_RU[p.screen] || p.screen) + (p.period ? ' · ' + esc(periodLabel(String(p.period).slice(0, 7))) : '')
+      : '';
+    const правки = p.edits_hour > 0 ? `<span class="pill o">${p.edits_hour} правок за час</span>` : '';
+    return `<div class="jrow"><div class="prs-dot${p.online ? ' on' : ''}"></div><div style="flex:1">
+      <div style="font-weight:700">${esc(p.display_name || '—')} <span class="muted small">${esc(ROLE_LABELS[p.role] || p.role || '')}</span></div>
+      <div class="who">${p.online ? 'в программе' + (где ? ' · ' + где : '') : esc(agoRu(p.last_seen))}</div>
+      </div>${правки}</div>`;
+  }).join('');
+}
+// Остальным ролям — компактная строка в шапке: только сколько человек в программе
+// и кто именно. Экраны и правки им не показываем, это не их дело.
+async function drawPresenceTop() {
+  const el = $('presTop'); if (!el || isOwner()) return;
+  const rows = (await loadPresence()).filter(p => p.user_id !== store.me()?.id && p.online);
+  el.innerHTML = rows.length
+    ? `<span class="prs-dot on"></span>${esc(rows.map(p => p.display_name).filter(Boolean).join(', '))}`
+    : '';
 }
 
 /* ── Пробелы ────────────────────────────────────────────────────────────
@@ -4182,6 +4313,7 @@ function showModal(html, onClose) { modalOnClose = onClose || null; $('modalBox'
 // экран ДО того, как applyHash прочитает новый: переход просто исчезал, а запись
 // истории затиралась. Адрес чинит сам отказ в applyHash, пушем.
 function closeModal() { $('modalOv').classList.remove('show'); delete $('modalBox').dataset.guard;
+  setEditing(null);          // форма закрыта — снимаем «правит», не дожидаясь такта
   const f = modalOnClose; modalOnClose = null; if (f) f(); }
 // Открыта любая из двух форм (вторая — диалог поверх первой). Спрашивают и
 // маршрутизация («назад» не уводит экран из-под формы), и суточный сброс.
