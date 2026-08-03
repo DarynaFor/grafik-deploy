@@ -1098,7 +1098,7 @@ async function loadCardMoney(id) {
         <b class="money">${rub(r.delta_kop)} ₽</b></div>
       <div class="cm-chips">
         <span class="mini-chip">Начислено${r.flag_manual_salary ? ' (вручную)' : ''}: <b>${rub(r.salary_kop)} ₽</b></span>
-        ${cardTotal(r) ? `<span class="mini-chip">Карта: <b>${rub(cardTotal(r))} ₽</b></span>` : ''}
+        ${cardDelta(r) ? `<span class="mini-chip">Карта: <b>${rub(cardDelta(r))} ₽</b></span>` : ''}
         ${r.cash_kop + r.cash_avans_kop ? `<span class="mini-chip">Наличными: <b>${rub(r.cash_kop + r.cash_avans_kop)} ₽</b></span>` : ''}
         ${/* ОТДЕЛЬНЫЙ чип, а не слагаемое в «Наличными»: тождество
               «Осталось выдать = Начислено − Карта − Наличными» должно оставаться
@@ -3037,11 +3037,11 @@ const rub = kop => fmt(Math.round((kop || 0) / 100));
 // сколько денег уже расписано по выплатам — до этого дельта равна всей зарплате
 // и подсвечивать её бессмысленно (горела бы у всех весь месяц)
 const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0) + (r.cash_kop || 0) + (r.cash_avans_kop || 0);
-// Всё официальное на карту одной суммой — ровно то, что вычитает delta_kop
-// (аванс + ЗП + расчёт при увольнении). Отпускных на карту здесь НЕТ намеренно:
-// Δ их не вычитает, и чип на карточке человека обязан сходиться с «Осталось
-// выдать». Разбивка по видам — в «Расчёте» (графы) и в окне человека.
-const cardTotal = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
+// Чип на карточке человека: то, что вычитает delta_kop (аванс + ЗП + расчёт
+// при увольнении) — чип обязан сходиться с «Осталось выдать». Это НЕ то же
+// самое, что колонка «Всего на карту» (cardTotal выше): там по просьбе Дарины
+// считается ВЫДАННОЕ безналом, включая отпускные и больничные.
+const cardDelta = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
 let payrollRows = [], payrollLines = [], payrollSeq = 0, payrollShown = null;
 // Норма часов месяца на «Расчёте» — та же v_month_norm, что и в графике.
 // Нужна, чтобы шапка окна человека говорила часами, а не днями: оклад теперь
