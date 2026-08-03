@@ -3150,8 +3150,8 @@ function drawPayroll(filter = '') {
   // не входит (migrations/046).
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
-    <th class="num sep">Зарплата</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
-    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num">Больн. карта</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th></tr></thead>`;
+    <th class="num sep">Зарплата</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
+    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num">Больн. карта</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по категории,
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
@@ -3174,6 +3174,10 @@ function drawPayroll(filter = '') {
       <td class="num sep fin"><b>${rub(r.salary_kop)}</b></td>
       <td class="num fin">${rub(r.card_avans_kop)}</td>
       <td class="num fin">${rub(r.card_rasch_kop)}</td>
+      <td class="num fin pw-cardtot"><b>${rub(cardTotal(r))}</b></td>
+      <td class="num fin pw-carry${isStaff() ? ' pw-tap' : ''}" data-carry="${r.employee_id}"${isStaff() ? ' title="Изменить или убрать перенос"' : ''}>${
+        r.carry_kop ? `<b class="money${r.carry_kop < 0 ? ' neg' : ''}">${rub(r.carry_kop)}</b>` : '<span class="muted">—</span>'}</td>
+      <td class="num pw-pay fin"><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)}</b></td>
       <td class="num fin">${rub(r.card_uvol_kop)}</td>
       <td class="num fin">${rub(r.cash_avans_kop)}</td>
       <td class="num fin">${rub(r.cash_kop)}</td>
@@ -3183,10 +3187,7 @@ function drawPayroll(filter = '') {
       <td class="num fin">${rub(r.premia_kop)}</td>
       <td class="num fin">${rub(r.bolnich_nach_kop)}</td>
       <td class="num fin">${rub(r.bolnich_kop)}</td>
-      <td class="num fin pw-cardtot"><b>${rub(cardTotal(r))}</b></td>
-      <td class="num fin pw-carry${isStaff() ? ' pw-tap' : ''}" data-carry="${r.employee_id}"${isStaff() ? ' title="Изменить или убрать перенос"' : ''}>${
-        r.carry_kop ? `<b class="money${r.carry_kop < 0 ? ' neg' : ''}">${rub(r.carry_kop)}</b>` : '<span class="muted">—</span>'}</td>
-      <td class="num pw-pay fin"><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)}</b></td>`;
+`;
     if (!my.length) {
       body += `<tr class="pw-row" data-id="${r.employee_id}"><td class="pw-name"><span class="pw-fio">${esc(r.fio)}</span>${flags}</td>
         <td colspan="4" class="muted small">${r.flag_no_rate ? 'нет ставки' : 'нет начислений за месяц'}</td>${right}</tr>`;
@@ -3215,25 +3216,28 @@ function drawPayroll(filter = '') {
     <td></td><td></td><td></td>
     <td class="num sep fin"><b>${rub(sum('salary_kop'))}</b></td>
     <td class="num fin">${rub(sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('card_rasch_kop'))}</td>
+    <td class="num fin pw-cardtot"><b>${rub(sum('card_rasch_kop') + sum('card_avans_kop') + sum('otpusk_kop') + sum('bolnich_kop'))}</b></td>
+    <td class="num fin pw-carry"><b class="money${sum('carry_kop') < 0 ? ' neg' : ''}">${sum('carry_kop') ? rub(sum('carry_kop')) : '—'}</b></td>
+    <td class="num pw-pay fin"><b class="money">${rub(toGive)}</b></td>
     <td class="num fin">${rub(sum('card_uvol_kop'))}</td>
     <td class="num fin">${rub(sum('cash_avans_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('otpusk_cash_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
     <td class="num fin">${rub(sum('bolnich_nach_kop'))}</td>
     <td class="num fin">${rub(sum('bolnich_kop'))}</td>
-    <td class="num fin pw-cardtot"><b>${rub(sum('card_rasch_kop') + sum('card_avans_kop') + sum('otpusk_kop') + sum('bolnich_kop'))}</b></td>
-    <td class="num fin pw-carry"><b class="money${sum('carry_kop') < 0 ? ' neg' : ''}">${sum('carry_kop') ? rub(sum('carry_kop')) : '—'}</b></td>
-    <td class="num pw-pay fin"><b class="money">${rub(toGive)}</b></td></tr>
+</tr>
     <tr class="pw-total pw-accrued"><td class="pw-name">Всего начислено</td>
-      <td colspan="17" class="muted small">зарплата ${rub(sum('salary_kop'))}${
+      <td colspan="7" class="muted small">зарплата ${rub(sum('salary_kop'))}${
         sum('premia_kop') ? ' + премии ' + rub(sum('premia_kop')) : ''}${
         sum('otpusk_nach_kop') ? ' + отпускные ' + rub(sum('otpusk_nach_kop')) : ''}${
         sum('bolnich_nach_kop') ? ' + больничные ' + rub(sum('bolnich_nach_kop')) : ''}</td>
-      <td class="num pw-carry"></td>
-      <td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop'))}</b></td></tr>
+      <td class="num pw-cardtot"></td><td class="num pw-carry"></td>
+      <td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop'))}</b></td>
+      <td colspan="9"></td></tr>
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
-      <td colspan="18" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
-      <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td></tr>` : ''}</tfoot>`;
+      <td colspan="9" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
+      <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td>
+      <td colspan="9"></td></tr>` : ''}</tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
   stickFooterRows($('payrollTable'));
