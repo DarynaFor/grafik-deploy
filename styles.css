@@ -232,8 +232,34 @@ body.authed .login-stage{display:none}
 /* ставки: массовый ввод */
 .rates-stat{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px;font-size:14px}
 .rates-stat b{font-variant-numeric:tabular-nums}
-.rt-toggle{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2);font-weight:600;cursor:pointer;white-space:nowrap}
-.rt-toggle input{width:16px;height:16px;accent-color:var(--green);cursor:pointer}
+/* Фильтры-переключатели — таблетки, а не системные галочки (Дарина 03.08:
+   «зроби їх візуально якось по приємніше і сучасніше»). Системный чекбокс
+   выглядел чужим рядом с поиском и «Все отделения», которые уже таблетки.
+   Сам input не убираем в display:none, а прячем прозрачностью поверх ячейки:
+   так остаются и клавиатура (Tab/Space), и фокус, и чтение с экрана. */
+.rt-toggle{position:relative;display:inline-flex;align-items:center;gap:8px;
+  padding:8px 14px 8px 11px;border-radius:var(--r-pill);
+  background:var(--raise);border:1px solid var(--glass-bd);
+  font-size:13px;color:var(--ink-2);font-weight:600;cursor:pointer;white-space:nowrap;
+  transition:background .16s,border-color .16s,color .16s}
+.rt-toggle:hover{background:var(--raise-hi);color:var(--ink)}
+/* Сам квадратик рисуем через ::before у input — чтобы галочка внутри могла
+   появляться и исчезать, не трогая разметку. */
+.rt-toggle input{appearance:none;-webkit-appearance:none;margin:0;flex:none;
+  width:17px;height:17px;border-radius:6px;cursor:pointer;
+  border:1.5px solid var(--glass-bd);background:var(--fill-2);
+  display:grid;place-content:center;transition:background .16s,border-color .16s}
+.rt-toggle input::before{content:'';width:9px;height:9px;transform:scale(0);
+  transition:transform .13s cubic-bezier(.4,1.5,.6,1);background:var(--on-green);
+  clip-path:polygon(14% 45%,0 60%,39% 100%,100% 22%,85% 8%,39% 70%)}
+.rt-toggle input:checked{background:var(--green);border-color:var(--green)}
+.rt-toggle input:checked::before{transform:scale(1)}
+.rt-toggle:has(input:checked){background:color-mix(in srgb,var(--green) 13%,transparent);
+  border-color:color-mix(in srgb,var(--green) 42%,transparent);color:var(--green-d)}
+.rt-toggle input:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+/* Запасной вариант для движков без :has() — таблетка не подсветится, но
+   галочка внутри всё равно зелёная и состояние читается. */
+@supports not selector(:has(*)){ .rt-toggle{background:var(--raise)} }
 .rate-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 16px;border-radius:16px;background:var(--raise);border:1px solid var(--glass-bd);box-shadow:var(--sh-sm);margin-bottom:8px}
 .rate-name{flex:1;min-width:160px;font-weight:700;font-size:14.5px}
 .rate-name .sub{font-weight:500;color:var(--ink-3);font-size:12px;margin-top:3px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}

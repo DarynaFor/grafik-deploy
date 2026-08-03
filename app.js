@@ -163,6 +163,34 @@ function parseNum(raw, opts) {
 
 let specialties = [], employees = [], curScreen = 'employees';
 
+/* Сортировка по фамилии — ОДНА на «График» и «Расчёт» (Дарина 03.08). Обычно
+   списки разбиты по отделениям, и чтобы найти человека, надо знать, в каком он
+   отделении. С этим переключателем — все одним списком А→Я.
+   Настройка общая и переживает перезагрузку: искать человека по фамилии — это
+   привычка, а не разовое действие, и переставлять галочку на каждом экране и
+   после каждого входа было бы наказанием. */
+const AZ_KEY = 'milena-sort-az';
+let sortAZ = false;
+try { sortAZ = localStorage.getItem(AZ_KEY) === '1'; } catch (e) {}
+// trim() обязателен: ФИО правят руками и заливают из Excel, и один лишний
+// пробел в начале выбрасывал человека в САМОЕ НАЧАЛО списка — мимо своей буквы.
+const byFio = (a, b) => String(a.fio || '').trim().localeCompare(String(b.fio || '').trim(), 'ru');
+function setSortAZ(on) {
+  sortAZ = !!on;
+  try { localStorage.setItem(AZ_KEY, sortAZ ? '1' : ''); } catch (e) {}
+  const a = $('payAZ'), b = $('schedAZ');
+  if (a) a.checked = sortAZ;
+  if (b) b.checked = sortAZ;
+  // Перерисовываем ОБА экрана, а не только текущий. Галочка ставится сразу в
+  // обоих — и если перерисовать лишь открытый, на второй придёшь с поднятой
+  // галочкой над списком, разбитым по-старому: go() «График» сам не перерисовывает,
+  // если месяц не менялся. Обе функции рисуют из уже загруженного и молча выходят,
+  // когда рисовать нечего, так что за скрытый экран платим только версткой в памяти,
+  // а не походом в базу — на плохом интернете галочка думала бы секунды впустую.
+  drawPayroll($('payrollSearch')?.value || '');
+  drawSchedule();
+}
+
 /* ── вход ── */
 function renderLogin() {
   const body = $('loginBody'), foot = $('loginFoot');
@@ -315,6 +343,12 @@ function go(screen, replace) {
   if (screen === 'schedule' && movedMonth) renderSchedule();
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
   $('s-' + screen).classList.add('show');
+  // Лесенку примороженных подытогов «Расчёта» пересчитываем ЗДЕСЬ — это первый
+  // момент, когда экран показан и высоты вообще можно измерить. На скрытом всё
+  // меряется нулями, и три строки легли бы друг на друга; renderPayroll выше
+  // вызван ДО показа и помочь не может, а его перерисовка приходит только с
+  // ответом базы — до тех пор подвал стоял бы слипшимся.
+  if (screen === 'payroll') stickFooterRows($('payrollTable'));
   renderNav();
   document.querySelector('.main').scrollTop = 0;
   // Первый экран после входа — тоже replace: он и есть дно истории, чтобы «назад»
@@ -725,6 +759,8 @@ function fillCatSelects() {
   wire('payrollCat', () => drawPayroll($('payrollSearch')?.value || ''));
   // «без начисления» — только перерисовка, данные уже загружены
   if ($('payOnlyZero')) $('payOnlyZero').onchange = () => drawPayroll($('payrollSearch')?.value || '');
+  // Один переключатель на два экрана: галочка ставится в обоих и переживает вход.
+  ['payAZ', 'schedAZ'].forEach(id => { const el = $(id); if (el) { el.checked = sortAZ; el.onchange = () => setSortAZ(el.checked); } });
 }
 async function refresh() {
   [specialties, employees] = await Promise.all([store.listSpecialties(), store.listEmployees()]);
@@ -2257,6 +2293,12 @@ async function renderSchedule() {
 }
 function drawSchedule() {
   if (!isStaff() || !$('scheduleGrid')) return;
+  // Тот же замок, что у drawPayroll: в scheduleRows лежит месяц schedShown. Пока
+  // грузится ДРУГОЙ — рисовать нечем, и без этой строки поиск, выбор отделения или
+  // галочка сортировки нарисовали бы клетки старого месяца под шапкой нового, а
+  // тап по такой клетке пишет факт в новый месяц. renderSchedule зовёт нас уже
+  // после присвоения schedShown, откат по ошибке — тоже, так что им замок не мешает.
+  if (!schedShown || schedShown !== curPeriod) return;
   if ($('mLabel')) $('mLabel').textContent = periodLabel(curPeriod);
   const nd = daysInMonth(curPeriod);
   const editable = canEditSchedule();     // оператор ведёт график (для tap по имени / шаблонов)
@@ -2322,12 +2364,23 @@ function drawSchedule() {
   // держать на виду именно «Норму» и «Факт» (02.08). Δ осталась рядом с ними.
   head += '<div class="gr-day sum s-cnt">Смен</div><div class="gr-day sum s-delta" title="факт − норма (у кого норма задана); иначе факт − план смен за прошедшие дни">Δ</div><div class="gr-day sum s-norm" title="норма часов в месяц — задаётся вручную">Норма</div><div class="gr-day sum s-fact">Факт</div>';
   let rows = '', shown = 0;
+  // Сначала плоский список пар [сотрудник, отделение] — тогда порядок и заголовки
+  // групп решаются в одном месте, а тело строки остаётся единственным.
+  const seq = [];
   for (const cat of cats) {
     if (catF && cat !== catF) continue;
     const list = active.filter(e => inCat(e, cat, !!catF) && String(e.fio || "").toLowerCase().includes(f));
-    if (!list.length) continue;
-    rows += `<div class="gr-group"><span><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${list.length}</span></div>`;
-    for (const e of list) {
+    for (const e of list) seq.push([e, cat]);
+  }
+  if (sortAZ) seq.sort((a, b) => byFio(a[0], b[0]));
+  const inCatCount = c => seq.filter(x => x[1] === c).length;
+  {
+    let curCat = null;
+    for (const [e, cat] of seq) {
+      if (!sortAZ && cat !== curCat) {
+        curCat = cat;
+        rows += `<div class="gr-group"><span><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${inCatCount(cat)}</span></div>`;
+      }
       shown++;
       rows += `<div class="gr-name${editable ? ' tap' : ''}" data-emp="${e.id}" title="${editable ? 'Шаблон на месяц: ' : ''}${esc(e.fio)}" style="box-shadow:inset 3px 0 0 ${catColor(cat)}">${esc(e.fio)}</div>`;
       let planPast = 0, factPast = 0, cnt = 0;
@@ -3126,7 +3179,10 @@ function drawPayroll(filter = '') {
   // минуя renderPayroll: без этой строки один символ в поиске перерисовывал старые
   // деньги — вместе с подытогами по отделениям, строкой ИТОГО и чипами «Осталось
   // выдать» — под новой подписью и новым адресом. Ошибки сети для этого не нужно.
-  if (payrollShown !== payPeriod) return;
+  // `!payrollShown` — отдельным условием: пока «Расчёт» не открывали ни разу, ОБА
+  // пусты, равенство выполняется, и мы шли рисовать месяц null (падало на
+  // periodLabel). Ловится, только когда рисовать просят с ДРУГОГО экрана.
+  if (!payrollShown || payrollShown !== payPeriod) return;
   const f = (filter || '').toLowerCase();
   const cat = $('payrollCat')?.dataset.value || '';
   // «без начисления» — быстрый способ увидеть, кому за месяц ничего не посчиталось:
@@ -3156,11 +3212,12 @@ function drawPayroll(filter = '') {
   // Разбивка по специальностям (как в графике): сортируем по категории,
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
   const catOf = r => specCat(employees.find(e => e.id === r.employee_id)?.specialty_id) || 'Прочие';
-  rows.sort((a, b) => catOf(a).localeCompare(catOf(b)) || (a.fio || '').localeCompare(b.fio || ''));
+  if (sortAZ) rows.sort(byFio);
+  else rows.sort((a, b) => catOf(a).localeCompare(catOf(b)) || (a.fio || '').localeCompare(b.fio || ''));
   let body = '', curCat = null;
   for (const r of rows) {
     const cat = catOf(r);
-    if (cat !== curCat) {
+    if (!sortAZ && cat !== curCat) {
       curCat = cat;
       const inCat = rows.filter(x => catOf(x) === cat);
       const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
@@ -3241,18 +3298,6 @@ function drawPayroll(filter = '') {
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
   stickFooterRows($('payrollTable'));
-  /* Подвал приморожен к низу (tr.pw-total{position:sticky;bottom:0}). Строк там
-     ТРИ, и все прилипали на ОДНУ высоту — «ИТОГО» и «Всего начислено» уезжали
-     под «Переплату вперёд», а сквозь них просвечивали строки людей. Фон у них
-     непрозрачный, дело не в нём: они просто накладывались.
-     Раскладываем лесенкой: каждой строке bottom = сумма высот тех, что НИЖЕ.
-     Считаем после отрисовки, потому что высота зависит от текста — у «Всего
-     начислено» расшифровка переносится на вторую строку на узком экране. */
-  {
-    const foot = [...$('payrollTable').querySelectorAll('tfoot tr.pw-total')];
-    let below = 0;
-    for (const tr of foot.reverse()) { tr.style.bottom = below + 'px'; below += tr.offsetHeight; }
-  }
   $('payrollTable').querySelectorAll('.pw-row').forEach(tr => {
     tr.onclick = () => payrollDialog(+tr.dataset.id);
   });
@@ -3948,7 +3993,18 @@ function drawOverview() {
    друг на друга. Поэтому считаем каждой свой отступ снизу = высота строк под
    ней. Пересчитываем после каждой отрисовки: состав строк и высоты меняются. */
 function stickFooterRows(host) {
-  const rows = [...host.querySelectorAll('tfoot tr')];
+  // Нас зовут из go() — до всякой отрисовки и для любой роли. Если узла нет,
+  // выйти надо молча: исключение здесь оборвало бы go() на середине, не дойдя
+  // ни до меню, ни до адреса.
+  if (!host) return;
+  // Только .pw-total: приморожены к низу именно они, и лесенка складывается из их
+  // высот. Обычная строка в tfoot (появись она) сдвинула бы отсчёт на свою высоту.
+  const rows = [...host.querySelectorAll('tfoot tr.pw-total')];
+  // На СКРЫТОМ экране (display:none) высоты меряются нулями — посчитать лесенку
+  // тут нельзя в принципе, поэтому и не пробуем. Считает её go() в момент, когда
+  // экран показан: там высоты настоящие. Записать нули было бы даже хуже — они
+  // прикидываются посчитанными.
+  if (!host.offsetParent && getComputedStyle(host).position !== 'fixed') return;
   let acc = 0;
   for (let i = rows.length - 1; i >= 0; i--) {
     const h = rows[i].getBoundingClientRect().height;
@@ -4453,6 +4509,19 @@ const DATA_PANES = ['overviewBody', 'gapsBody', 'payrollTable', 'payrollNote', '
 function clearDataPanes() {
   for (const id of DATA_PANES) { const el = $(id); if (el) el.innerHTML = ''; }
   ovData = null; gapsData = null;          // чтобы отложенная перерисовка не вернула чужое
+  // Забываем и ЗАГРУЖЕННЫЕ месяцы. Без этого разметку мы стёрли, а данные
+  // предыдущего человека остались в памяти вместе с отметкой «месяц загружен» —
+  // и любая перерисовка «из уже загруженного» (галочка сортировки, поиск, выбор
+  // отделения) заново вписала бы чужие зарплаты в погашенную панель, не сходив
+  // в базу. Обычно следом идёт location.reload() и вопрос снят, но код ниже
+  // прямо рассчитан на случай, когда перезагрузки НЕ случится.
+  payrollShown = null; payrollRows = []; schedShown = null; scheduleRows = [];
+  // И объявляем недействительными ЗАПРОСЫ В ПУТИ. Каждый экран отбрасывает свой
+  // ответ по счётчику (`if (seq !== payrollSeq) return`), а токен после выхода
+  // ещё живёт секунды — ответ, вылетевший ДО выхода, приходил ПОСЛЕ, проходил
+  // проверку и сам возвращал зарплаты предыдущего человека в только что
+  // погашенную панель. Сдвигаем счётчики — и все ответы «прошлой жизни» чужие.
+  payrollSeq++; schedSeq++; ovSeq++; gapsSeq++; patSeq++;
 }
 $('logoutBtn').onclick = async () => {
   try { await store.logout(); }
