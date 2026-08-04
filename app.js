@@ -1051,10 +1051,28 @@ function focusOn(screen, empId) {
   if (screen === 'employees') renderEmployees(key);
 }
 
+/* С КАКОГО ЧИСЛА действует ставка — в самой карточке. Без этого не видно
+   главного: Дарина убрала Санниковой оклад, закрыв его августом, а он весь июль
+   продолжал действовать — в расчёте так и стояла строка «оклад», и понять почему
+   можно было только запросом к базе.
+   valid_to — дата, ПЕРЕД которой строка перестаёт действовать, поэтому в тексте
+   показываем предыдущий день: «по 31.07», а не «по 01.08» — иначе читается как
+   «работала первого августа».
+   valid_to = valid_from значит, что строка не действовала ни дня: так выглядит
+   отмена только что заведённого. Пишем «аннулирована», как и журнал ставок. */
+const dmy = d => d ? String(d).slice(0, 10).split('-').reverse().join('.') : '';
+const dayBefore = d => { const x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() - 1); return x.toISOString().slice(0, 10); };
+function linePeriod(l) {
+  if (!l.valid_to) return `с ${dmy(l.valid_from)}`;
+  if (l.valid_to === l.valid_from) return `заведена ${dmy(l.valid_from)}, не действовала ни дня`;
+  return `${dmy(l.valid_from)} — ${dmy(dayBefore(l.valid_to))}`;
+}
 function openCard(id, replace) {
   const e = employees.find(x => x.id === id); if (!e) return false;
-  const lines = activeLines(e).map(l => `<div class="line-row"><span class="pill ${l.line_type === 'основной' ? 'o' : 's'}">${l.line_type === 'основной' ? 'Основной' : 'Совмест.'}</span><div style="font-weight:700">${esc(lineLabel(l))}</div><span class="lv muted small">с ${esc(l.valid_from || '—')}</span></div>`).join('') || '<div class="empty" style="padding:20px">Строк начисления нет</div>';
-  const oldLines = (e.lines || []).filter(l => l.valid_to).map(l => `<div class="line-row" style="opacity:.55"><span class="pill k">закрыта ${esc(l.valid_to)}</span><div>${esc(lineLabel(l))}</div></div>`).join('');
+  const lines = activeLines(e).map(l => `<div class="line-row"><span class="pill ${l.line_type === 'основной' ? 'o' : 's'}">${l.line_type === 'основной' ? 'Основной' : 'Совмест.'}</span><span class="line-when">${esc(linePeriod(l))}</span><div style="font-weight:700">${esc(lineLabel(l))}</div><span class="lv muted small">с ${esc(l.valid_from || '—')}</span></div>`).join('') || '<div class="empty" style="padding:20px">Строк начисления нет</div>';
+  const oldLines = (e.lines || []).filter(l => l.valid_to).map(l => `<div class="line-row" style="opacity:.55">
+    <span class="pill k">${l.valid_to === l.valid_from ? 'аннулирована' : 'закрыта'}</span>
+    <span class="line-when">${esc(linePeriod(l))}</span><div>${esc(lineLabel(l))}</div></div>`).join('');
   $('cardBody').innerHTML = `
     <div class="card cardpad" style="margin-bottom:16px"><div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
       <div class="emp-ava" style="width:64px;height:64px;border-radius:20px;font-size:20px;background:${palette[id % palette.length]}">${esc(initials(e.fio))}</div>
