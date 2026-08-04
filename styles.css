@@ -514,10 +514,16 @@ body.authed .login-stage{display:none}
    чтобы не путался с «Осталось выдать» строкой ниже */
 .pw-accrued td{background:linear-gradient(var(--fill-1),var(--fill-1)),var(--surf-1)}
 .pw-accrued .money{color:var(--violet-d,#6b46c1)}
+/* «Всего заработано» — итог НАЧИСЛЕННОГО. Виталий 03.08 размечал карточку так:
+   красное (заработок) минус синее (выданное). Здесь красная сторона, у «Всего на
+   карту» — синяя; цветом и держим, чтобы их не путали между собой. */
+.pw-earned{background:linear-gradient(var(--fill-1),var(--fill-1)),var(--surface)}
+.pw-earned b{color:var(--violet-d,#6b46c1)}
 /* итог «Всего на карту» — сумма выданного безналом, отделяем от слагаемых */
 .pw-cardtot{background:linear-gradient(var(--fill-1),var(--fill-1)),var(--surface)}
 .pw-cardtot b{color:var(--blue-d,#2b6cb0)}
 .me-card b{color:var(--blue-d,#2b6cb0)}
+.me-earned b{color:var(--violet-d,#6b46c1)}
 
 /* «с какого числа» рядом со ставкой — тише самой ставки, но читаемо:
    это ответ на вопрос «почему оно ещё считается», а не украшение */

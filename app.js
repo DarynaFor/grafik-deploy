@@ -988,6 +988,7 @@ async function loadCardPanel(id) {
       ${r.carry_kop || canEdit ? `<div class="me-row cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
         ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
+      <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
       ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
     </div>
@@ -3081,6 +3082,16 @@ const J_ACTION = { 'сторно': 'СТОРНО', 'правило расчёт�
    не подмешиваем молча, добавим явно, если понадобится. */
 const cardTotal = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0)
   + (r.otpusk_kop || 0) + (r.bolnich_kop || 0);
+/* «Всего заработано» — весь заработок человека за месяц из ВСЕХ источников, одним
+   числом. Просьба Виталия 03.08: «мне нужно понимать сколько суммарно будет у
+   человека заработка… сделать ещё одну колонку с одной цифрой, из которой потом
+   вычту то, что на карту и уже выдавалось на руки».
+   Ровно то же, что складывает «Осталось выдать» со знаком плюс, — поэтому здесь
+   и берётся, а не считается заново: разъедутся формулы, разъедутся и цифры.
+   Перенос с прошлого месяца сюда НЕ входит: это не заработок июля, а долг с
+   июня, и в «Осталось выдать» он приходит отдельным слагаемым. */
+const earned = r => (r.salary_kop || 0) + (r.premia_kop || 0)
+  + (r.otpusk_nach_kop || 0) + (r.bolnich_nach_kop || 0);
 const MONEY_KINDS = [
   ['cash', 'Наличные'], ['cash_avans', 'Аванс наличными'], ['otpusk_cash', 'Отпускные наличными'],
   ['premia', 'Премия'],
@@ -3224,7 +3235,7 @@ function drawPayroll(filter = '') {
   // не входит (migrations/046).
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
-    <th class="num sep">Зарплата</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
+    <th class="num sep">Зарплата</th><th class="num pw-earned">Всего заработано</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
     <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num">Больн. карта</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по категории,
@@ -3239,7 +3250,7 @@ function drawPayroll(filter = '') {
       curCat = cat;
       const inCat = rows.filter(x => catOf(x) === cat);
       const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="20"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="21"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
@@ -3247,6 +3258,7 @@ function drawPayroll(filter = '') {
     const n = Math.max(1, my.length);
     const right = `
       <td class="num sep fin"><b>${rub(r.salary_kop)}</b></td>
+      <td class="num fin pw-earned"><b>${rub(earned(r))}</b></td>
       <td class="num fin">${rub(r.card_avans_kop)}</td>
       <td class="num fin">${rub(r.card_rasch_kop)}</td>
       <td class="num fin pw-cardtot"><b>${rub(cardTotal(r))}</b></td>
@@ -3290,6 +3302,7 @@ function drawPayroll(filter = '') {
   const total = `<tfoot><tr class="pw-total"><td class="pw-name">ИТОГО</td><td></td>
     <td></td><td></td><td></td>
     <td class="num sep fin"><b>${rub(sum('salary_kop'))}</b></td>
+    <td class="num fin pw-earned"><b>${rub(rows.reduce((s2, r) => s2 + earned(r), 0))}</b></td>
     <td class="num fin">${rub(sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('card_rasch_kop'))}</td>
     <td class="num fin pw-cardtot"><b>${rub(sum('card_rasch_kop') + sum('card_avans_kop') + sum('otpusk_kop') + sum('bolnich_kop'))}</b></td>
     <td class="num fin pw-carry"><b class="money${sum('carry_kop') < 0 ? ' neg' : ''}">${sum('carry_kop') ? rub(sum('carry_kop')) : '—'}</b></td>
@@ -3302,7 +3315,7 @@ function drawPayroll(filter = '') {
     <td class="num fin">${rub(sum('bolnich_kop'))}</td>
 </tr>
     <tr class="pw-total pw-accrued"><td class="pw-name">Всего начислено</td>
-      <td colspan="7" class="muted small">зарплата ${rub(sum('salary_kop'))}${
+      <td colspan="8" class="muted small">зарплата ${rub(sum('salary_kop'))}${
         sum('premia_kop') ? ' + премии ' + rub(sum('premia_kop')) : ''}${
         sum('otpusk_nach_kop') ? ' + отпускные ' + rub(sum('otpusk_nach_kop')) : ''}${
         sum('bolnich_nach_kop') ? ' + больничные ' + rub(sum('bolnich_nach_kop')) : ''}</td>
@@ -3310,7 +3323,7 @@ function drawPayroll(filter = '') {
       <td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop'))}</b></td>
       <td colspan="9"></td></tr>
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
-      <td colspan="9" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
+      <td colspan="10" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
       <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td>
       <td colspan="9"></td></tr>` : ''}</tfoot>`;
 
@@ -3710,9 +3723,10 @@ async function payrollDialog(empId) {
       ${r.carry_kop || canEdit ? `<div class="me-row cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
         ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
+      <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
       ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
-      <div class="me-row"><span class="muted small">Зарплата минус уже выданное (карта/наличные). Столько ещё раздать — в основном наличными. Отпускные в эту разницу не входят: на карту они уже выплачены, а наличные идут отдельной строкой в кассу.</span></div>
+      <div class="me-row"><span class="muted small">«Всего заработано» минус всё уже выданное — на карту и наличными — плюс перенос с прошлого месяца. Столько ещё раздать, в основном наличными.<br>Начисленные отпускные и больничные <b>входят</b> в заработок, а выплаченные — вычитаются: если начислили и выплатили поровну, на разницу они не влияют.</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
     ${pctLine && canEdit ? `<label class="flbl">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё</label>
       <div class="me-add">
