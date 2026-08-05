@@ -68,6 +68,21 @@
       <div id="gapsBody"></div>
     </section>
 
+    <section class="screen" id="s-vacation">
+      <div class="page-head">
+        <div><h1>Отпуска</h1><p>Кто в отпуске, с какого по какое, сколько начислено и выдано. Красным — где график и деньги не сошлись.</p></div>
+        <div class="right">
+          <div class="month-nav"><button class="mn-btn" id="vPrev" aria-label="Пред. месяц">‹</button><span id="vLabel"></span><button class="mn-btn" id="vNext" aria-label="След. месяц">›</button></div>
+        </div>
+      </div>
+      <div class="sched-tools">
+        <div class="search"><span data-ic="search"></span><input id="vacSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+        <label class="rt-toggle" title="Показать одним списком, без деления на отделения"><input type="checkbox" id="vacFlat"> одним списком</label>
+        <div id="vacStat" class="sched-stat"></div>
+      </div>
+      <div id="vacBody"></div>
+    </section>
+
     <section class="screen" id="s-employees">
       <div class="page-head">
         <div><h1>Сотрудники</h1><p id="empSubtitle">Карточки со строками начисления</p></div>

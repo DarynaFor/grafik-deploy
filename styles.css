@@ -528,6 +528,14 @@ body.authed .login-stage{display:none}
 /* «с какого числа» рядом со ставкой — тише самой ставки, но читаемо:
    это ответ на вопрос «почему оно ещё считается», а не украшение */
 .line-when{font-size:11.5px;color:var(--ink-3);font-variant-numeric:tabular-nums;white-space:nowrap;margin-right:2px}
+
+/* экран «Отпуска»: строки, где график и деньги не сошлись, видно сразу —
+   это главное, ради чего экран и заводится */
+.vac tbody tr{cursor:pointer}
+.vac-bad td{background:linear-gradient(rgba(214,69,69,.09),rgba(214,69,69,.09)),var(--surface)}
+.vac-warn td{background:linear-gradient(rgba(224,153,42,.10),rgba(224,153,42,.10)),var(--surface)}
+.vac tbody tr:hover td{background:linear-gradient(var(--fill-hi),var(--fill-hi)),var(--surface)}
+.mini-chip.neutral{color:var(--ink-2);background:var(--fill-1);border-color:var(--glass-bd)}
 @media (max-width:720px){ .ov-hero .v.big{font-size:32px} }
 
 /* плашка «вышло обновление» — снизу по центру, поверх всего, но не перекрывает

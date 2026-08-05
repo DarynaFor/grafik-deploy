@@ -255,6 +255,7 @@ const NAV = [
   // ('operator','cashier1','cashier2'))`, миграции 040/041. То есть у Алёны
   // спрятанный человек просто не появится ни в одной денежной группе.
   { s: 'gaps', i: 'alert', l: 'Пробелы', staffOnly: true },
+  { s: 'vacation', i: 'calendar', l: 'Отпуска', staffOnly: true },
   { s: 'employees', i: 'users', l: 'Сотрудники', staffOnly: true },
   { s: 'schedule', i: 'cal', l: 'График', staffOnly: true },
   { s: 'payroll', i: 'coin', l: 'Расчёт', staffOnly: true },
@@ -328,6 +329,7 @@ function go(screen, replace) {
   const movedMonth = adoptPeriod(screen);
   if (screen === 'overview') renderOverview();
   if (screen === 'gaps') renderGaps();
+  if (screen === 'vacation') renderVacation();
   if (screen === 'payroll') renderPayroll($('payrollSearch')?.value || '');
   // Грузим ВСЕГДА, как renderPayroll выше. Условие `patShown !== patPeriod` было
   // сломано дважды: при обоих null оно давало false и экран не открывался НИКОГДА;
@@ -393,6 +395,7 @@ const ROUTES = [
   // «Пробелы» приехали из master уже после маршрутизации — без адреса экран
   // нельзя было ни прислать ссылкой, ни удержать в общем месяце.
   { s: 'gaps',        slug: 'probely',      arg: 'period' },
+  { s: 'vacation',    slug: 'otpuska',      arg: 'period' },
   { s: 'schedule',    slug: 'grafik',       arg: 'period' },
   { s: 'payroll',     slug: 'raschet',      arg: 'period' },
   { s: 'rates',       slug: 'stavki' },
@@ -412,6 +415,7 @@ const ROUTES = [
 // здесь — тихо: адрес просто перестанет называть месяц, и никто не заметит.
 const PERIOD_OF = {
   gaps:     { get: () => gapsPeriod, set: v => { gapsPeriod = v; workPeriod = v; } },
+  vacation: { get: () => vacPeriod,  set: v => { vacPeriod = v; workPeriod = v; } },
   schedule: { get: () => curPeriod, set: v => { curPeriod = v; workPeriod = v; } },
   payroll:  { get: () => payPeriod, set: v => { payPeriod = v; workPeriod = v; } },
   patients: { get: () => patPeriod, set: v => { patPeriod = v; workPeriod = v; } },
@@ -4052,7 +4056,7 @@ function stickFooterRows(host) {
 
    «Была 4 минуты назад» вместо голого «офлайн» — ради этого всё и делалось:
    Милена заходит периодически и решает, писать человеку сейчас или он уже ушёл. */
-const SCREEN_RU = { overview: 'Обзор', gaps: 'Пробелы', employees: 'Сотрудники', card: 'Карточка',
+const SCREEN_RU = { overview: 'Обзор', gaps: 'Пробелы', vacation: 'Отпуска', employees: 'Сотрудники', card: 'Карточка',
   schedule: 'График', payroll: 'Расчёт', rates: 'Ставки', patients: 'Оплаты пациентов',
   import: 'Импорт', specialties: 'Специальности', journal: 'Журнал', soon: '—' };
 function agoRu(iso) {
@@ -4103,6 +4107,125 @@ async function drawPresenceTop() {
    раскладка. Фильтр скрытой зарплаты (миграции 040/041) сидит внутри вьюхи,
    поэтому этот экран его не обходит. */
 let gapsPeriod = null, gapsData = null, gapsSeq = 0;
+
+/* ── ОТПУСКА ───────────────────────────────────────────────────────────────
+   График и деньги по отпускам живут порознь, и расходятся сильно: за июль из
+   двадцати человек, кого отпуск коснулся, сошлось у четверых. У четырнадцати
+   отпускные начислены или выданы, а дней в графике нет вовсе; у двоих наоборот —
+   двадцать и пять дней проставлены, а денег ноль. Увидеть это было неоткуда:
+   в «Расчёте» видны суммы, в «Графике» дни, вместе их никто не сводил.
+   Отдельная таблица в базе не нужна — всё считается из того, что уже есть. */
+let vacPeriod = null, vacData = null, vacSeq = 0;
+
+/* Дни отпуска идут подряд, поэтому показываем ПЕРИОДАМИ, а не списком чисел:
+   «11–31 июля» вместо двадцати одной даты. Разрыв больше суток — новый период
+   (человек мог уйти дважды за месяц). */
+function vacSpans(dates) {
+  const d = [...dates].sort();
+  const out = [];
+  for (const x of d) {
+    const last = out[out.length - 1];
+    if (last && new Date(x) - new Date(last[1]) === 86400000) last[1] = x;
+    else out.push([x, x]);
+  }
+  return out;
+}
+const vacDM = s => String(s).slice(8, 10) + '.' + String(s).slice(5, 7);
+const vacSpanLabel = sp => sp.map(([a, b]) => a === b ? vacDM(a) : `${vacDM(a)}–${vacDM(b)}`).join(', ');
+
+async function renderVacation() {
+  if (!isStaff()) { $('vacBody').innerHTML = ''; return; }
+  if (!vacPeriod) vacPeriod = nowPeriod();
+  const want = vacPeriod, seq = ++vacSeq;
+  $('vLabel').textContent = periodLabel(want);
+  let rows, emps, cells;
+  try {
+    [rows, emps, cells] = await Promise.all([
+      store.listPayroll(want), store.listEmployees(), store.listSchedule(want),
+    ]);
+  } catch (e) {
+    if (seq === vacSeq) { vacData = null; $('vacBody').innerHTML = ''; toast(e.message || e, true); }
+    return;
+  }
+  if (seq !== vacSeq) return;
+  const byEmp = new Map();
+  for (const c of (cells || [])) {
+    if (c.plan_kind !== 'отпуск') continue;
+    if (!byEmp.has(c.employee_id)) byEmp.set(c.employee_id, []);
+    byEmp.get(c.employee_id).push(c.work_date);
+  }
+  vacData = { rows, emps, days: byEmp, period: want };
+  drawVacation();
+}
+
+function drawVacation() {
+  if (!vacData) return;
+  const { rows, emps, days } = vacData;
+  const f = ($('vacSearch')?.value || '').trim().toLowerCase();
+  const flat = !!$('vacFlat')?.checked;
+  const empOf = new Map(emps.map(e => [e.id, e]));
+  const rowOf = new Map(rows.map(r => [r.employee_id, r]));
+
+  // берём всех, у кого есть ЛИБО дни отпуска, ЛИБО отпускные деньги
+  const ids = new Set([...days.keys()]);
+  for (const r of rows) if (r.otpusk_nach_kop || r.otpusk_kop || r.otpusk_cash_kop) ids.add(r.employee_id);
+
+  const list = [...ids].map(id => {
+    const e = empOf.get(id) || {}, r = rowOf.get(id) || {};
+    const dts = days.get(id) || [];
+    const nach = r.otpusk_nach_kop || 0, card = r.otpusk_kop || 0, cash = r.otpusk_cash_kop || 0;
+    return { id, fio: e.fio || r.fio || '—', cat: specCat(e.specialty_id), dts,
+             spans: vacSpans(dts), nach, card, cash, paid: card + cash,
+             noDays: dts.length === 0, noMoney: dts.length > 0 && !nach && !card && !cash };
+  }).filter(x => !f || x.fio.toLowerCase().includes(f))
+    .sort((a, b) => a.fio.localeCompare(b.fio, 'ru'));
+
+  const sum = k => list.reduce((s, x) => s + x[k], 0);
+  const tot = { days: list.reduce((s, x) => s + x.dts.length, 0),
+                nach: sum('nach'), paid: sum('paid'),
+                noDays: list.filter(x => x.noDays).length,
+                noMoney: list.filter(x => x.noMoney).length };
+  $('vacStat').innerHTML = `<span class="mini-chip neutral">${list.length} чел</span>`
+    + `<span class="mini-chip neutral">${tot.days} дней</span>`
+    + `<span class="mini-chip neutral">начислено ${rub(tot.nach)} ₽</span>`
+    + `<span class="mini-chip neutral">выдано ${rub(tot.paid)} ₽</span>`
+    + (tot.noDays ? `<span class="mini-chip">деньги без графика: ${tot.noDays}</span>` : '')
+    + (tot.noMoney ? `<span class="mini-chip">график без денег: ${tot.noMoney}</span>` : '');
+
+  const row = x => `<tr class="vac-row${x.noDays ? ' vac-bad' : ''}${x.noMoney ? ' vac-warn' : ''}" data-id="${x.id}">
+    <td class="pw-name"><span class="pw-fio">${esc(x.fio)}</span>${
+      x.noDays ? '<span class="mini-chip warn">нет в графике</span>'
+      : x.noMoney ? '<span class="mini-chip warn">нет отпускных</span>' : ''}</td>
+    <td>${x.dts.length ? esc(vacSpanLabel(x.spans)) : '<span class="muted">—</span>'}</td>
+    <td class="num">${x.dts.length || '<span class="muted">—</span>'}</td>
+    <td class="num fin">${x.nach ? rub(x.nach) : '<span class="muted">—</span>'}</td>
+    <td class="num fin">${x.card ? rub(x.card) : '<span class="muted">—</span>'}</td>
+    <td class="num fin">${x.cash ? rub(x.cash) : '<span class="muted">—</span>'}</td>
+    <td class="num fin"><b class="money${x.nach - x.paid < 0 ? ' neg' : ''}">${rub(x.nach - x.paid)}</b></td></tr>`;
+
+  let body = '';
+  if (flat) body = list.map(row).join('');
+  else {
+    const cats = [...new Set(list.map(x => x.cat))].sort((a, b) => a.localeCompare(b, 'ru'));
+    for (const cat of cats) {
+      const my = list.filter(x => x.cat === cat);
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="7"><span>${esc(cat)} · ${my.length}</span></td></tr>`
+        + my.map(row).join('');
+    }
+  }
+  $('vacBody').innerHTML = list.length
+    ? `<div class="gridwrap"><table class="pw vac"><thead><tr>
+        <th class="pw-name">Сотрудник</th><th>Даты отпуска</th><th class="num">Дней</th>
+        <th class="num">Начислено</th><th class="num">На карту</th><th class="num">Наличными</th>
+        <th class="num pw-pay">Осталось</th></tr></thead><tbody>${body}</tbody>
+        <tfoot><tr class="pw-total"><td class="pw-name">ИТОГО</td><td></td>
+          <td class="num">${tot.days}</td><td class="num fin">${rub(tot.nach)}</td>
+          <td class="num fin">${rub(sum('card'))}</td><td class="num fin">${rub(sum('cash'))}</td>
+          <td class="num pw-pay fin"><b class="money">${rub(tot.nach - tot.paid)}</b></td></tr></tfoot></table></div>`
+    : `<div class="empty">За ${esc(periodLabel(vacData.period))} отпусков нет — ни дней в графике, ни отпускных.</div>`;
+  $('vacBody').querySelectorAll('.vac-row').forEach(tr => tr.onclick = () => openCard(+tr.dataset.id));
+}
+
 // «Богданова Лариса Викторовна» → «Богданова Л.В.»: в строке пробела фамилий
 // бывает три десятка, полными они не помещаются.
 const shortFio = f => {
@@ -4476,6 +4599,14 @@ $('modalBox2').addEventListener('click', e => { if (e.target.closest('.modal-x')
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('modalBox').dataset.guard) closeModal(); });
 $('empSearch').oninput = e => renderEmployees(e.target.value);
 { const rs = $('rateSearch'); if (rs) rs.oninput = e => renderRates(e.target.value); }
+{ const p = $('vPrev'), n = $('vNext');
+  const shiftVac = d => { let [y, m] = (vacPeriod || nowPeriod()).split('-').map(Number); m += d;
+    if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
+    vacPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = vacPeriod; syncHash(false); renderVacation(); };
+  if (p) p.onclick = () => shiftVac(-1);
+  if (n) n.onclick = () => shiftVac(1); }
+{ const vs = $('vacSearch'); if (vs) vs.oninput = () => drawVacation(); }
+{ const vf = $('vacFlat'); if (vf) vf.onchange = () => drawVacation(); }
 { const mp = $('mPrev'), mn = $('mNext'); if (mp) mp.onclick = () => shiftMonth(-1); if (mn) mn.onclick = () => shiftMonth(1); }
 { const ss = $('schedSearch'); if (ss) ss.oninput = () => drawSchedule(); }
 { const ps = $('payrollSearch'); if (ps) ps.oninput = e => drawPayroll(e.target.value); }
