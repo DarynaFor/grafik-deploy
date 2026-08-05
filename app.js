@@ -2281,7 +2281,6 @@ let closedDays = new Set();               // закрытые даты теку�
 // иначе производственный календарь РФ по типу недели из карточки. Одним запросом
 // на месяц, а не вызовом функции на каждого из 119 человек.
 let monthNorms = new Map();
-let redRemarks = [];                      // «красные замечания» владельцу: ретро-правки после закрытия
 // renderSchedule — грузит данные месяца из сети, затем рисует. drawSchedule — только рисует
 // из уже загруженных scheduleRows + текущих фильтров (мгновенно, без сети → без гонок/мерцания).
 async function renderSchedule() {
@@ -2299,14 +2298,13 @@ async function renderSchedule() {
     const [rows, kinds, closed, norms] = await Promise.all([store.listSchedule(curPeriod), store.listShiftKinds(), store.listClosedDays(curPeriod),
       store.listMonthNorms(curPeriod).catch(e => { console.warn('listMonthNorms:', e); return []; })]);   // норма — не критично: график должен открыться и без неё
     if (seq !== schedSeq) return;         // ответ пришёл не для текущего запроса — отбрасываем (иначе чужой месяц перетрёт)
-    const remarks = isOwner() ? await store.listRedRemarks().catch(e => { console.warn('listRedRemarks:', e); return []; }) : [];   // ретро-правки — видит только владелец
-    if (seq !== schedSeq) return;
-    // Общие переменные пишем ОДНИМ куском и только после ПОСЛЕДНЕГО await. Раньше
-    // scheduleRows присваивались до запроса ретро-правок: проигравший гонку запрос
-    // успевал положить туда СВОЙ месяц и уйти по seq-гарду, а schedShown оставался
-    // старым. Тогда откат по ошибке рисовал старый месяц чужими строками — сетка
-    // выходила ПУСТОЙ, и владелец «дозаполнял» месяц, который на самом деле полон.
-    scheduleRows = rows; shiftKinds = kinds; closedDays = new Set(closed); redRemarks = remarks;
+    // Общие переменные пишем ОДНИМ куском и только ПОСЛЕ await, между ними ничего
+    // не вставляем. Когда-то здесь стоял второй запрос (ретро-правки), а
+    // scheduleRows присваивались ДО него: проигравший гонку запрос успевал положить
+    // туда СВОЙ месяц и уйти по seq-гарду, а schedShown оставался старым. Откат по
+    // ошибке рисовал старый месяц чужими строками — сетка выходила ПУСТОЙ, и
+    // владелец «дозаполнял» месяц, который на самом деле полон.
+    scheduleRows = rows; shiftKinds = kinds; closedDays = new Set(closed);
     monthNorms = new Map((norms || []).map(n => [n.employee_id, n]));   // сюда же: то же правило «после последнего await»
     schedShown = curPeriod;
     drawSchedule();
@@ -2353,11 +2351,14 @@ function drawSchedule() {
 
   // режим: оператор правит, владелец смотрит
   if ($('schedSub')) $('schedSub').textContent = editable ? 'Прошедшие дни — клик по клетке отмечает факт (часы / не вышел). Будущие — задать смену. Клик по имени — шаблон на месяц.' : 'Просмотр: план (серым) и факт (цветом). Расхождения факта с планом — справа и в шапке.';
+  // Красного баннера «Правки после закрытия» здесь больше нет (Дарина 05.08:
+  // «він тільки місце займає, а ніхто його не читає»). Ничего не потеряно: те же
+  // записи лежат в Журнале под фильтром «Красные», и Обзор ведёт туда же кнопкой
+  // в «Требует внимания». Баннер был третьей копией — самой слабой: обрезан на 8
+  // строках, без фильтра и без перехода. Заодно ушёл лишний круг к серверу: он
+  // грузился ОТДЕЛЬНЫМ запросом после общей пачки, при каждом открытии графика.
   if ($('schedNote')) {
-    const rb = (isOwner() && redRemarks.length)   // красный баннер: ретро-правки после закрытия (кто/когда/было→стало)
-      ? `<div class="red-banner"><div class="rb-head">${ICONS.lock}<b>Правки после закрытия: ${redRemarks.length}</b></div>${redRemarks.slice(0, 8).map(j => `<div class="rb-row"><span class="rb-what">${esc(j.field || 'ретро-правка')}</span><span class="rb-val">${esc(String(j.old_value ?? '—'))} → ${esc(String(j.new_value ?? '—'))}</span><span class="rb-who">${esc(j.actor || '?')} · ${esc(String(j.at).slice(0, 16).replace('T', ' '))}</span></div>`).join('')}</div>`
-      : '';
-    $('schedNote').innerHTML = rb + (editable ? '' : `<div class="readonly-note">${ICONS.lock} График ведёт оператор (Алёна). У вас — просмотр; закрытые дни можно править напрямую.</div>`);
+    $('schedNote').innerHTML = editable ? '' : `<div class="readonly-note">${ICONS.lock} График ведёт оператор (Алёна). У вас — просмотр; закрытые дни можно править напрямую.</div>`;
   }
 
   // покрытие месяца: считаем только РАБОЧИЕ смены (Выходной/Не вышел — не смена)
