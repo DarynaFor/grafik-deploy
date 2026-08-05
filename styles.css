@@ -713,6 +713,15 @@ body.authed .login-stage{display:none}
 .me-row.me-tap .me-pen{margin-left:8px;opacity:.45;font-size:12px}
 .me-row.me-tap:hover .me-pen{opacity:1;color:var(--green)}
 .me-row{display:flex;justify-content:space-between;gap:14px;padding:3px 0;font-size:13.5px}
+/* Карточка расчёта разложена на два блока: сперва ЧТО заработал, потом ЧТО выдали.
+   Раньше они шли вперемешку — «Премия» и «Отпускные начислено» стояли между
+   выплатами, и было не понять, что складывается, а что вычитается. */
+.me-cap{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:700;margin:9px 0 1px}
+.me-cap:first-child{margin-top:0}
+/* Формула начисления: мелко, второй строкой под названием вида оплаты. */
+.me-calc>span{display:flex;flex-direction:column;gap:1px;min-width:0}
+.me-f{font-style:normal;font-size:11.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .me-sum{border-top:1px solid var(--hair);margin-top:5px;padding-top:7px;font-weight:700}
 .me-add{display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center}
 .pm-hist{max-height:180px;overflow-y:auto;border:1px solid var(--hair);border-radius:10px;padding:8px 11px}

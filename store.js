@@ -252,12 +252,12 @@ export class MockStore {
       const salary = my.reduce((s, l) => s + l.money_kop, 0);
       const mon = (this.db.money || []).filter(x => x.employee_id === e.id && x.period === period);
       const sum = k => mon.filter(x => x.kind === k).reduce((s, x) => s + x.amount_kop, 0);
-      // Зеркало v_month_total (migrations/046): в «к выдаче» идут наличные виды —
-      // наличка, премия и отпускные НАЛИЧНЫМИ. Аванс/ЗП/расчёт на карту уже
-      // выплачены и потому стоят в базе сверки Δ. Отпускные НА КАРТУ — особый
-      // случай: они тоже выплачены, но Δ их не вычитает (за дни отпуска оклад не
-      // начисляется, 044 — вычитать было бы не из чего), поэтому они не входят
-      // НИ в «к выдаче», НИ в Δ.
+      // Зеркало v_month_total: в «к выдаче» идут наличные виды — наличка, премия и
+      // отпускные НАЛИЧНЫМИ; карточные там не участвуют, они уже выплачены.
+      // Про отпускные НА КАРТУ здесь раньше стояло «Δ их не вычитает, за дни отпуска
+      // оклад не начисляется» — правило времён 044/046. Оно отменено: с появлением
+      // otpusk_nach отпуск виден с обеих сторон — начисление прибавляется, выплата
+      // вычитается. См. delta_kop ниже.
       const cash = sum('cash'), premia = sum('premia'), otpusk = sum('otpusk'),
             otpuskCash = sum('otpusk_cash'), cardUvol = sum('card_uvol');
       const ovr = (this.db.salaryOverride || []).find(x => x.employee_id === e.id && x.period === period);
@@ -276,9 +276,16 @@ export class MockStore {
         // Демо обязано считать так же, как прод, иначе оно врёт увереннее прода.
         // перенос с прошлого месяца (067) — со знаком, как в бою
         carry_kop: ((this.db.carry || []).find(x => x.employee_id === e.id && x.period === period) || {}).amount_kop || 0,
-        bolnich_nach_kop: sum('bolnich_nach'),
-        delta_kop: salaryFinal + premia + sum('bolnich_nach') + (((this.db.carry || []).find(x => x.employee_id === e.id && x.period === period) || {}).amount_kop || 0)
-          - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')),
+        bolnich_nach_kop: sum('bolnich_nach'), bolnich_kop: sum('bolnich'),
+        // Зеркало delta_kop из v_month_total. РАСХОДИЛОСЬ с боем: демо не прибавляло
+        // начисленные отпускные и не вычитало выплаченные — правило времён 046, когда
+        // otpusk_nach ещё не существовал. На проде обе половины давно в формуле, и
+        // из-за такой же устаревшей ПОДПИСИ под цифрой (03.08) чуть не прибавили
+        // отпускные второй раз. Демо, считающее не как бой, врёт увереннее боя.
+        delta_kop: salaryFinal + premia + sum('otpusk_nach') + sum('bolnich_nach')
+          + (((this.db.carry || []).find(x => x.employee_id === e.id && x.period === period) || {}).amount_kop || 0)
+          - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')
+             + otpusk + otpuskCash + sum('bolnich')),
         norm_days: my.reduce((s, l) => s + l.planned, 0), fact_days: my.reduce((s, l) => s + l.worked, 0),
         flag_no_rate: !(e.lines || []).some(l => !l.valid_to), flag_partial_month: false,
         flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false, flag_manual_salary: !!ovr };

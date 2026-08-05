@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=89';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=91';
 
 const $ = id => document.getElementById(id);
 
@@ -255,7 +255,7 @@ const NAV = [
   // ('operator','cashier1','cashier2'))`, миграции 040/041. То есть у Алёны
   // спрятанный человек просто не появится ни в одной денежной группе.
   { s: 'gaps', i: 'alert', l: 'Пробелы', staffOnly: true },
-  { s: 'vacation', i: 'calendar', l: 'Отпуска', staffOnly: true },
+  { s: 'vacation', i: 'cal', l: 'Отпуска', staffOnly: true },
   { s: 'employees', i: 'users', l: 'Сотрудники', staffOnly: true },
   { s: 'schedule', i: 'cal', l: 'График', staffOnly: true },
   { s: 'payroll', i: 'coin', l: 'Расчёт', staffOnly: true },
@@ -312,8 +312,8 @@ const IMPORT_SIBLINGS = { otpusk: ['otpusk_cash'], otpusk_cash: ['otpusk'] };
 function importKinds() { return IMPORT_KINDS_BY_ROLE[store.me()?.role] || []; }
 function canImport() { return importKinds().length > 0; }
 function renderNav() {
-  $('sideNav').innerHTML = navItems().map(n => `<button class="nav-item${n.s === curScreen ? ' active' : ''}" data-s="${n.s}"><span class="ic">${ICONS[n.i]}</span>${n.l}</button>`).join('');
-  $('mobileNav').innerHTML = navItems().map(n => `<button data-s="${n.s}" class="${n.s === curScreen ? 'active' : ''}"><span>${ICONS[n.i]}</span>${n.l}</button>`).join('');
+  $('sideNav').innerHTML = navItems().map(n => `<button class="nav-item${n.s === curScreen ? ' active' : ''}" data-s="${n.s}"><span class="ic">${ICONS[n.i] || ''}</span>${n.l}</button>`).join('');
+  $('mobileNav').innerHTML = navItems().map(n => `<button data-s="${n.s}" class="${n.s === curScreen ? 'active' : ''}"><span>${ICONS[n.i] || ''}</span>${n.l}</button>`).join('');
   document.querySelectorAll('[data-s]').forEach(b => b.onclick = () => go(b.dataset.s));
 }
 // replace=true — не добавлять запись в историю. Нужно, когда экран меняется В ОТВЕТ
@@ -957,7 +957,9 @@ async function loadCardPanel(id) {
   }
 
   const breakdown = my.length
-    ? my.map(l => `<div class="me-row"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}</span><b>${rub(l.money_kop)} ₽</b></div>`).join('')
+    ? my.map(l => { const f = rateFormula(l, r, nh, emp0);
+        return `<div class="me-row me-calc"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}${
+          f ? `<i class="me-f">${esc(f)}</i>` : ''}</span><b>${rub(l.money_kop)} ₽</b></div>`; }).join('')
     : `<div class="me-row"><span class="muted">${r.flag_manual_salary ? 'Сумма вписана вручную — расчёт по графику не применялся' : 'Начислений за месяц нет'}</span></div>`;
 
   box.innerHTML = `<div class="card cardpad" style="margin-top:16px">
@@ -976,24 +978,29 @@ async function loadCardPanel(id) {
         <input class="input" id="cpRev" placeholder="выручка ₽" autocomplete="off" inputmode="numeric" value="${curRev ? fmt(Math.round(curRev / 100)) : ''}">
         <button class="btn btn-primary btn-sm" id="cpRevSave">${ICONS.check}Сохранить</button>
       </div></div>` : ''}
-    <div class="rc-diff" style="margin-top:14px">${breakdown}
+    <div class="rc-diff" style="margin-top:14px">
+      <div class="me-cap">Заработано</div>
+      ${breakdown}
       <div class="me-row me-sum${canEdit ? ' me-tap' : ''}"${canEdit ? ' id="cpSalary" title="Задать итоговую зарплату вручную"' : ''}><span>Зарплата${r.flag_manual_salary ? ' · <b class="jact">вручную</b>' : ''}</span><b>${rub(r.salary_kop)} ₽</b>${canEdit ? `<span class="me-pen">✎</span>` : ''}</div>
+      ${payRow('Премия', r.premia_kop, 'premia', canEdit)}
+      ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
+      ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
+      <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
+      ${(r.card_avans_kop || r.card_rasch_kop || r.card_uvol_kop || r.otpusk_kop
+        || r.bolnich_kop || r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop)
+        ? '<div class="me-cap">Выдано</div>' : ''}
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
       ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
       ${payRow('Расчёт на карту (увольнение)', r.card_uvol_kop, 'card_uvol', canEdit)}
-      ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
-      ${payRow('Аванс наличными', r.cash_avans_kop, 'cash_avans', canEdit)}
-      ${payRow('Премия', r.premia_kop, 'premia', canEdit)}
-      ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
-      ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
       ${payRow('Отпускные на карту', r.otpusk_kop, 'otpusk', canEdit)}
       ${payRow('Больничные на карту', r.bolnich_kop, 'bolnich', canEdit)}
+      ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
+      ${payRow('Аванс наличными', r.cash_avans_kop, 'cash_avans', canEdit)}
       ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
-      ${r.carry_kop || canEdit ? `<div class="me-row cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
+      ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
+      ${r.carry_kop || canEdit ? `<div class="me-row me-sum cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
         ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
-      <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
-      ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
     </div>
     ${canEdit ? `<div class="me-jump"><button class="btn btn-ghost btn-sm" id="cpAdd">${ICONS.plus || '+'}Внести деньги</button></div>` : ''}
@@ -3086,6 +3093,31 @@ const J_ACTION = { 'сторно': 'СТОРНО', 'правило расчёт�
    не подмешиваем молча, добавим явно, если понадобится. */
 const cardTotal = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0)
   + (r.otpusk_kop || 0) + (r.bolnich_kop || 0);
+/* Формула начисления словами: «70 000 × 96 ч ÷ 180 ч». Дарина 03.08 — «щоб у нас
+   в розрахунку теж так зрозуміло і докладно все було розписано».
+   Раньше строка гласила «Оклад · 8 из 8 — 37 333 ₽», и откуда взялись 37 333 при
+   окладе 70 000, по карточке понять было нельзя: 8 из 8 дней отработано, а
+   заплачено чуть больше половины. Не видно было ни ставки, ни нормы, а делится
+   именно на месячную норму часов (миграция 058), а не на дни графика.
+   Возвращает '' там, где показывать нечего: домысливать формулу опаснее, чем
+   промолчать — по проценту без введённой выручки или по сдельной сумме её нет. */
+function rateFormula(l, r, nh, emp) {
+  const rate = (emp?.lines || []).find(x => !x.valid_to && x.pay_kind === l.kind);
+  const amt  = rate && rate.amount != null ? Number(rate.amount) : null;
+  const fh   = Number(r.fact_hours) || 0;
+  if (l.kind === 'оклад') {
+    if (amt == null || !nh) return '';
+    return `${fmt(amt)} × ${fmtH(fh)} ÷ ${fmtH(nh)}`;
+  }
+  if (l.kind === 'процент') {
+    const p = rate && rate.percent != null ? Number(rate.percent) : null;
+    return p == null ? '' : `${p}% от выручки`;
+  }
+  if (l.kind === 'фикс') return 'фиксированная сумма за месяц';
+  // сменные виды: сумма за смену × сколько смен отработано
+  if (amt != null && l.worked) return `${fmt(amt)} × ${l.worked} см`;
+  return '';
+}
 /* «Всего заработано» — весь заработок человека за месяц из ВСЕХ источников, одним
    числом. Просьба Виталия 03.08: «мне нужно понимать сколько суммарно будет у
    человека заработка… сделать ещё одну колонку с одной цифрой, из которой потом
@@ -3688,7 +3720,9 @@ async function payrollDialog(empId) {
   if (payPeriod !== per || curScreen !== 'payroll') return;
   setEditing('payroll:' + empId + ':' + per);   // деньги — самое дорогое место для двойной правки
   const breakdown = my.length
-    ? my.map(l => `<div class="me-row"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}</span><b>${rub(l.money_kop)} ₽</b></div>`).join('')
+    ? my.map(l => { const f = rateFormula(l, r, nh, emp);
+        return `<div class="me-row me-calc"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}${
+          f ? `<i class="me-f">${esc(f)}</i>` : ''}</span><b>${rub(l.money_kop)} ₽</b></div>`; }).join('')
     // При ручной сумме «Начислений за месяц нет · 0 ₽» стоял бы прямо над
     // «Зарплата 175 000» и читался как противоречие. Пишем причину словами:
     // именно на вопрос «откуда взялась эта сумма» модалка и должна отвечать.
@@ -3711,24 +3745,29 @@ async function payrollDialog(empId) {
         return nh != null ? `норма ${fmtH(nh)} · факт ${fmtH(fh)}`
                           : `норма ${r.norm_days} дн · факт ${r.fact_days} дн`;
       })()}`)}
-    <div class="rc-diff">${breakdown}${pct}
+    <div class="rc-diff">
+      <div class="me-cap">Заработано</div>
+      ${breakdown}${pct}
       <div class="me-row me-sum${canEdit ? ' me-tap' : ''}"${canEdit ? ' id="pmSalaryRow" title="Задать итоговую зарплату вручную"' : ''}><span>Зарплата${r.flag_manual_salary ? ' · <b class="jact">вручную</b>' : ''}</span><b>${rub(r.salary_kop)} ₽</b>${canEdit ? `<span class="me-pen">${ICONS.pencil || '✎'}</span>` : ''}</div>
+      ${payRow('Премия', r.premia_kop, 'premia', canEdit)}
+      ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
+      ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
+      <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
+      ${(r.card_avans_kop || r.card_rasch_kop || r.card_uvol_kop || r.otpusk_kop
+        || r.bolnich_kop || r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop)
+        ? '<div class="me-cap">Выдано</div>' : ''}
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
       ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
       ${payRow('Расчёт на карту (увольнение)', r.card_uvol_kop, 'card_uvol', canEdit)}
-      ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
-      ${payRow('Аванс наличными', r.cash_avans_kop, 'cash_avans', canEdit)}
-      ${payRow('Премия', r.premia_kop, 'premia', canEdit)}
-      ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
-      ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
       ${payRow('Отпускные на карту', r.otpusk_kop, 'otpusk', canEdit)}
       ${payRow('Больничные на карту', r.bolnich_kop, 'bolnich', canEdit)}
+      ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
+      ${payRow('Аванс наличными', r.cash_avans_kop, 'cash_avans', canEdit)}
       ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
-      ${r.carry_kop || canEdit ? `<div class="me-row cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
+      ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
+      ${r.carry_kop || canEdit ? `<div class="me-row me-sum cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
         ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
-      <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
-      ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
       <div class="me-row"><span class="muted small">«Всего заработано» минус всё уже выданное — на карту и наличными — плюс перенос с прошлого месяца. Столько ещё раздать, в основном наличными.<br>Начисленные отпускные и больничные <b>входят</b> в заработок, а выплаченные — вычитаются: если начислили и выплатили поровну, на разницу они не влияют.</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
