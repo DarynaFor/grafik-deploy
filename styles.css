@@ -891,3 +891,21 @@ tr.pw-total.pw-over{z-index:5}
 .sp-new{display:flex;gap:6px;margin:8px 0 0;flex-wrap:wrap}
 .sp-new input{flex:1 1 140px;min-width:0}
 .sp-new .btn{flex:0 0 auto}
+
+/* Строка справочника специальностей — кликабельна на переименование (owner/ceo) */
+.sp-tap{cursor:pointer}
+.sp-tap:hover{background:linear-gradient(var(--fill-1),var(--fill-1)),var(--surface)}
+.sp-tap .me-pen{margin-left:10px;opacity:.45}
+.sp-tap:hover .me-pen{opacity:.9}
+
+/* Справочник специальностей: отделения группами, стрелки порядка */
+.sp-cat{display:flex;align-items:center;gap:8px;margin:14px 0 6px;padding:0 2px}
+.sp-cat:first-child{margin-top:0}
+.sp-cat-name{font-weight:800;font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-2)}
+.sp-row{padding-left:10px}
+.sp-mvs{display:inline-flex;gap:2px;margin-left:auto;flex:0 0 auto}
+.sp-cat .sp-mvs{margin-left:auto}
+.sp-mv{width:26px;height:26px;border-radius:8px;border:1px solid var(--glass-bd);background:var(--surface);
+  color:var(--ink-2);font-size:13px;line-height:1;cursor:pointer;padding:0}
+.sp-mv:hover:not(:disabled){background:linear-gradient(var(--fill-2),var(--fill-2)),var(--surface);color:var(--ink)}
+.sp-mv:disabled{opacity:.25;cursor:default}

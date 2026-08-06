@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=93';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=94';
 
 const $ = id => document.getElementById(id);
 
@@ -758,7 +758,7 @@ document.addEventListener('click', () => document.querySelectorAll('.cselect.ope
 // Наполняем дропдауны «Отделение» при загрузке данных (не в рендерах — чтобы не пересобирать
 // на каждый ввод). Выбор сразу перерисовывает через onPick (drawSchedule/renderEmployees).
 function fillCatSelects() {
-  const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
+  const cats = catsOrdered([...specialties.map(s => s.category), 'Прочие']);
   const opts = [{ v: '', label: 'Все отделения' }, ...cats.map(c => ({ v: c, label: c }))];
   const wire = (id, onPick) => { const el = $(id); if (el) makeDropdown(el, opts, el.dataset.value || '', onPick); };
   wire('empCat', () => renderEmployees($('empSearch').value || ''));
@@ -770,7 +770,11 @@ function fillCatSelects() {
   ['payAZ', 'schedAZ'].forEach(id => { const el = $(id); if (el) { el.checked = sortAZ; el.onchange = () => setSortAZ(el.checked); } });
 }
 async function refresh() {
-  [specialties, employees] = await Promise.all([store.listSpecialties(), store.listEmployees()]);
+  const [sp, em, co] = await Promise.all([store.listSpecialties(), store.listEmployees(),
+    // Порядок отделений — не критично: экран обязан собраться и без него.
+    store.listCategoryOrder().catch(e => { console.warn('listCategoryOrder:', e); return []; })]);
+  specialties = sp; employees = em;
+  catOrder = new Map((co || []).map(r => [r.category, r.sort]));
   fillCatSelects();
   renderEmployees($('empSearch').value || '');
   renderSpecs();
@@ -2028,22 +2032,107 @@ function employeeForm(e) {
 }
 
 /* ── специальности ── */
-function renderSpecs() {
-  $('specList').innerHTML = specialties.map(s => `<div class="line-row"><div style="font-weight:700">${esc(s.name)}</div><span class="tag" style="margin-left:auto">${esc(s.category)}</span></div>`).join('') || '<div class="empty">Справочник пуст</div>';
+/* Справочник был показом: завести можно, переименовать — нет. Дарина 06.08:
+   «треба зробити також щоб це можна було редагувати в спеціальностях» (повод —
+   «Психолог-психотерапевт», которого хотят звать просто «Психолог»).
+   Право в базе уже есть (политика spec_update, owner+ceo) — не хватало экрана. */
+function canEditSpecs() { return ['owner', 'ceo'].includes(store.me()?.role); }
+/* Порядок отделений (088). Категория без строки в справочнике порядка уходит в
+   конец — так же, как её отсортировала бы база. */
+let catOrder = new Map();
+function catSort(c) { return catOrder.has(c) ? catOrder.get(c) : 9999; }
+function catsOrdered(list) {
+  return [...new Set(list)].sort((a, b) => catSort(a) - catSort(b) || a.localeCompare(b, 'ru'));
 }
-function specForm() {
-  const cats = [...new Set(specialties.map(s => s.category))];
-  showModal(`<h3>Новая специальность</h3><div class="msub">Добавится в справочник и группировку</div>
-    <label class="flbl">Название</label><input class="input" id="mSn" placeholder="напр. Невролог">
-    <label class="flbl">Категория</label><input class="input" id="mSc" list="catlist" placeholder="Врачи / Средний персонал / своя…"><datalist id="catlist">${cats.map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
-    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button><button class="btn btn-primary btn-sm" id="mSave">${ICONS.plus}Добавить</button></div>`);
+/* Справочник группами: отделение — заголовок, под ним его специальности.
+   Стрелками двигаются и отделения, и специальности внутри отделения: Дарина
+   просила править «порядок видачі відділень ТА спеціальностей» — это две разные
+   очереди, и на экранах они применяются вместе. */
+function renderSpecs() {
+  const ed = canEditSpecs();
+  const cats = catsOrdered(specialties.map(s => s.category));
+  const cnt = id => employees.filter(e => e.status !== 'archived' && e.specialty_id === id).length;
+  const arrow = (dir, kind, key, off) => `<button class="sp-mv" data-mv="${kind}" data-key="${esc(String(key))}" data-d="${dir}"${off ? ' disabled' : ''} title="${dir < 0 ? 'Выше' : 'Ниже'}" type="button">${dir < 0 ? '↑' : '↓'}</button>`;
+  $('specList').innerHTML = cats.map((c, ci) => {
+    const inCat = specialties.filter(s => s.category === c)
+      .sort((a, b) => (a.sort ?? 999) - (b.sort ?? 999) || a.name.localeCompare(b.name, 'ru'));
+    return `<div class="sp-cat">
+        <span class="sp-cat-name">${esc(c)}</span>
+        <span class="muted small">${inCat.length}</span>
+        ${ed ? `<span class="sp-mvs">${arrow(-1, 'cat', c, ci === 0)}${arrow(1, 'cat', c, ci === cats.length - 1)}</span>` : ''}
+      </div>` +
+      inCat.map((s, i) => `<div class="line-row sp-row${ed ? ' sp-tap' : ''}"${ed ? ` data-spec="${s.id}" title="Переименовать или перенести в другое отделение"` : ''}>
+        <div style="font-weight:700">${esc(s.name)}</div>
+        ${cnt(s.id) ? `<span class="muted small" style="margin-left:8px">${cnt(s.id)} чел</span>` : ''}
+        ${ed ? `<span class="sp-mvs" style="margin-left:auto">${arrow(-1, 'spec', s.id, i === 0)}${arrow(1, 'spec', s.id, i === inCat.length - 1)}</span>
+        <span class="me-pen">${ICONS.pencil || '✎'}</span>` : ''}</div>`).join('');
+  }).join('') || '<div class="empty">Справочник пуст</div>';
+  applyIcons($('specList'));
+  if (!ed) return;
+  $('specList').querySelectorAll('.sp-tap[data-spec]').forEach(el => {
+    el.onclick = () => specForm(specialties.find(s => s.id === +el.dataset.spec));
+  });
+  // stopPropagation: стрелка лежит ВНУТРИ кликабельной строки, иначе поверх
+  // перестановки открывалась бы ещё и форма переименования.
+  $('specList').querySelectorAll('.sp-mv').forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    if (b.disabled) return;
+    b.disabled = true;
+    try { await moveSpec(b.dataset.mv, b.dataset.key, +b.dataset.d); }
+    catch (err) { toast(err.message || err, true); b.disabled = false; }
+  });
+}
+/* Перестановка соседей. Меняем не два номера, а переписываем ПОЗИЦИИ всему
+   списку. Обмен двух номеров выглядит экономнее, но не работает, когда номера
+   равны — а именно так и есть в жизни: у отделений порядка ещё нет вовсе
+   (все 9999), у старых специальностей sort=0 у всех. Тогда «поменять местами»
+   меняет 0 на 0, и кнопка молча ничего не делает (поймано прогоном).
+   Списки короткие — отделений девять, специальностей в отделении единицы. */
+async function moveSpec(kind, key, dir) {
+  const moved = (arr, i) => {                       // переставить элемент i на i+dir
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= arr.length) return null;
+    const out = arr.slice(); [out[i], out[j]] = [out[j], out[i]]; return out;
+  };
+  if (kind === 'cat') {
+    const cats = catsOrdered(specialties.map(s => s.category));
+    const out = moved(cats, cats.indexOf(key));
+    if (!out) return;
+    await store.setCategoryOrder(out.map((c, i) => ({ category: c, sort: (i + 1) * 10 })));
+  } else {
+    const s = specialties.find(x => x.id === +key);
+    if (!s) return;
+    const inCat = specialties.filter(x => x.category === s.category)
+      .sort((a, b) => (a.sort ?? 999) - (b.sort ?? 999) || a.name.localeCompare(b.name, 'ru'));
+    const out = moved(inCat, inCat.indexOf(s));
+    if (!out) return;
+    await store.setSpecialtySort(out.map((x, i) => ({ id: x.id, sort: i })));
+  }
+  await refresh();
+}
+/* Одна форма на «завести» и «переименовать»: поля те же, различие — в заголовке
+   и в том, какой метод store зовём. */
+function specForm(s) {
+  const cats = [...new Set(specialties.map(x => x.category))];
+  const used = s ? employees.filter(e => e.status !== 'archived' && e.specialty_id === s.id).length : 0;
+  showModal(`<h3>${s ? 'Специальность' : 'Новая специальность'}</h3>
+    <div class="msub">${s ? 'Название и категория поменяются у всех, кому она стоит' + (used ? ` — сейчас это ${used} чел` : '') + '. Изменение попадёт в журнал.'
+                        : 'Добавится в справочник и группировку'}</div>
+    <label class="flbl">Название</label><input class="input" id="mSn" placeholder="напр. Невролог" value="${esc(s?.name || '')}">
+    <label class="flbl">Категория</label><input class="input" id="mSc" list="catlist" placeholder="Врачи / Средний персонал / своя…" value="${esc(s?.category || '')}"><datalist id="catlist">${cats.map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button><button class="btn btn-primary btn-sm" id="mSave">${s ? ICONS.check + 'Сохранить' : ICONS.plus + 'Добавить'}</button></div>`);
   $('mCancel').onclick = closeModal;
   $('mSave').onclick = async () => {
     const btn = $('mSave'); if (btn.disabled) return;
     const n = $('mSn').value.trim(); if (!n) { $('mSn').focus(); return; }
+    const c = $('mSc').value.trim() || 'Прочие';
+    if (s && n === s.name && c === s.category) { closeModal(); return; }   // ничего не меняли — не сорим в журнале
     btn.disabled = true;
-    try { await store.addSpecialty(n, $('mSc').value.trim() || 'Прочие'); closeModal(); toast(ICONS.check + 'Добавлено: ' + esc(n)); refresh(); }
-    catch (err) { btn.disabled = false; toast(err.message || err, true); }
+    try {
+      if (s) { await store.updateSpecialty(s.id, n, c); toast(ICONS.check + 'Сохранено: ' + esc(n)); }
+      else   { await store.addSpecialty(n, c);          toast(ICONS.check + 'Добавлено: ' + esc(n)); }
+      closeModal(); refresh();
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
 }
 
@@ -3321,7 +3410,8 @@ function drawPayroll(filter = '') {
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
   const catOf = r => specCat(employees.find(e => e.id === r.employee_id)?.specialty_id) || 'Прочие';
   if (sortAZ) rows.sort(byFio);
-  else rows.sort((a, b) => catOf(a).localeCompare(catOf(b)) || (a.fio || '').localeCompare(b.fio || ''));
+  else rows.sort((a, b) => catSort(catOf(a)) - catSort(catOf(b))
+    || catOf(a).localeCompare(catOf(b)) || (a.fio || '').localeCompare(b.fio || ''));
   let body = '', curCat = null;
   for (const r of rows) {
     const cat = catOf(r);
@@ -4379,7 +4469,7 @@ function drawVacation() {
   let body = '';
   if (flat) body = list.map(row).join('');
   else {
-    const cats = [...new Set(list.map(x => x.cat))].sort((a, b) => a.localeCompare(b, 'ru'));
+    const cats = catsOrdered(list.map(x => x.cat));
     for (const cat of cats) {
       const my = list.filter(x => x.cat === cat);
       body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="7"><span>${esc(cat)} · ${my.length}</span></td></tr>`

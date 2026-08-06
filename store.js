@@ -152,6 +152,32 @@ export class MockStore {
     this._log('created', 'specialty', s.id, null, null, name);
     this._save(); return s;
   }
+  async listCategoryOrder() { return [...(this.db.catOrder || [])]; }
+  async setCategoryOrder(rows) {
+    if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять порядок может владелец или директор');
+    this.db.catOrder = this.db.catOrder || [];
+    for (const r of rows) {
+      const cur = this.db.catOrder.find(x => x.category === r.category);
+      if (cur) cur.sort = r.sort; else this.db.catOrder.push({ ...r });
+    }
+    this._save();
+  }
+  async setSpecialtySort(rows) {
+    if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять справочник может владелец или директор');
+    for (const r of rows) { const s = this.db.specialties.find(x => x.id === r.id); if (s) s.sort = r.sort; }
+    this._save();
+  }
+  async updateSpecialty(id, name, category) {
+    if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять справочник может владелец или директор');
+    const s = this.db.specialties.find(x => x.id === id);
+    if (!s) throw new Error('Специальность не найдена');
+    if (this.db.specialties.some(x => x.id !== id && x.name.toLowerCase() === name.toLowerCase()))
+      throw new Error('Такая специальность уже есть');
+    const was = s.name + ' · ' + s.category;
+    s.name = name; s.category = category || 'Прочие';
+    this._log('updated', 'specialty', s.id, 'специальность', was, s.name + ' · ' + s.category);
+    this._save(); return s;
+  }
 
   async listEmployees() { return structuredClone(this.db.employees); }
   async createEmployee({ fio, position, phone, specialty_id, specialty_id_2, hired_on, left_on, lines, valid_from }) {
@@ -898,6 +924,33 @@ export class SupabaseStore {
   async addSpecialty(name, category) {
     const { data, error } = await this.sb.from('specialty').insert({ name, category }).select().single();
     if (error) throw error; return data;
+  }
+  /* Переименование справочника. .select() обязателен: RLS не «запрещает», а не
+     находит строку, и без него PostgREST вернул бы успех на нуле изменённых
+     строк — оператор увидел бы «Сохранено», а в базе осталось бы старое имя. */
+  async listCategoryOrder() {
+    const { data, error } = await this.sb.from('category_order').select('*').order('sort');
+    if (error) throw error;
+    return data || [];
+  }
+  /* Порядок отделений и специальностей (088). upsert, а не update: отделение
+     могли вписать руками в форме специальности — строки порядка у него ещё нет. */
+  async setCategoryOrder(rows) {
+    const { error } = await this.sb.from('category_order').upsert(rows, { onConflict: 'category' });
+    if (error) throw new Error('Менять порядок может владелец или директор');
+  }
+  async setSpecialtySort(rows) {
+    for (const r of rows) {
+      const { data, error } = await this.sb.from('specialty').update({ sort: r.sort }).eq('id', r.id).select();
+      if (error) throw error;
+      if (!data || !data.length) throw new Error('Менять справочник может владелец или директор');
+    }
+  }
+  async updateSpecialty(id, name, category) {
+    const { data, error } = await this.sb.from('specialty').update({ name, category }).eq('id', id).select();
+    if (error) throw error;
+    if (!data || !data.length) throw new Error('Менять справочник может владелец или директор');
+    return data[0];
   }
   async listEmployees() {
     const { data, error } = await this.sb.from('employee')
