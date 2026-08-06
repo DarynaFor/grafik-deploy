@@ -4628,6 +4628,61 @@ function vacSpans(dates) {
 const vacDM = s => String(s).slice(8, 10) + '.' + String(s).slice(5, 7);
 const vacSpanLabel = sp => sp.map(([a, b]) => a === b ? vacDM(a) : `${vacDM(a)}–${vacDM(b)}`).join(', ');
 
+/* Проставить отпуск списком, не заходя в график. Тот же механизм, что в клетке
+   графика (vacationDialog), но человека выбираем здесь: именно потому, что
+   отпуск ставили по одной клетке, его чаще всего не ставили вовсе. */
+function vacAddDialog(preId) {
+  const act = employees.filter(e => e.status === 'active')
+    .sort((a, b) => (a.fio || '').localeCompare(b.fio || '', 'ru'));
+  const opts = act.map(e => `<option value="${e.id}" ${preId === e.id ? 'selected' : ''}>${esc(e.fio)}</option>`).join('');
+  const first = (vacPeriod || nowPeriod()) + '-01';
+  showModal(`<h3>Отметить отпуск</h3>
+    <div class="msub">Все дни периода станут «Отпуск». Зарплата за них не начисляется —
+      отпускные вносятся отдельно, в «Расчёте».</div>
+    <label class="flbl">Сотрудник</label>
+    <select class="input" id="vaWho">${opts}</select>
+    <div class="me-add" style="margin-top:10px">
+      <label class="flbl" style="grid-column:1/-1">Период</label>
+      <input class="input" type="date" id="vaFrom" value="${first}">
+      <input class="input" type="date" id="vaTo" value="${first}">
+    </div>
+    <div class="msub" id="vaHint" style="margin-top:8px"></div>
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="vaNo">Отмена</button>
+      <button class="btn btn-primary btn-sm" id="vaOk">${ICONS.check}Отметить</button></div>`);
+  const days = () => {
+    const a = $('vaFrom').value, b = $('vaTo').value;
+    if (!a || !b || b < a) return null;
+    const out = [];
+    for (let dt = new Date(a + 'T00:00:00Z'); ; dt.setUTCDate(dt.getUTCDate() + 1)) {
+      const iso = dt.toISOString().slice(0, 10);
+      out.push(iso);
+      if (iso === b) break;
+      if (out.length > 90) return 'many';
+    }
+    return out;
+  };
+  const hint = () => {
+    const d = days();
+    $('vaHint').innerHTML = d === 'many' ? '<span class="rc-warn">Больше 90 дней — проверьте даты</span>'
+      : !d ? '<span class="rc-warn">Дата «по» раньше начала</span>'
+      : `Будет отмечено <b>${d.length}</b> дн.`;
+  };
+  hint();
+  $('vaFrom').oninput = hint; $('vaTo').oninput = hint;
+  $('vaNo').onclick = closeModal;
+  $('vaOk').onclick = async () => {
+    const b = $('vaOk'); if (b.disabled) return;
+    const d = days();
+    if (!d || d === 'many') { toast('Проверьте даты', true); return; }
+    const id = +$('vaWho').value;
+    b.disabled = true; b.textContent = 'Отмечаю…';
+    try {
+      for (const day of d) await store.setScheduleCell(id, day, { plan_kind: 'отпуск', plan_start: null, plan_end: null, fact: null });
+      closeModal(); toast(ICONS.check + `Отпуск отмечен · ${d.length} дн`); await renderVacation();
+    } catch (e) { b.disabled = false; b.textContent = 'Отметить'; toast(e.message || e, true); }
+  };
+}
+
 async function renderVacation() {
   if (!isStaff()) { $('vacBody').innerHTML = ''; return; }
   if (!vacPeriod) vacPeriod = nowPeriod();
@@ -4643,19 +4698,25 @@ async function renderVacation() {
     return;
   }
   if (seq !== vacSeq) return;
-  const byEmp = new Map();
+  const byEmp = new Map(), other = new Map();
   for (const c of (cells || [])) {
-    if (c.plan_kind !== 'отпуск') continue;
-    if (!byEmp.has(c.employee_id)) byEmp.set(c.employee_id, []);
-    byEmp.get(c.employee_id).push(c.work_date);
+    if (c.plan_kind === 'отпуск') {
+      if (!byEmp.has(c.employee_id)) byEmp.set(c.employee_id, []);
+      byEmp.get(c.employee_id).push(c.work_date);
+    } else if (c.plan_kind === 'absent' || c.plan_kind === 'off') {
+      // «Не вышел» и «Выходной» — то, чем отпуск отмечают вместо самого отпуска
+      const m = other.get(c.employee_id) || { absent: 0, off: 0 };
+      m[c.plan_kind === 'absent' ? 'absent' : 'off']++;
+      other.set(c.employee_id, m);
+    }
   }
-  vacData = { rows, emps, days: byEmp, period: want };
+  vacData = { rows, emps, days: byEmp, other, period: want };
   drawVacation();
 }
 
 function drawVacation() {
   if (!vacData) return;
-  const { rows, emps, days } = vacData;
+  const { rows, emps, days, other } = vacData;
   const f = ($('vacSearch')?.value || '').trim().toLowerCase();
   const flat = !!$('vacFlat')?.checked;
   const empOf = new Map(emps.map(e => [e.id, e]));
@@ -4669,8 +4730,9 @@ function drawVacation() {
     const e = empOf.get(id) || {}, r = rowOf.get(id) || {};
     const dts = days.get(id) || [];
     const nach = r.otpusk_nach_kop || 0, card = r.otpusk_kop || 0, cash = r.otpusk_cash_kop || 0;
+    const o = (other && other.get(id)) || { absent: 0, off: 0 };
     return { id, fio: e.fio || r.fio || '—', cat: specCat(e.specialty_id), dts,
-             spans: vacSpans(dts), nach, card, cash, paid: card + cash,
+             spans: vacSpans(dts), nach, card, cash, paid: card + cash, other: o,
              noDays: dts.length === 0, noMoney: dts.length > 0 && !nach && !card && !cash };
   }).filter(x => !f || x.fio.toLowerCase().includes(f))
     .sort((a, b) => a.fio.localeCompare(b.fio, 'ru'));
@@ -4685,13 +4747,19 @@ function drawVacation() {
     + `<span class="mini-chip neutral">начислено ${rub(tot.nach)} ₽</span>`
     + `<span class="mini-chip neutral">выдано ${rub(tot.paid)} ₽</span>`
     + (tot.noDays ? `<span class="mini-chip">деньги без графика: ${tot.noDays}</span>` : '')
-    + (tot.noMoney ? `<span class="mini-chip">график без денег: ${tot.noMoney}</span>` : '');
+    + (tot.noMoney ? `<span class="mini-chip">график без денег: ${tot.noMoney}</span>` : '')
+    + `<button class="btn btn-ghost btn-sm" id="vacAdd" style="margin-left:8px">Отметить отпуск</button>`;
 
   const row = x => `<tr class="vac-row${x.noDays ? ' vac-bad' : ''}${x.noMoney ? ' vac-warn' : ''}" data-id="${x.id}">
     <td class="pw-name"><span class="pw-fio">${esc(x.fio)}</span>${
       x.noDays ? '<span class="mini-chip warn">нет в графике</span>'
       : x.noMoney ? '<span class="mini-chip warn">нет отпускных</span>' : ''}</td>
-    <td>${x.dts.length ? esc(vacSpanLabel(x.spans)) : '<span class="muted">—</span>'}</td>
+    <td>${x.dts.length ? esc(vacSpanLabel(x.spans))
+      : (x.other.absent || x.other.off
+          ? `<span class="vac-hint">вместо отпуска стоит: ${[
+              x.other.absent ? `<b>${x.other.absent} дн «Не вышел»</b>` : '',
+              x.other.off ? `${x.other.off} дн «Выходной»` : ''].filter(Boolean).join(', ')}</span>`
+          : '<span class="muted">—</span>')}</td>
     <td class="num">${x.dts.length || '<span class="muted">—</span>'}</td>
     <td class="num fin">${x.nach ? rub(x.nach) : '<span class="muted">—</span>'}</td>
     <td class="num fin">${x.card ? rub(x.card) : '<span class="muted">—</span>'}</td>
@@ -4719,6 +4787,12 @@ function drawVacation() {
           <td class="num pw-pay fin"><b class="money">${rub(tot.nach - tot.paid)}</b></td></tr></tfoot></table></div>`
     : `<div class="empty">За ${esc(periodLabel(vacData.period))} отпусков нет — ни дней в графике, ни отпускных.</div>`;
   $('vacBody').querySelectorAll('.vac-row').forEach(tr => tr.onclick = () => openCard(+tr.dataset.id));
+  { const b = $('vacAdd'); if (b) b.onclick = () => vacAddDialog(); }
+  // клик по подсказке «вместо отпуска стоит…» открывает простановку сразу на этого
+  $('vacBody').querySelectorAll('.vac-hint').forEach(el => el.onclick = ev => {
+    ev.stopPropagation();
+    vacAddDialog(+el.closest('.vac-row').dataset.id);
+  });
 }
 
 // «Богданова Лариса Викторовна» → «Богданова Л.В.»: в строке пробела фамилий
