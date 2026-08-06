@@ -687,7 +687,7 @@ export class MockStore {
     }
     return out;
   }
-  async listJournal({ filter = 'all', beforeId = null, limit = 50 } = {}) {
+  async listJournal({ filter = 'all', beforeId = null, limit = 50, who = '', act = '', from = '', to = '' } = {}) {
     let arr = (this.db.journal || []).filter(j => journalMatch(j, filter)).sort((a, b) => (b.id || 0) - (a.id || 0));
     if (beforeId != null) arr = arr.filter(j => (j.id || 0) < beforeId);
     // Зеркало вьюхи v_journal_named (миграция 070): демо обязано показывать журнал
@@ -708,7 +708,18 @@ export class MockStore {
       const emp = subject_id == null ? null : (this.db.employees || []).find(e => e.id === subject_id);
       return { ...j, subject_id, subject_date, subject_fio: emp ? emp.fio : null };
     });
-    return { rows, hasMore: arr.length > limit, lastId: rows.length ? rows[rows.length - 1].id : null };
+    // те же фильтры, что в бою: кто/кого, действие, период — иначе на демо
+    // нельзя проверить именно то, ради чего экран и делается
+    const ACT = { add: ['created', 'деньги', 'выручка', 'импорт'],
+                  edit: ['updated'], del: ['deleted', 'сторно', 'возврат'] };
+    const w = String(who || '').toLowerCase();
+    const out = rows.filter(j =>
+      (!w || (j.subject_fio || '').toLowerCase().includes(w)
+          || String(j.actor_name || j.actor || '').toLowerCase().includes(w))
+      && (!ACT[act] || ACT[act].includes(j.action))
+      && (!from || String(j.at).slice(0, 10) >= from)
+      && (!to || String(j.at).slice(0, 10) <= to));
+    return { rows: out, hasMore: arr.length > limit, lastId: out.length ? out[out.length - 1].id : null };
   }
 }
 
@@ -1120,7 +1131,7 @@ export class SupabaseStore {
   // Сортировка по id, а не по at: at при заливке шаблона (31 запись) почти
   // одинаков, id строго монотонен и без коллизий. Тянем limit+1, чтобы узнать,
   // есть ли ещё, без отдельного count.
-  async listJournal({ filter = 'all', beforeId = null, limit = 50 } = {}) {
+  async listJournal({ filter = 'all', beforeId = null, limit = 50, who = '', act = '', from = '', to = '' } = {}) {
     // v_journal_named, а не сама таблица: вьюха доносит, У КОГО правка (subject_fio)
     // и за какой день (subject_date). У старых записей сотрудник достаётся поиском
     // по entity_id, пока жива исходная строка, — миграция 070. security_invoker=on,
@@ -1133,6 +1144,21 @@ export class SupabaseStore {
     else if (filter === 'premia') q = q.eq('entity', 'money_line').ilike('field', '%премия%');
     else if (filter === 'schedule') q = q.eq('entity', 'schedule');
     else if (filter === 'rate') q = q.eq('entity', 'rate_line');
+    // Кто/кого: ищем И по автору правки, И по человеку, которого она касается —
+    // «покажи всё по Иванову» не различает, он правил или правили его.
+    if (who) {
+      const w = `%${String(who).replace(/[%,()]/g, ' ')}%`;
+      q = q.or(`subject_fio.ilike.${w},actor_name.ilike.${w}`);
+    }
+    // Денежные записи пишутся своими словами ('деньги', 'сторно'), остальные —
+    // created/updated/deleted. Поэтому не один eq, а список на каждое действие.
+    const ACT = { add: ['created', 'деньги', 'выручка', 'импорт'],
+                  edit: ['updated'], del: ['deleted', 'сторно', 'возврат'] };
+    if (ACT[act]) q = q.in('action', ACT[act]);
+    // Даты включительно: «по» берём концом дня, иначе записи выбранного дня
+    // не попадут — время у них не нулевое.
+    if (from) q = q.gte('at', from + 'T00:00:00');
+    if (to) q = q.lte('at', to + 'T23:59:59');
     if (beforeId != null) q = q.lt('id', beforeId);
     const { data, error } = await q;
     if (error) throw error;

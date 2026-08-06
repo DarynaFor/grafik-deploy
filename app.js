@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=92';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=93';
 
 const $ = id => document.getElementById(id);
 
@@ -4564,6 +4564,13 @@ function drawPatients() {
 const J_FILTERS = [['all', 'Все'], ['red', 'Красные'], ['money', 'Деньги'],
   ['payout', 'Выдачи'], ['premia', 'Премии'], ['schedule', 'График'], ['rate', 'Ставки']];
 let journalFilter = 'all', journalRows = [], journalLastId = null, journalHasMore = false, journalBusy = false;
+/* Фильтры журнала (просьба Дарины 05.08): «щоб вона могла відфільтрувати дії
+   певної людини, певні дії, по даті». Держим отдельно от чипов-разделов: чипы
+   отвечают «где» (график, ставки, деньги), а это — «кто», «что» и «когда».
+   Ищем И по автору правки, И по тому, кого она касается: «покажи всё по
+   Иванову» не различает, он правил или правили его. */
+let jWho = '', jAct = '', jFrom = '', jTo = '';
+const J_ACTS = [['', 'Любое действие'], ['add', 'Добавление'], ['edit', 'Изменение'], ['del', 'Удаление и сторно']];
 
 function journalRowHtml(j) {
   let what;
@@ -4609,7 +4616,8 @@ async function renderJournal(reset = true) {
   if (journalBusy) return; journalBusy = true;
   if (reset) { journalRows = []; journalLastId = null; journalHasMore = false; }
   try {
-    const res = await store.listJournal({ filter: journalFilter, beforeId: reset ? null : journalLastId });
+    const res = await store.listJournal({ filter: journalFilter, beforeId: reset ? null : journalLastId,
+      who: jWho, act: jAct, from: jFrom, to: jTo });
     journalRows = reset ? res.rows : journalRows.concat(res.rows);
     journalLastId = res.lastId ?? journalLastId;
     journalHasMore = res.hasMore;
@@ -4620,7 +4628,16 @@ async function renderJournal(reset = true) {
 
 function drawJournal() {
   const chips = J_FILTERS.map(([k, l]) => `<button class="jf-chip${journalFilter === k ? ' on' : ''}" data-jf="${k}">${esc(l)}</button>`).join('');
-  $('journalTools').innerHTML = `<div class="jf-chips">${chips}</div>`;
+  const acts = J_ACTS.map(([k, l]) => `<option value="${k}" ${jAct === k ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  const on = jWho || jAct || jFrom || jTo;
+  $('journalTools').innerHTML = `<div class="jf-chips">${chips}</div>
+    <div class="jf-row">
+      <div class="search jf-who"><span data-ic="search"></span><input id="jWho" placeholder="Фамилия — чья правка или о ком" autocomplete="off" value="${esc(jWho)}"></div>
+      <select class="input jf-sel" id="jAct">${acts}</select>
+      <label class="jf-date">с <input class="input" type="date" id="jFrom" value="${esc(jFrom)}"></label>
+      <label class="jf-date">по <input class="input" type="date" id="jTo" value="${esc(jTo)}"></label>
+      ${on ? '<button class="btn btn-ghost btn-sm" id="jClear">Сбросить</button>' : ''}
+    </div>`;
   $('journalTools').querySelectorAll('.jf-chip').forEach(b => b.onclick = () => {
     if (b.dataset.jf === journalFilter) return;
     journalFilter = b.dataset.jf; renderJournal(true);
@@ -4630,6 +4647,16 @@ function drawJournal() {
   const more = journalHasMore ? `<div class="jmore-wrap"><button class="btn btn-ghost btn-sm" id="jMore">Показать ещё</button></div>` : '';
   $('journalList').innerHTML = body + more;
   const mb = $('jMore'); if (mb) mb.onclick = () => renderJournal(false);
+  // Поиск по фамилии — с задержкой: иначе запрос уходит на каждую букву, а на
+  // здешнем интернете это заметно. Даты и действие срабатывают сразу.
+  { const w = $('jWho');
+    if (w) { let t = null;
+      w.oninput = () => { clearTimeout(t); t = setTimeout(() => { jWho = w.value.trim(); renderJournal(true); }, 400); };
+      w.onkeydown = ev => { if (ev.key === 'Enter') { clearTimeout(t); jWho = w.value.trim(); renderJournal(true); } }; } }
+  { const a = $('jAct'); if (a) a.onchange = () => { jAct = a.value; renderJournal(true); }; }
+  { const f = $('jFrom'); if (f) f.onchange = () => { jFrom = f.value; renderJournal(true); }; }
+  { const t2 = $('jTo'); if (t2) t2.onchange = () => { jTo = t2.value; renderJournal(true); }; }
+  { const c = $('jClear'); if (c) c.onclick = () => { jWho = jAct = jFrom = jTo = ''; renderJournal(true); }; }
 }
 
 /* ── модалка / тост ── */
