@@ -2061,11 +2061,14 @@ function renderSpecs() {
         <span class="muted small">${inCat.length}</span>
         ${ed ? `<span class="sp-mvs">${arrow(-1, 'cat', c, ci === 0)}${arrow(1, 'cat', c, ci === cats.length - 1)}</span>` : ''}
       </div>` +
+      // Карандаш идёт ПЕРЕД стрелками: иначе он оказывается правее стрелок у
+      // названия отделения, две колонки не сходятся, и правый край выглядит
+      // обрезанным (Дарина 06.08 прислала скриншот именно с этим).
       inCat.map((s, i) => `<div class="line-row sp-row${ed ? ' sp-tap' : ''}"${ed ? ` data-spec="${s.id}" title="Переименовать или перенести в другое отделение"` : ''}>
-        <div style="font-weight:700">${esc(s.name)}</div>
-        ${cnt(s.id) ? `<span class="muted small" style="margin-left:8px">${cnt(s.id)} чел</span>` : ''}
-        ${ed ? `<span class="sp-mvs" style="margin-left:auto">${arrow(-1, 'spec', s.id, i === 0)}${arrow(1, 'spec', s.id, i === inCat.length - 1)}</span>
-        <span class="me-pen">${ICONS.pencil || '✎'}</span>` : ''}</div>`).join('');
+        <div class="sp-name">${esc(s.name)}</div>
+        ${cnt(s.id) ? `<span class="muted small sp-cnt">${cnt(s.id)} чел</span>` : ''}
+        ${ed ? `<span class="me-pen sp-pen">${ICONS.pencil || '✎'}</span>
+        <span class="sp-mvs">${arrow(-1, 'spec', s.id, i === 0)}${arrow(1, 'spec', s.id, i === inCat.length - 1)}</span>` : ''}</div>`).join('');
   }).join('') || '<div class="empty">Справочник пуст</div>';
   applyIcons($('specList'));
   if (!ed) return;
