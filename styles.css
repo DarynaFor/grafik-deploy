@@ -956,3 +956,13 @@ tr.pw-total.pw-over{z-index:5}
 @media (max-width:720px){
   .sched-tools .search,.page-head .right .search{flex:1 1 100%;min-width:0}
 }
+
+/* Подпись человека в графике: фамилия и под ней специальность. Заголовок группы
+   называет только ОТДЕЛЕНИЕ, а в нём их десяток — в «Психиатрах» 19 человек, и
+   кто психиатр, а кто психотерапевт, из графика было не видно совсем.
+   Колонка узкая (165–190px), поэтому специальность мельче и приглушена, и
+   обрезается многоточием: перенос на третью строку растянул бы ВСЕ строки
+   сетки — высота ряда общая с клетками дней. */
+.gr-who{display:flex;flex-direction:column;gap:1px;min-width:0;width:100%}
+.gr-fio{overflow-wrap:anywhere}
+.gr-spec{font-size:11px;font-weight:600;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

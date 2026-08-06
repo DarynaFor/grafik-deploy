@@ -2599,7 +2599,13 @@ function drawSchedule() {
         rows += `<div class="gr-group"><span><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${inCatCount(cat)}</span></div>`;
       }
       shown++;
-      rows += `<div class="gr-name${editable ? ' tap' : ''}" data-emp="${e.id}" title="${editable ? 'Шаблон на месяц: ' : ''}${esc(e.fio)}" style="box-shadow:inset 3px 0 0 ${catColor(cat)}">${esc(e.fio)}</div>`;
+      // Специальность второй строкой под фамилией (Дарина 06.08). Заголовок группы
+      // называет только ОТДЕЛЕНИЕ, а в нём десяток специальностей: в «Психиатрах»
+      // 19 человек, и кто из них психиатр, а кто психотерапевт, из графика было не
+      // видно вовсе — приходилось открывать карточку. Пустую специальность не
+      // рисуем: у пятерых её ещё нет, и прочерк только зашумит колонку.
+      const sp = e.specialty_id ? specName(e.specialty_id) : '';
+      rows += `<div class="gr-name${editable ? ' tap' : ''}" data-emp="${e.id}" title="${editable ? 'Шаблон на месяц: ' : ''}${esc(e.fio)}${sp ? ' · ' + esc(sp) : ''}" style="box-shadow:inset 3px 0 0 ${catColor(cat)}"><span class="gr-who"><span class="gr-fio">${esc(e.fio)}</span>${sp ? `<span class="gr-spec">${esc(sp)}</span>` : ''}</span></div>`;
       let planPast = 0, factPast = 0, cnt = 0;
       const amtRow = isAmountCell(e, 'main');          // санитарка без оклада — смены суммой
       for (let d = 1; d <= nd; d++) {
@@ -3254,6 +3260,13 @@ const J_ENTITY = { employee: 'Карточка', rate_line: 'Ставка', spec
   // без этих подписей владелец видит сырые имена таблиц вместо человеческой строки
   salary_override: 'Финальная сумма', employee_month_norm: 'Норма часов',
   doctor_month_revenue: 'Выручка врача', payout: 'Выдача наличных' };
+/* Имя специальности по номеру — для СТАРЫХ записей журнала (до 091 туда писался
+   id). Справочник уже загружен в specialties; если строку удалили или она ещё не
+   подтянулась — показываем номер как есть: честнее выдумки. */
+const jSpecName = id => {
+  const sp = specialties.find(x => x.id === id);
+  return sp ? `${sp.name} (${sp.category})` : `№${id}`;
+};
 const J_FIELD = { fio: 'ФИО', position: 'должность', phone: 'телефон', status: 'статус', specialty: 'специальность', specialty_id: 'специальность', norm_hours: 'норма часов', week_hours: 'рабочая неделя', hired_on: 'принят', left_on: 'уволен', 'новая строка': 'новая строка', 'закрыта': 'строка закрыта', 'ставка добавлена': 'ставка добавлена', 'ставка закрыта': 'ставка закрыта' };
 // Действия, которые надо ПОКАЗАТЬ, а не проглотить: раньше j.action только
 // сравнивался с 'created' и никогда не выводился — то есть «сторно», единственное
@@ -4990,7 +5003,16 @@ function journalRowHtml(j) {
   if (j.action === 'created' && j.entity === 'payout' && fldShort)
     what = `${esc(fldShort)}: <b>${esc(j.new_value || '')}</b>`;
   else if (j.action === 'created') what = `${J_ENTITY[j.entity] || esc(j.entity)} создана: <b>${esc(j.new_value || '')}</b>`;
-  else what = `${act}${J_ENTITY[j.entity] || esc(j.entity)} · ${J_FIELD[fldShort] || esc(fldShort)}: ${j.old_value ? `<s>${esc(j.old_value)}</s> → ` : ''}<b>${esc(j.new_value || '—')}</b>`;
+  else {
+    // Записи, сделанные ДО миграции 091, хранят номер специальности, а не имя:
+    // «специальность: 12». Прочитать это нельзя (Дарина 06.08). Переписывать
+    // журнал нельзя — он неизменяем by design, — поэтому подставляем имя при
+    // ПОКАЗЕ. Новые записи приходят названием, и число в них уже не встретится.
+    const vv = v => (['специальность', 'specialty', 'specialty_id'].includes(fldShort)
+      && /^\d+$/.test(String(v || '').trim())) ? jSpecName(+v) : v;
+    const ov = vv(j.old_value), nv = vv(j.new_value);
+    what = `${act}${J_ENTITY[j.entity] || esc(j.entity)} · ${J_FIELD[fldShort] || esc(fldShort)}: ${ov ? `<s>${esc(ov)}</s> → ` : ''}<b>${esc(nv || '—')}</b>`;
+  }
   // У КОГО и за какой день — главное, чего журналу не хватало: строка «клетка:
   // → day 08:00» не давала ни имени, ни даты, и красный флаг «правка после
   // закрытия» некому было предъявить (Дарина 02.08, миграция 070).
