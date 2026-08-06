@@ -909,3 +909,7 @@ tr.pw-total.pw-over{z-index:5}
   color:var(--ink-2);font-size:13px;line-height:1;cursor:pointer;padding:0}
 .sp-mv:hover:not(:disabled){background:linear-gradient(var(--fill-2),var(--fill-2)),var(--surface);color:var(--ink)}
 .sp-mv:disabled{opacity:.25;cursor:default}
+.sp-cat-tap{cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.sp-cat-tap .me-pen{opacity:.35;font-size:11px}
+.sp-cat-tap:hover{color:var(--ink)}
+.sp-cat-tap:hover .me-pen{opacity:.9}

@@ -167,6 +167,17 @@ export class MockStore {
     for (const r of rows) { const s = this.db.specialties.find(x => x.id === r.id); if (s) s.sort = r.sort; }
     this._save();
   }
+  async renameCategory(oldName, newName) {
+    if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять справочник может владелец или директор');
+    const hit = this.db.specialties.filter(x => x.category === oldName);
+    hit.forEach(x => { x.category = newName; });
+    this.db.catOrder = this.db.catOrder || [];
+    const was = this.db.catOrder.find(o => o.category === oldName);
+    if (was) { this.db.catOrder = this.db.catOrder.filter(o => o.category !== oldName && o.category !== newName);
+               this.db.catOrder.push({ category: newName, sort: was.sort }); }
+    this._log('updated', 'specialty', null, 'отделение', oldName, newName);
+    this._save(); return hit.length;
+  }
   async updateSpecialty(id, name, category) {
     if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять справочник может владелец или директор');
     const s = this.db.specialties.find(x => x.id === id);
@@ -945,6 +956,23 @@ export class SupabaseStore {
       if (error) throw error;
       if (!data || !data.length) throw new Error('Менять справочник может владелец или директор');
     }
+  }
+  /* Переименование ОТДЕЛЕНИЯ. Отделение — это текст в каждой специальности, своей
+     строки у него нет: значит переименовать = переписать его у всех специальностей
+     разом и перенести его место в порядке. Если имя занято — отделения сливаются,
+     это законный способ их объединить (форма предупреждает заранее). */
+  async renameCategory(oldName, newName) {
+    const { data, error } = await this.sb.from('specialty')
+      .update({ category: newName }).eq('category', oldName).select();
+    if (error) throw error;
+    if (!data || !data.length) throw new Error('Менять справочник может владелец или директор');
+    const ord = await this.listCategoryOrder().catch(() => []);
+    const was = ord.find(o => o.category === oldName);
+    if (was) {
+      await this.setCategoryOrder([{ category: newName, sort: was.sort }]);
+      await this.sb.from('category_order').delete().eq('category', oldName);
+    }
+    return data.length;
   }
   async updateSpecialty(id, name, category) {
     const { data, error } = await this.sb.from('specialty').update({ name, category }).eq('id', id).select();

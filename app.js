@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=94';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=95';
 
 const $ = id => document.getElementById(id);
 
@@ -788,9 +788,9 @@ const specCat = id => specialties.find(s => s.id === id)?.category || 'Проч�
 // Человек может работать у нас на ДВУХ работах (employee.specialty_id_2,
 // миграция 072). Фильтр по отделению обязан находить его по любой из них —
 // иначе дежурант-врач пропадает из «Врачей», когда вторая работа в другой
-// категории, и наоборот. Группируется он при этом по ОСНОВНОЙ (specCat).
+// отделения, и наоборот. Группируется он при этом по ОСНОВНОМУ (specCat).
 // picked=true — отделение выбрано явно: ищем по ЛЮБОЙ из работ, чтобы дежурант
-// не пропадал из «Врачей». picked=false — рисуем все категории подряд, и тогда
+// не пропадал из «Врачей». picked=false — рисуем все отделения подряд, и тогда
 // человек должен попасть РОВНО в одну (свою основную), иначе задвоится в списке.
 const inCat = (e, cat, picked) => picked
   ? (specCat(e.specialty_id) === cat || (e.specialty_id_2 != null && specCat(e.specialty_id_2) === cat))
@@ -1946,7 +1946,7 @@ function employeeForm(e) {
          окна: модалка тут уже открыта, вторая поверх неё стёрла бы первую. -->
     <div class="sp-new" id="mSpecNewBox" hidden>
       <input class="input" id="mSpecName" placeholder="название, напр. Бухгалтер">
-      <input class="input" id="mSpecCat" list="catlist2" placeholder="категория">
+      <input class="input" id="mSpecCat" list="catlist2" placeholder="отделение">
       <datalist id="catlist2">${[...new Set(specialties.map(s => s.category))].map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
       <button class="btn btn-primary btn-sm" id="mSpecAdd" type="button">Добавить</button>
     </div>
@@ -2037,7 +2037,7 @@ function employeeForm(e) {
    «Психолог-психотерапевт», которого хотят звать просто «Психолог»).
    Право в базе уже есть (политика spec_update, owner+ceo) — не хватало экрана. */
 function canEditSpecs() { return ['owner', 'ceo'].includes(store.me()?.role); }
-/* Порядок отделений (088). Категория без строки в справочнике порядка уходит в
+/* Порядок отделений (088). Отделение без строки в справочнике порядка уходит в
    конец — так же, как её отсортировала бы база. */
 let catOrder = new Map();
 function catSort(c) { return catOrder.has(c) ? catOrder.get(c) : 9999; }
@@ -2057,7 +2057,7 @@ function renderSpecs() {
     const inCat = specialties.filter(s => s.category === c)
       .sort((a, b) => (a.sort ?? 999) - (b.sort ?? 999) || a.name.localeCompare(b.name, 'ru'));
     return `<div class="sp-cat">
-        <span class="sp-cat-name">${esc(c)}</span>
+        <span class="sp-cat-name${ed ? ' sp-cat-tap' : ''}"${ed ? ` data-cat="${esc(c)}" title="Переименовать отделение"` : ''}>${esc(c)}${ed ? ` <span class="me-pen">${ICONS.pencil || '✎'}</span>` : ''}</span>
         <span class="muted small">${inCat.length}</span>
         ${ed ? `<span class="sp-mvs">${arrow(-1, 'cat', c, ci === 0)}${arrow(1, 'cat', c, ci === cats.length - 1)}</span>` : ''}
       </div>` +
@@ -2072,6 +2072,9 @@ function renderSpecs() {
   $('specList').querySelectorAll('.sp-tap[data-spec]').forEach(el => {
     el.onclick = () => specForm(specialties.find(s => s.id === +el.dataset.spec));
   });
+  $('specList').querySelectorAll('.sp-cat-tap[data-cat]').forEach(el => {
+    el.onclick = e => { e.stopPropagation(); catForm(el.dataset.cat); };
+  });
   // stopPropagation: стрелка лежит ВНУТРИ кликабельной строки, иначе поверх
   // перестановки открывалась бы ещё и форма переименования.
   $('specList').querySelectorAll('.sp-mv').forEach(b => b.onclick = async e => {
@@ -2081,6 +2084,38 @@ function renderSpecs() {
     try { await moveSpec(b.dataset.mv, b.dataset.key, +b.dataset.d); }
     catch (err) { toast(err.message || err, true); b.disabled = false; }
   });
+}
+/* Переименование отделения. Своей строки у отделения нет — это текст в каждой
+   специальности, поэтому правка задевает их все разом. Пишем это словами: люди
+   переименовывают «Психологов», не задумываясь, что под ними пять специальностей. */
+function catForm(cat) {
+  const inCat = specialties.filter(s => s.category === cat);
+  const others = [...new Set(specialties.map(s => s.category))].filter(c => c !== cat);
+  showModal(`<h3>Отделение</h3>
+    <div class="msub">Поменяется у всех специальностей этого отделения — сейчас их ${inCat.length}:
+      ${inCat.map(s => esc(s.name)).join(', ')}</div>
+    <label class="flbl">Название</label><input class="input" id="mCn" value="${esc(cat)}">
+    <div class="msub" id="mCnWarn" style="margin-top:8px"></div>
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button>
+      <button class="btn btn-primary btn-sm" id="mSave">${ICONS.check}Сохранить</button></div>`);
+  const inp = $('mCn');
+  // Совпало с существующим — это не ошибка, а слияние отделений. Но сказать надо
+  // ДО нажатия: иначе человек нажмёт «Сохранить» и увидит, что отделений стало меньше.
+  const warn = () => {
+    const v = inp.value.trim();
+    $('mCnWarn').innerHTML = (v && others.some(c => c.toLowerCase() === v.toLowerCase()))
+      ? `<div class="rc-warn">${ICONS.lock} Отделение <b>${esc(v)}</b> уже есть — они <b>объединятся</b> в одно.</div>` : '';
+  };
+  inp.oninput = warn; warn();
+  $('mCancel').onclick = closeModal;
+  $('mSave').onclick = async () => {
+    const btn = $('mSave'); if (btn.disabled) return;
+    const v = inp.value.trim(); if (!v) { inp.focus(); return; }
+    if (v === cat) { closeModal(); return; }
+    btn.disabled = true;
+    try { const n = await store.renameCategory(cat, v); closeModal(); toast(ICONS.check + `Отделение переименовано (${n})`); await refresh(); }
+    catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
 }
 /* Перестановка соседей. Меняем не два номера, а переписываем ПОЗИЦИИ всему
    списку. Обмен двух номеров выглядит экономнее, но не работает, когда номера
@@ -2116,10 +2151,10 @@ function specForm(s) {
   const cats = [...new Set(specialties.map(x => x.category))];
   const used = s ? employees.filter(e => e.status !== 'archived' && e.specialty_id === s.id).length : 0;
   showModal(`<h3>${s ? 'Специальность' : 'Новая специальность'}</h3>
-    <div class="msub">${s ? 'Название и категория поменяются у всех, кому она стоит' + (used ? ` — сейчас это ${used} чел` : '') + '. Изменение попадёт в журнал.'
+    <div class="msub">${s ? 'Название и отделение поменяются у всех, кому она стоит' + (used ? ` — сейчас это ${used} чел` : '') + '. Изменение попадёт в журнал.'
                         : 'Добавится в справочник и группировку'}</div>
     <label class="flbl">Название</label><input class="input" id="mSn" placeholder="напр. Невролог" value="${esc(s?.name || '')}">
-    <label class="flbl">Категория</label><input class="input" id="mSc" list="catlist" placeholder="Врачи / Средний персонал / своя…" value="${esc(s?.category || '')}"><datalist id="catlist">${cats.map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
+    <label class="flbl">Отделение</label><input class="input" id="mSc" list="catlist" placeholder="Врачи / Средний персонал / своё…" value="${esc(s?.category || '')}"><datalist id="catlist">${cats.map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button><button class="btn btn-primary btn-sm" id="mSave">${s ? ICONS.check + 'Сохранить' : ICONS.plus + 'Добавить'}</button></div>`);
   $('mCancel').onclick = closeModal;
   $('mSave').onclick = async () => {
@@ -3406,7 +3441,7 @@ function drawPayroll(filter = '') {
     <th class="num sep">Зарплата</th><th class="num pw-earned">Всего заработано</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
     <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num">Больн. карта</th></tr></thead>`;
 
-  // Разбивка по специальностям (как в графике): сортируем по категории,
+  // Разбивка по специальностям (как в графике): сортируем по отделению,
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
   const catOf = r => specCat(employees.find(e => e.id === r.employee_id)?.specialty_id) || 'Прочие';
   if (sortAZ) rows.sort(byFio);

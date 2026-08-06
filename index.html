@@ -19,7 +19,7 @@
 <meta name="theme-color" content="#0C0D10" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#EBE6DD" media="(prefers-color-scheme: light)">
 <script>(function(){try{var t=localStorage.getItem('milena-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-<link rel="stylesheet" href="styles.css?v=101">
+<link rel="stylesheet" href="styles.css?v=102">
 </head>
 <body>
 
@@ -118,7 +118,7 @@
 
     <section class="screen" id="s-specialties">
       <div class="page-head">
-        <div><h1>Специальности</h1><p>Справочник с категориями для группировки</p></div>
+        <div><h1>Специальности</h1><p>Специальности и отделения: как называются, кто в каком отделении и в каком порядке показывать</p></div>
         <div class="right"><button class="btn btn-primary btn-sm" id="addSpecBtn"><span data-ic="plus"></span>Добавить</button></div>
       </div>
       <div class="card cardpad" id="specList" style="max-width:560px"></div>
@@ -246,7 +246,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=132"></script>
+<script type="module" src="app.js?v=133"></script>
 <!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
      без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
      index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —
