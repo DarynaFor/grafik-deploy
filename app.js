@@ -316,6 +316,11 @@ function renderNav() {
   $('sideNav').innerHTML = navItems().map(n => `<button class="nav-item${n.s === curScreen ? ' active' : ''}" data-s="${n.s}"><span class="ic">${ICONS[n.i] || ''}</span>${n.l}</button>`).join('');
   $('mobileNav').innerHTML = navItems().map(n => `<button data-s="${n.s}" class="${n.s === curScreen ? 'active' : ''}"><span>${ICONS[n.i] || ''}</span>${n.l}</button>`).join('');
   document.querySelectorAll('[data-s]').forEach(b => b.onclick = () => go(b.dataset.s));
+  // Нижнее меню шире экрана (11 пунктов) и теперь листается. Активный подводим
+  // сами: иначе, открыв «Ставки», человек видит ленту с начала и не понимает,
+  // где он. `nearest` — чтобы не дёргать ленту, когда пункт и так на виду.
+  const act = $('mobileNav').querySelector('button.active');
+  if (act && act.scrollIntoView) { try { act.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {} }
 }
 // replace=true — не добавлять запись в историю. Нужно, когда экран меняется В ОТВЕТ
 // на уже изменившийся адрес (applyHash): запись браузер завёл сам, и push поверх

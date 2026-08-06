@@ -643,8 +643,14 @@ body.authed .login-stage{display:none}
   .modal-foot{margin:18px -18px 0;padding:13px 18px;bottom:0}   /* поля под мобильный padding .modal (22/18) */
   .frow{flex-wrap:wrap}
 }
-.mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:30;background:var(--bar);backdrop-filter:var(--blur);border-top:1px solid var(--glass-bd);padding:7px 10px calc(7px + env(safe-area-inset-bottom))}
-.mobile-nav button{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;font-weight:700;color:var(--ink-3);padding:6px}
+/* Нижнее меню ПРОКРУЧИВАЕТСЯ. Пунктов 11, и flex:1 их просто ужимал: последние
+   («Ставки», «Журнал») уезжали за край и добраться до них было нельзя вообще —
+   прокрутки не было (Дарина 06.08: «всі іконки внизу не влазять і не гортаються»).
+   Теперь пункты не сжимаются, а лента листается пальцем; активный подводится сам
+   (scrollActiveNavIntoView). Полосу прокрутки прячем — она тут только мешает. */
+.mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:30;background:var(--bar);backdrop-filter:var(--blur);border-top:1px solid var(--glass-bd);padding:7px 10px calc(7px + env(safe-area-inset-bottom));overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
+.mobile-nav::-webkit-scrollbar{display:none}
+.mobile-nav button{flex:0 0 auto;min-width:62px;scroll-snap-align:center;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;font-weight:700;color:var(--ink-3);padding:6px}
 .mobile-nav button.active{color:var(--green-d)}
 /* смена ставки: было → станет, чтобы владелец видел последствие до подтверждения */
 .rc-diff{display:grid;gap:6px;background:var(--fill-1);border:1px solid var(--hair);border-radius:10px;padding:11px 13px;margin:10px 0 4px;font-size:13.5px}
@@ -673,13 +679,21 @@ body.authed .login-stage{display:none}
 .pw .sep{border-left:1px solid var(--glass-bd)}
 /* примороженные слева «Сотрудник» и справа «К выдаче»: на телефоне при скролле
    всегда видно, КТО и СКОЛЬКО кэшем на руки */
-.pw .pw-name{position:sticky;left:0;z-index:2;background:var(--surf-2);font-weight:600;
+.pw .pw-name{position:sticky;left:0;z-index:3;background:var(--surf-2);font-weight:600;
   width:210px;max-width:210px;white-space:normal;border-right:1px solid var(--glass-bd)}
-.pw th.pw-name{z-index:4}
-/* «К выдаче» ВЫШЕ имени: при равном z-index правая колонка закрашивала имя и
-   резала чипы посреди слова */
-.pw .pw-pay{position:sticky;right:0;z-index:3;background:var(--surf-2);border-left:1px solid var(--glass-bd)}
-.pw th.pw-pay{z-index:5}
+.pw th.pw-name{z-index:5}
+/* ИМЯ выше «Осталось выдать», а не наоборот. Было наоборот — и на телефоне при
+   прокрутке вправо колонка с суммой наезжала прямо на фамилии (Дарина 06.08,
+   скриншот с обведённым столбцом).
+   Причина: sticky right:0 удерживает колонку, только пока она правее экрана.
+   «Осталось выдать» — 12-я из 21, и стоит прокрутить дальше неё, как она уезжает
+   влево и оказывается ПОД примороженным именем. Дальше решает только слой: с
+   высшим z-index она закрашивала фамилию собой.
+   Прежний порядок ставили от обратной беды — при РАВНОМ z-index побеждала та,
+   что позже в разметке, то есть снова сумма. Разница именно в том, что теперь
+   слои заданы явно, а имя — колонка-якорь, её не должно перекрывать ничто. */
+.pw .pw-pay{position:sticky;right:0;z-index:2;background:var(--surf-2);border-left:1px solid var(--glass-bd)}
+.pw th.pw-pay{z-index:4}
 /* Угловые ячейки (шапка × примороженная колонка) перекрывают всё: без этого при
    одновременной прокрутке по обеим осям в углу мелькали чужие значения. */
 .pw thead th{background:var(--surf-1)}
@@ -888,7 +902,8 @@ body.authed .login-stage{display:none}
 tr.pw-total{position:sticky;bottom:0;z-index:3}
 tr.pw-total.pw-accrued{z-index:4}
 tr.pw-total.pw-over{z-index:5}
-.pw-total .pw-name,.pw-total .pw-pay{z-index:4}
+.pw-total .pw-pay{z-index:4}
+.pw-total .pw-name{z-index:5}
 
 @media(max-width:720px){
   /* Нижнее меню перекрывает экран — таблице оставляем место под него */
