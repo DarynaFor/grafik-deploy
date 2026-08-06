@@ -43,6 +43,9 @@
     <!-- Кто ещё в программе — для НЕ-владельца. У владельца подробный блок на «Обзоре» -->
     <div class="prs-top" id="presTop"></div>
     <div class="whoami"><span id="whoName"></span><span class="rolepill" id="whoRole"></span></div>
+    <!-- Обсуждение: панель открывается с ЛЮБОГО экрана. Отдельный экран, куда надо
+         переходить, — ровно то, из-за чего комментарий не напишут вовсе. -->
+    <button class="iconbtn" id="chatBtn" title="Обсуждение" aria-label="Обсуждение"><span class="chat-dot" id="chatDot" hidden></span></button>
     <button class="iconbtn" id="themeBtn" title="Тема" aria-label="Сменить тему"></button>
     <button class="iconbtn" id="logoutBtn" title="Выйти" aria-label="Выйти"></button>
   </div>
@@ -197,6 +200,30 @@
 </div>
 
 <div class="mobile-nav" id="mobileNav"></div>
+<!-- ── Обсуждение ────────────────────────────────────────────────────────────
+     Панель, а не экран: вопросы возникают на любом экране, и текущий экран сам
+     подставляется в привязку сообщения. Разметка пустая — наполняет drawChat(). -->
+<div class="chat-ov" id="chatOv" hidden>
+  <aside class="chat" id="chatPanel" role="dialog" aria-label="Обсуждение">
+    <div class="chat-head">
+      <b>Обсуждение</b>
+      <button class="iconbtn sm" id="chatNew" title="Новый приватный канал" aria-label="Новый приватный канал"></button>
+      <button class="iconbtn sm" id="chatClose" title="Закрыть" aria-label="Закрыть"></button>
+    </div>
+    <div class="chat-chans" id="chatChans"></div>
+    <div class="chat-feed" id="chatFeed"></div>
+    <div class="chat-form">
+      <div class="chat-about" id="chatAbout"></div>
+      <textarea class="input" id="chatText" rows="2" placeholder="Написать… «@» — позвать, «#» — про кого"></textarea>
+      <div class="chat-pick" id="chatPick" hidden></div>
+      <div class="chat-send">
+        <span class="muted small" id="chatHint"></span>
+        <button class="btn btn-primary btn-sm" id="chatSend">Отправить</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
 <div class="modal-ov" id="modalOv"><div class="modal" id="modalBox"></div></div>
 <!-- второй слой: диалог поверх открытой формы (подтверждение суммы и т.п.),
      чтобы форма под ним не затиралась одним общим #modalBox -->
@@ -207,7 +234,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=128"></script>
+<script type="module" src="app.js?v=129"></script>
 <!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
      без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
      index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —

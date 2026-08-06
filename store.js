@@ -618,6 +618,75 @@ export class MockStore {
       edits_hour: (this.db.journal || []).filter(j => j.actor === p.display_name
         && now - new Date(j.at).getTime() < 3600000).length }));
   }
+  /* ── Обсуждение в демо (зеркало 086) ────────────────────────────────────
+     Приватность повторяем ЧЕСТНО: в демо тоже видно только свои каналы. Иначе
+     на демо нельзя проверить главное правило — «владелец в чужой приватный не
+     входит», — а проверять его надо именно там, где не страшно ошибиться. */
+  _chans() {
+    if (!this.db.channels) {
+      this.db.channels = [{ id: 1, name: 'Общий', kind: 'team', is_private: false, members: [] },
+                          { id: 2, name: 'Разработчикам', kind: 'dev', is_private: false, members: [] }];
+      this.db.nextId.channel = 3; this.db.nextId.comment = 1; this._save();
+    }
+    return this.db.channels;
+  }
+  _canSeeChan(c) {
+    return !c.is_private || c.created_by === this.user?.id
+        || (c.members || []).some(m => m.user_id === this.user?.id);
+  }
+  async listAccounts() { return DEMO_USERS.map(u => ({ id: u.id, display_name: u.name, role: u.role })); }
+  async listChannels() { return this._chans().filter(c => this._canSeeChan(c)); }
+  async listComments(channelId, limit = 100) {
+    const c = this._chans().find(x => x.id === channelId);
+    if (!c || !this._canSeeChan(c)) return [];
+    return (this.db.comments || []).filter(m => m.channel_id === channelId).slice(-limit);
+  }
+  async postComment(c) {
+    const ch = this._chans().find(x => x.id === c.channel_id);
+    if (!ch || !this._canSeeChan(ch)) throw new Error('Этот канал приватный — вас в нём нет');
+    if (!String(c.text || '').trim()) throw new Error('Сообщение пустое или длиннее 4000 знаков');
+    this.db.comments = this.db.comments || [];
+    const emp = c.about_employee_id ? (this.db.employees || []).find(e => e.id === c.about_employee_id) : null;
+    const row = { id: this.db.nextId.comment++, channel_id: c.channel_id, author: this.user.id,
+      author_user: { display_name: this.user.name, role: this.user.role },
+      text: c.text, created_at: new Date().toISOString(), edited_at: null, deleted_at: null,
+      mentions: c.mentions || [], about_employee_id: c.about_employee_id ?? null,
+      about: emp ? { fio: emp.fio } : null,
+      about_screen: c.about_screen ?? null, about_period: c.about_period ? c.about_period + '-01' : null };
+    this.db.comments.push(row); this._save();
+    return row;
+  }
+  async editComment(id, text) {
+    const m = (this.db.comments || []).find(x => x.id === id);
+    if (!m || m.author !== this.user.id) throw new Error('Изменить можно только своё сообщение');
+    if (m.deleted_at) throw new Error('Удалённое сообщение изменить нельзя');
+    m.text = text; m.edited_at = new Date().toISOString(); this._save(); return m;
+  }
+  async deleteComment(id) {
+    const m = (this.db.comments || []).find(x => x.id === id);
+    if (!m || m.author !== this.user.id) throw new Error('Удалить можно только своё сообщение');
+    m.deleted_at = new Date().toISOString(); this._save(); return m;
+  }
+  async createChannel(name, memberIds) {
+    const row = { id: this.db.nextId.channel++, name, kind: 'team', is_private: true, created_by: this.user.id,
+      members: [...new Set([this.user.id, ...(memberIds || [])])].map(u => ({ user_id: u })) };
+    this._chans().push(row); this._save(); return row;
+  }
+  async markRead(channelId) {
+    this.db.reads = (this.db.reads || []).filter(r => !(r.user_id === this.user.id && r.channel_id === channelId));
+    this.db.reads.push({ user_id: this.user.id, channel_id: channelId, last_read: new Date().toISOString() });
+    this._save();
+  }
+  async unreadCounts() {
+    const seen = new Map((this.db.reads || []).filter(r => r.user_id === this.user?.id).map(r => [r.channel_id, r.last_read]));
+    const out = new Map();
+    for (const m of this.db.comments || []) {
+      if (m.author === this.user?.id || m.deleted_at) continue;
+      const s = seen.get(m.channel_id);
+      if (!s || m.created_at > s) out.set(m.channel_id, (out.get(m.channel_id) || 0) + 1);
+    }
+    return out;
+  }
   async listJournal({ filter = 'all', beforeId = null, limit = 50 } = {}) {
     let arr = (this.db.journal || []).filter(j => journalMatch(j, filter)).sort((a, b) => (b.id || 0) - (a.id || 0));
     if (beforeId != null) arr = arr.filter(j => (j.id || 0) < beforeId);
@@ -694,6 +763,21 @@ export function rateError(err) {
   const raw = (err && (err.message || err.details || String(err))) || 'Неизвестная ошибка';
   for (const [needle, human] of RATE_ERRORS) if (raw.includes(needle)) return human;
   return raw;                                        // наши собственные raise из RPC уже по-русски
+}
+
+/* Ошибки обсуждения (086) → по-русски. Отдельно от rateError: там нарушение RLS
+   значит «вы не владелец», здесь — «канал приватный, вас в нём нет». */
+const COMMENT_ERRORS = [
+  ['comment_text_check',         'Сообщение пустое или длиннее 4000 знаков'],
+  ['comment_channel_name_check', 'Название канала: от 1 до 60 знаков'],
+  ['for table "comment_channel_member"', 'Добавлять участников может только тот, кто завёл канал'],
+  ['for table "comment_channel"',        'Недостаточно прав, чтобы завести канал'],
+  ['violates row-level security',        'Этот канал приватный — вас в нём нет'],
+];
+export function commentError(err) {
+  const raw = (err && (err.message || err.details || String(err))) || 'Неизвестная ошибка';
+  for (const [needle, human] of COMMENT_ERRORS) if (raw.includes(needle)) return human;
+  return raw;                                        // raise из триггера уже по-русски
 }
 
 /* Ошибки денежных записей → человеческий русский (те же CHECK/RLS, что в
@@ -1272,6 +1356,93 @@ export class SupabaseStore {
     const { data, error } = await this.sb.from('v_presence').select('*');
     if (error) throw error;
     return data || [];
+  }
+
+  /* ── Обсуждение (миграция 086) ───────────────────────────────────────────
+     Что видно — решает RLS: публичный канал всем, приватный только участникам.
+     Здесь фильтров по правам НЕТ намеренно: дублировать правило в браузере
+     значит однажды разойтись с базой, а верить всё равно только базе. */
+  /* Кого можно позвать через «@». Не app_user: та отдаёт свою строку и только
+     владельцу — все (политика au_self), поэтому Алёна не увидела бы никого.
+     v_account (087) — три колонки, без телефона и привязки к сотруднику. */
+  async listAccounts() {
+    const { data, error } = await this.sb.from('v_account').select('*').order('display_name');
+    if (error) throw error;
+    return data || [];
+  }
+  async listChannels() {
+    const { data, error } = await this.sb.from('comment_channel')
+      .select('*, members:comment_channel_member(user_id)').order('id');
+    if (error) throw error;
+    return data || [];
+  }
+  async listComments(channelId, limit = 100) {
+    const { data, error } = await this.sb.from('comment')
+      .select('*, author_user:app_user!comment_author_fkey(display_name, role), about:employee(fio)')
+      .eq('channel_id', channelId).order('id', { ascending: false }).limit(limit);
+    if (error) throw error;
+    return (data || []).reverse();
+  }
+  async postComment(c) {
+    const { data, error } = await this.sb.from('comment').insert({
+      channel_id: c.channel_id, author: this.user.id, text: c.text,
+      mentions: c.mentions || [], about_employee_id: c.about_employee_id ?? null,
+      about_screen: c.about_screen ?? null,
+      about_period: c.about_period ? c.about_period + '-01' : null,
+    }).select().single();
+    if (error) throw new Error(commentError(error));
+    return data;
+  }
+  // .select() обязателен: RLS не «запрещает», а не находит строку — без него
+  // PostgREST вернул бы успех на нуле изменённых строк, и чужое сообщение
+  // выглядело бы отредактированным до перезагрузки.
+  async editComment(id, text) {
+    const { data, error } = await this.sb.from('comment').update({ text }).eq('id', id).select();
+    if (error) throw new Error(commentError(error));
+    if (!data || !data.length) throw new Error('Изменить можно только своё сообщение');
+    return data[0];
+  }
+  async deleteComment(id) {
+    const { data, error } = await this.sb.from('comment')
+      .update({ deleted_at: new Date().toISOString() }).eq('id', id).select();
+    if (error) throw new Error(commentError(error));
+    if (!data || !data.length) throw new Error('Удалить можно только своё сообщение');
+    return data[0];
+  }
+  async createChannel(name, memberIds) {
+    const { data, error } = await this.sb.from('comment_channel')
+      .insert({ name, is_private: true, created_by: this.user.id }).select().single();
+    if (error) throw new Error(commentError(error));
+    const rows = [...new Set([this.user.id, ...(memberIds || [])])].map(u => ({ channel_id: data.id, user_id: u }));
+    const { error: e2 } = await this.sb.from('comment_channel_member').insert(rows);
+    if (e2) throw new Error(commentError(e2));
+    return data;
+  }
+  async markRead(channelId) {
+    try {
+      await this.sb.from('comment_read').upsert(
+        { user_id: this.user.id, channel_id: channelId, last_read: new Date().toISOString() },
+        { onConflict: 'user_id,channel_id' });
+    } catch (e) { console.warn('markRead:', e); }   // отметка о прочтении не должна ронять чтение
+  }
+  /* Непрочитанное — ОДИН запрос, и тот на пульсе присутствия (30 с). Отдельный
+     цикл опроса здесь заводить нельзя: холодный заход в клинике весит 800 КБ без
+     сжатия, интернет плохой, кеш пустой каждый раз. */
+  async unreadCounts() {
+    try {
+      const [{ data: reads }, { data: msgs }] = await Promise.all([
+        this.sb.from('comment_read').select('channel_id, last_read'),
+        this.sb.from('comment').select('channel_id, created_at, author').is('deleted_at', null),
+      ]);
+      const seen = new Map((reads || []).map(r => [r.channel_id, r.last_read]));
+      const out = new Map();
+      for (const m of msgs || []) {
+        if (m.author === this.user.id) continue;                 // своё непрочитанным не бывает
+        const s = seen.get(m.channel_id);
+        if (!s || m.created_at > s) out.set(m.channel_id, (out.get(m.channel_id) || 0) + 1);
+      }
+      return out;
+    } catch (e) { console.warn('unreadCounts:', e); return new Map(); }
   }
 }
 

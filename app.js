@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=91';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=92';
 
 const $ = id => document.getElementById(id);
 
@@ -3720,6 +3720,14 @@ async function payrollDialog(empId) {
   // что перед человеком: молча уходим, строку он откроет заново.
   if (payPeriod !== per || curScreen !== 'payroll') return;
   setEditing('payroll:' + empId + ':' + per);   // деньги — самое дорогое место для двойной правки
+  // Норма часов нужна ДВАЖДЫ: в формуле оклада ниже и в подзаголовке «норма · факт».
+  // Считаем ОДИН раз и здесь, до первого использования. Раньше её брали только
+  // внутри подзаголовка, а formula ниже обращалась к `nh` из чужой области — и у
+  // всех, у кого есть хоть одно начисление, окно падало с ReferenceError и просто
+  // не открывалось. На демо не воспроизводилось: у тестового сотрудника начислений
+  // нет, ветка с формулой не строится вовсе.
+  const _nrm = payrollNorms.get(empId);
+  const nh = _nrm && _nrm.hours != null ? parseFloat(_nrm.hours) : null;
   const breakdown = my.length
     ? my.map(l => { const f = rateFormula(l, r, nh, emp);
         return `<div class="me-row me-calc"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}${
@@ -3739,7 +3747,6 @@ async function payrollDialog(empId) {
   // карточек урезан ролью) — тогда останется одно ФИО, без строки специальности.
   showModal(`${personHead({ fio: r.fio, specialty_id: emp?.specialty_id },
       `${esc(periodLabel(per))} · ${(() => {
-        const n = payrollNorms.get(empId), nh = n && n.hours != null ? parseFloat(n.hours) : null;
         const fh = Number(r.fact_hours) || 0;
         // Часы — если норма задана. Иначе дни, как было: у сменщиков без нормы
         // говорить «норма — ч» бессмысленно, а дни им как раз о чём-то говорят.
