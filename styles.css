@@ -139,7 +139,12 @@ body.authed .login-stage{display:none}
 .input:focus{outline:none;border-color:var(--green);box-shadow:0 0 0 3px rgba(52,201,124,.16)}
 .flbl{display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3);margin:14px 0 6px}
 .frow{display:flex;gap:12px}.frow>*{flex:1;min-width:0}
-.search{display:flex;align-items:center;gap:9px;background:var(--fill-2);border:1px solid var(--glass-bd);border-radius:var(--r-pill);padding:9px 16px;min-width:230px;color:var(--ink-3)}
+/* Контейнер поиска — <label>, а не <div>: тогда тап ПО ЛУПЕ фокусирует поле.
+   Дарина 06.08: «чого лупа не працює в расчетах з телефону». На телефоне поле
+   ужималось до ~104 px, палец естественно попадал в лупу — и не происходило
+   ничего, потому что иконка была просто соседним элементом. */
+.search{display:flex;align-items:center;gap:9px;background:var(--fill-2);border:1px solid var(--glass-bd);border-radius:var(--r-pill);padding:9px 16px;min-width:230px;color:var(--ink-3);cursor:text}
+.search [data-ic],.search svg{pointer-events:none;flex:0 0 auto}
 .search input{background:none;border:none;outline:none;color:var(--ink);font-size:14px;width:100%;font-family:inherit}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:var(--r-pill);font-size:12px;font-weight:700}
 .pill.o{background:rgba(52,201,124,.16);color:var(--green-d)}
@@ -930,3 +935,9 @@ tr.pw-total.pw-over{z-index:5}
 .sp-cat-tap .me-pen{opacity:.35;font-size:11px}
 .sp-cat-tap:hover{color:var(--ink)}
 .sp-cat-tap:hover .me-pen{opacity:.9}
+
+/* Телефон: поиску — вся строка. Рядом с фильтром отделения он ужимался до ~104 px,
+   и попасть в него пальцем было почти нечем — тапали в лупу. */
+@media (max-width:720px){
+  .sched-tools .search,.page-head .right .search{flex:1 1 100%;min-width:0}
+}

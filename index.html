@@ -79,7 +79,7 @@
         </div>
       </div>
       <div class="sched-tools">
-        <div class="search"><span data-ic="search"></span><input id="vacSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+        <label class="search"><span data-ic="search"></span><input id="vacSearch" placeholder="Поиск по ФИО…" autocomplete="off"></label>
         <label class="rt-toggle" title="Показать одним списком, без деления на отделения"><input type="checkbox" id="vacFlat"> одним списком</label>
         <div id="vacStat" class="sched-stat"></div>
       </div>
@@ -91,7 +91,7 @@
         <div><h1>Архив</h1><p>Кого убрали из списка: когда, кем и остались ли за ним деньги. Отсюда же можно вернуть в активные.</p></div>
       </div>
       <div class="sched-tools">
-        <div class="search"><span data-ic="search"></span><input id="arcSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+        <label class="search"><span data-ic="search"></span><input id="arcSearch" placeholder="Поиск по ФИО…" autocomplete="off"></label>
         <label class="rt-toggle" title="Только те, за кем остались незакрытые деньги"><input type="checkbox" id="arcOnlyMoney"> с деньгами</label>
         <div id="arcStat" class="sched-stat"></div>
       </div>
@@ -103,7 +103,7 @@
         <div><h1>Сотрудники</h1><p id="empSubtitle">Карточки со строками начисления</p></div>
         <div class="right">
           <div id="empCat" class="cselect"></div>
-          <div class="search"><span data-ic="search"></span><input id="empSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+          <label class="search"><span data-ic="search"></span><input id="empSearch" placeholder="Поиск по ФИО…" autocomplete="off"></label>
           <button class="btn btn-primary btn-sm" id="addEmpBtn"><span data-ic="plus"></span>Карточка</button>
         </div>
       </div>
@@ -132,7 +132,7 @@
         </div>
       </div>
       <div class="sched-tools">
-        <div class="search"><span data-ic="search"></span><input id="schedSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+        <label class="search"><span data-ic="search"></span><input id="schedSearch" placeholder="Поиск по ФИО…" autocomplete="off"></label>
         <div id="schedCat" class="cselect"></div>
         <label class="rt-toggle" title="Все одним списком по фамилии, без разбивки по отделениям"><input type="checkbox" id="schedAZ"> по алфавиту</label>
         <div id="schedStat" class="sched-stat"></div>
@@ -145,7 +145,7 @@
       <div class="page-head">
         <div><h1>Ставки</h1><p>Массовый ввод: тип оплаты и сумма для каждого. Заводит владелец.</p></div>
         <div class="right">
-          <div class="search"><span data-ic="search"></span><input id="rateSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+          <label class="search"><span data-ic="search"></span><input id="rateSearch" placeholder="Поиск по ФИО…" autocomplete="off"></label>
         </div>
       </div>
       <div id="ratesTools"></div>
@@ -167,7 +167,7 @@
         </div>
       </div>
       <div class="sched-tools">
-        <div class="search"><span data-ic="search"></span><input id="payrollSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+        <label class="search"><span data-ic="search"></span><input id="payrollSearch" placeholder="Поиск по ФИО…" autocomplete="off"></label>
         <div id="payrollCat" class="cselect"></div>
         <label class="rt-toggle" title="Показать только тех, кому за месяц ничего не начислено"><input type="checkbox" id="payOnlyZero"> без начисления</label>
         <label class="rt-toggle" title="Все одним списком по фамилии, без разбивки по отделениям"><input type="checkbox" id="payAZ"> по алфавиту</label>
@@ -186,7 +186,7 @@
         </div>
       </div>
       <div class="sched-tools">
-        <div class="search"><span data-ic="search"></span><input id="patSearch" placeholder="Поиск по врачу…" autocomplete="off"></div>
+        <label class="search"><span data-ic="search"></span><input id="patSearch" placeholder="Поиск по врачу…" autocomplete="off"></label>
         <div id="patStat" class="sched-stat"></div>
       </div>
       <div id="patByDoc"></div>
@@ -246,7 +246,11 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
+<<<<<<< HEAD
 <script type="module" src="app.js?v=144"></script>
+=======
+<script type="module" src="app.js?v=135"></script>
+>>>>>>> claude/process-staff-schedules-7cba8c
 <!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
      без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
      index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —
