@@ -733,6 +733,13 @@ body.authed .login-stage{display:none}
 .me-sum{border-top:1px solid var(--hair);margin-top:5px;padding-top:7px;font-weight:700}
 .me-add{display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center}
 .pm-hist{max-height:180px;overflow-y:auto;border:1px solid var(--hair);border-radius:10px;padding:8px 11px}
+/* Блок выдачи наличных (085). Обведён и чуть подсвечен: это единственное место
+   в модалке, где деньги реально уходят из рук, — оно не должно читаться как
+   ещё одна строка расчёта. Своей прокрутки нет: выдач за месяц у человека
+   единицы, а прятать их под скролл рядом с кнопкой «Выдал» — плохая идея. */
+.pm-pay{border:1px solid var(--glass-bd);border-radius:12px;padding:10px 12px;background:var(--fill-1)}
+.pm-pay .me-row{padding:3px 0}
+.pm-pay .pm-ev:first-of-type{border-top:1px solid var(--hair);margin-top:6px;padding-top:7px}
 .pm-ev{display:flex;flex-direction:column;gap:1px;padding:5px 0;border-bottom:1px solid var(--hair)}
 .pm-ev:last-child{border:none}
 /* Телефон владельца — главный сценарий: две примороженные колонки НЕ должны

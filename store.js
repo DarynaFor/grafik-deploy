@@ -4,6 +4,30 @@
    см. docs/sprint1-schema.sql). Выбор — по наличию ключей в config.js. */
 
 const LS_KEY = 'milena-app-demo-v1';
+/* Из сырых строк выдач за месяц — то, что показывает «Обзор»: список последних
+   и счётчик «выдано вперёд». Одна функция на оба хранилища: демо и прод обязаны
+   считать это одинаково, иначе проверить в демо нельзя.
+   Выбрасываем ДВА вида строк: сами сторно (они тоже confirmed и выглядели бы
+   обычной выдачей с минусом) и выдачи, которые уже отменили — «последние
+   выдачи» должны быть тем, что реально отдано. Сторно всегда новее своей
+   выдачи и в том же месяце, поэтому отбор точный. */
+function сводкаВыдач(строки, limit, имя) {
+  const отменены = new Set(строки.filter(p => p.reverses_id).map(p => p.reverses_id));
+  const живые = строки.filter(p => !p.reverses_id && !отменены.has(p.id));
+  return {
+    list: живые.slice(0, limit).map(p => ({ ...p, fio: имя(p) })),
+    // ЛЮДЕЙ, а не выдач: после перехода границы каждая следующая выдача тоже
+    // помечена, и десять по 20 000 одному человеку давали «Выдано вперёд · 5».
+    // Все остальные пункты «Требует внимания» считают людей — единица измерения
+    // внутри одного списка обязана быть одна.
+    ahead: new Set(живые.filter(p => p.given_ahead).map(p => p.employee_id)).size,
+  };
+}
+
+// Месяцы словами — зеркало ru_period() в базе. Демо и прод должны писать в
+// журнал ОДИНАКОВО, иначе проверить формулировку в демо нельзя.
+const MONTHS_RU = ['январь','февраль','март','апрель','май','июнь',
+  'июль','август','сентябрь','октябрь','ноябрь','декабрь'];
 // Фильтры журнала — ОДНО определение на оба стора, чтобы демо и прод судили
 // одинаково (демо-режим уже трижды вводил в заблуждение расхождением с продом).
 // premia не отдельный entity, а money_line с 'премия' в field (log_money_line
@@ -102,10 +126,11 @@ const DEMO_SEED = {
     { id: 4, employee_id: 2, fio: 'Петров Сергей Иванович', paid_on: '2026-07-08', paid_at: '09:30', service: 'Операция', amount_kop: 1200000, reverses_id: null, is_import: true },
   ],
   // Пара подтверждённых выдач для секции «Последние выдачи» в обзоре владельца.
-  payouts: [
-    { id: 1, employee_id: 1, fio: 'Иванова Мария Петровна', amount_kop: 4000000, status: 'confirmed', confirmed_at: '2026-07-05T09:12:00', is_self_payout: false },
-    { id: 2, employee_id: 2, fio: 'Петров Сергей Иванович', amount_kop: 3500000, status: 'confirmed', confirmed_at: '2026-07-05T09:05:00', is_self_payout: false },
-  ],
+  // Выдач в сиде НЕТ. Раньше тут лежали две «для красоты» — без поля period и на
+  // сотрудников, которых в пустом демо не существует: плитка «Выдано наличными»
+  // честно считала 0 ₽, а список рядом рисовал 75 000 ₽. Демо стартует пустым,
+  // как и всё остальное.
+  payouts: [],
   nextId: { specialty: 5, employee: 1, journal: 1, line: 1, schedule: 1, retro: 1, patient: 5, payout: 3 },
 };
 
@@ -134,12 +159,14 @@ export class MockStore {
   dayExpired() { return false; }   // в демо суточного сброса нет — там и данных настоящих нет
   me() { return this.user; }
 
-  _log(action, entity, entityId, field, oldV, newV) {
+  // red — последним и необязательным: у всех прежних вызовов его нет, и они
+  // должны продолжать работать без правок.
+  _log(action, entity, entityId, field, oldV, newV, red) {
     this.db.journal.unshift({
       id: this.db.nextId.journal++,
       actor: this.user?.name || '?', action, entity, entity_id: entityId,
       field: field || null, old_value: oldV ?? null, new_value: newV ?? null,
-      at: new Date().toISOString(),
+      red: !!red, at: new Date().toISOString(),
     });
   }
 
@@ -308,6 +335,13 @@ export class MockStore {
         otpusk_nach_kop: sum('otpusk_nach'),   // начисление, не выплата: ни в to_pay, ни в delta
         card_avans_kop: sum('card_avans'), card_rasch_kop: sum('card_rasch'),
         to_pay_kop: cash + premia + otpuskCash,
+        // Выданное на руки (085). Без этой строки демо не показывало фичу вовсе:
+        // плитка «Выдано наличными» на «Обзоре» вечно 0 ₽, а сигнал «Выдано
+        // вперёд» не мог сработать от настоящей выдачи. Как в базе — сумма всех
+        // confirmed, сторно уже минусовое.
+        paid_kop: (this.db.payouts || [])
+          .filter(p => p.employee_id === e.id && p.period === period && p.status === 'confirmed')
+          .reduce((s, p) => s + (p.amount_kop || 0), 0),
         unchecked_kop: premia + otpuskCash,
         // + премия: она деньги, которые человеку ЕЩЁ надо выдать (миграция 059).
         // Демо обязано считать так же, как прод, иначе оно врёт увереннее прода.
@@ -633,9 +667,94 @@ export class MockStore {
     return { rows, hasMore: arr.length > limit, lastId: rows.length ? rows[rows.length - 1].id : null };
   }
   async listRedRemarks(limit = 50) { return (this.db.journal || []).filter(j => j.red).slice(0, limit); }
-  async listRecentPayouts(limit = 5) {
-    return (this.db.payouts || []).filter(p => p.status === 'confirmed')
-      .sort((a, b) => String(b.confirmed_at || '').localeCompare(String(a.confirmed_at || ''))).slice(0, limit);
+  async listRecentPayouts(limit = 5, period = null) {
+    const все = (this.db.payouts || [])
+      .filter(p => p.status === 'confirmed' && (!period || p.period === period))
+      .sort((a, b) => String(b.confirmed_at || '').localeCompare(String(a.confirmed_at || '')));
+    return сводкаВыдач(все, limit, p => p.fio || '—');
+  }
+  /* Выдача наличных (085) в демо. Правила базы повторяем ровно те, что проверить
+     глазами: выдачу не удалить и не переписать, ошибку гасят МИНУСОВОЙ строкой,
+     сторно одно на выдачу и сторно не сторнируют. Без этого демо показывало бы
+     кнопку, которая «всегда работает», и первое же несовпадение вылезло бы
+     на проде. Скрытую ЗП тут не изображаем — в демо её нет. */
+  async listPayouts(employee_id, period) {
+    return (this.db.payouts || [])
+      .filter(p => p.employee_id === employee_id && p.period === period && p.status === 'confirmed')
+      .sort((a, b) => a.id - b.id);
+  }
+  async payoutGive(employee_id, period, amount_kop, note) {
+    if (!['owner', 'operator', 'ceo', 'cashier1', 'cashier2'].includes(this.user?.role))
+      throw new Error('Нет права выдавать наличные этому сотруднику');
+    if (!(amount_kop > 0)) throw new Error('Сумма выдачи должна быть больше нуля');
+    const emp = (this.db.employees || []).find(e => e.id === employee_id);
+    if (!emp) throw new Error('Сотрудник не найден');
+    // Тот же запрет, что в базе (payout_give + CHECK payout_period_not_future_chk):
+    // без него демо разрешало то, на чём прод откажет.
+    const мес = new Date().toISOString().slice(0, 7);
+    if (period > мес) throw new Error('Нельзя выдать за будущий месяц');
+    // Старый localStorage мог не знать про payout — иначе id = NaN и кнопка
+    // «Отменить» молча ничего не делает. Тот же приём, что для retro.
+    if (!this.db.nextId.payout) this.db.nextId.payout = 1;
+    const id = this.db.nextId.payout++;
+    // Сам себе? В демо у пользователей связи с карточкой нет, поэтому тут почти
+    // всегда false — но правило то же, что в базе, и подставить её можно руками.
+    const себе = !!(this.user?.employee_id && this.user.employee_id === employee_id);
+    this.db.payouts = this.db.payouts || [];
+    // Держим ССЫЛКУ на созданную строку: given_ahead проставляется ниже, уже
+    // после await, и «последняя в массиве» к тому моменту может быть чужой.
+    const строкаВыдачи = { id, employee_id, fio: emp.fio, period, amount_kop,
+      status: 'confirmed', confirmed_at: new Date().toISOString(), code_sent_at: null,
+      reverses_id: null, cancel_reason: null, is_self_payout: себе,
+      note: (note || '').trim().slice(0, 200) || null, given_ahead: false };
+    this.db.payouts.push(строкаВыдачи);
+    // Красным помечает ТОЛЬКО выдача вперёд — «сам себе» больше не тревога
+    // (Дарина 04.08). Основание то же, что в базе: выдано за месяц больше, чем
+    // «Осталось выдать».
+    const дано = (this.db.payouts || [])
+      .filter(p => p.employee_id === employee_id && p.period === period && p.status === 'confirmed')
+      .reduce((s, p) => s + (p.amount_kop || 0), 0);
+    const строка = (await this.listPayroll(period)).find(x => x.employee_id === employee_id);
+    const вперёд = дано > (строка?.delta_kop || 0);
+    строкаВыдачи.given_ahead = вперёд;
+    // Месяц и «задним числом» — как в триггере (085): без них демо не показывало
+    // ровно те две вещи, которые туда и добавляли.
+    // Предыдущий месяц считаем ДАТОЙ, а не вычитанием единицы из строки: в январе
+    // «01 − 1» давало «2026-00», и декабрь — прошлый месяц! — уезжал в «задним
+    // числом», хотя база его таковым не считает. Проверено на границе года.
+    const сег = new Date(), пред = new Date(Date.UTC(сег.getFullYear(), сег.getMonth() - 1, 1));
+    const назад = period < пред.toISOString().slice(0, 7);
+    this._log('created', 'payout', id,
+      (вперёд ? 'ВЫДАНО ВПЕРЁД, без кода · ' : 'ВЫДАНО, без кода · ') + emp.fio
+        + ' · ' + MONTHS_RU[Number(period.slice(5)) - 1] + ' ' + period.slice(0, 4)
+        + (назад ? ' · ЗАДНИМ ЧИСЛОМ' : '')
+        + ((note || '').trim() ? ' · ' + note.trim().slice(0, 200) : ''), null,
+      (Math.round(amount_kop/100)).toLocaleString('ru-RU') + ' ₽', вперёд || назад);
+    this._save(); return id;
+  }
+  async payoutReverse(payout_id, reason) {
+    if (!['owner', 'operator', 'ceo', 'cashier1', 'cashier2'].includes(this.user?.role))
+      throw new Error('Нет права отменять выдачу');
+    const src = (this.db.payouts || []).find(p => p.id === payout_id);
+    if (!src) throw new Error('Выдача не найдена');
+    if (src.reverses_id) throw new Error('Это сторно, его не отменяют');
+    if (src.status !== 'confirmed') throw new Error('Отменяют только состоявшуюся выдачу');
+    if ((this.db.payouts || []).some(p => p.reverses_id === payout_id)) throw new Error('Эту выдачу уже отменили');
+    if (!this.db.nextId.payout) this.db.nextId.payout = 1;
+    const id = this.db.nextId.payout++;
+    this.db.payouts.push({ id, employee_id: src.employee_id, fio: src.fio, period: src.period,
+      amount_kop: -src.amount_kop, status: 'confirmed', confirmed_at: new Date().toISOString(),
+      code_sent_at: null, reverses_id: src.id, cancel_reason: (reason || '').trim().slice(0, 200) || null,
+      // В базе колонка NOT NULL DEFAULT false — в демо строка сторно тоже должна
+      // иметь false, а не undefined: «демо == прод» проверяется по значениям.
+      given_ahead: false,
+      is_self_payout: false });
+    this._log('created', 'payout', id,
+      'ОТМЕНА выдачи · ' + src.fio
+        + ' · ' + MONTHS_RU[Number(src.period.slice(5)) - 1] + ' ' + src.period.slice(0, 4)
+        + ((reason || '').trim() ? ' · ' + reason.trim().slice(0, 200) : ''),
+      null, '−' + (Math.round(src.amount_kop/100)).toLocaleString('ru-RU') + ' ₽', true);
+    this._save(); return id;
   }
   // Зеркало присутствия (083) для демо: одна «вкладка» — сам вошедший. Смысл не
   // в многопользовательности, а в том, чтобы блок на «Обзоре» было на чём проверить.
@@ -732,7 +851,11 @@ export class MockStore {
     // делалась. Правила те же: часть сущностей кладёт в entity_id самого
     // сотрудника, часть — номер своей строки, и его надо разрешать поиском.
     const BY_EMP = ['employee', 'employee_month_norm', 'month_carry', 'salary_override', 'doctor_month_revenue'];
-    const SRC = { schedule: 'schedule', money_line: 'money', rate_line: null };
+    // payout — как money_line: в entity_id номер СВОЕЙ строки, сотрудника и месяц
+    // достаём поиском. Без этой строки каждая выдача в демо-журнале писалась бы
+    // «сотрудник не определён», и ветку срезки ФИО, дописанную ради 085, в демо
+    // было бы не проверить — при том что в базе journal_fill_subject их ставит.
+    const SRC = { schedule: 'schedule', money_line: 'money', rate_line: null, payout: 'payouts' };
     const rows = arr.slice(0, limit).map(j => {
       let subject_id = j.employee_id ?? null, subject_date = j.ref_date ?? null;
       if (subject_id == null) {
@@ -1200,12 +1323,54 @@ export class SupabaseStore {
   }
   // Последние выданные наличные для обзора владельца. payout_sel пускает owner ко
   // всем строкам; employee embed'ится по FK payout_employee_id_fkey.
-  async listRecentPayouts(limit = 5) {
-    const { data, error } = await this.sb.from('payout')
-      .select('*, emp:employee(fio)').eq('status', 'confirmed')
-      .order('confirmed_at', { ascending: false }).limit(limit);
+  async listRecentPayouts(limit = 5, period = null) {
+    // Из этого списка убираем ДВА вида строк: сами сторно (они тоже confirmed и
+    // выглядели бы как обычная выдача, только с минусом) и выдачи, которые уже
+    // отменили — «последние выдачи» должны быть тем, что реально отдано.
+    // Берём с запасом и отсеиваем на клиенте: сторно всегда НОВЕЕ своей выдачи,
+    // поэтому если выдача попала в окно, её отмена тоже в нём — отбор точный.
+    // Месяцем ограничиваем: «Обзор» весь помесячный, и плитка «Выдано наличными»
+    // рядом — тоже. Без этого под июлем показывались бы августовские выдачи.
+    // Берём ВЕСЬ месяц, а не первые сорок: тем же запросом считаем, сколько за
+    // месяц выдано вперёд, и на усечённом окне этот счёт молча врал бы. Строки
+    // крошечные, выдач за месяц столько же, сколько людей.
+    // Явный список колонок, а не `*`: на «Обзоре» это в одном Promise.all с
+    // расчётом, а канал у клиники плохой. `note`/`cancel_reason` по 200 символов
+    // здесь не нужны вовсе, и семнадцать колонок ради пяти строк — расточительство.
+    let q = this.sb.from('payout')
+      .select('id, employee_id, amount_kop, confirmed_at, code_sent_at, reverses_id, given_ahead, is_self_payout, emp:employee(fio)')
+      .eq('status', 'confirmed');
+    if (period) q = q.eq('period', period + '-01');
+    const { data, error } = await q.order('confirmed_at', { ascending: false });
     if (error) throw error;
-    return (data || []).map(p => ({ ...p, fio: p.emp?.fio || '—' }));
+    return сводкаВыдач(data || [], limit, p => p.emp?.fio || '—');
+  }
+  /* Выдача наличных из рук в руки (085). Пишем ТОЛЬКО через RPC: политик
+     insert/update на payout нет и не будет — кассира и статус ставит сервер,
+     иначе «кто выдал» стало бы полем, которому нельзя верить. */
+  async listPayouts(employee_id, period) {
+    // ТОЛЬКО confirmed: так же считают v_month_payout и триггер переплаты.
+    // СМС-ветка жива (статусы pending/cancelled/expired разрешены схемой), и
+    // строка в любом из них попала бы в «уже выдано» — человека недоплатили бы
+    // на её сумму, а флаг переплаты промолчал.
+    const { data, error } = await this.sb.from('payout')
+      .select('*').eq('employee_id', employee_id).eq('period', period + '-01')
+      .eq('status', 'confirmed').order('id', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }
+  async payoutGive(employee_id, period, amount_kop, note) {
+    const { data, error } = await this.sb.rpc('payout_give',
+      { p_employee_id: employee_id, p_period: period + '-01', p_amount_kop: amount_kop,
+        p_note: note || null });
+    if (error) throw error;
+    return data;
+  }
+  async payoutReverse(payout_id, reason) {
+    const { data, error } = await this.sb.rpc('payout_reverse',
+      { p_payout_id: payout_id, p_reason: reason || null });
+    if (error) throw error;
+    return data;
   }
   // Keyset-пагинация по id (не offset): журнал append-only, новые записи сверху,
   // при offset они сдвигали бы страницы — строки дублировались бы или терялись.

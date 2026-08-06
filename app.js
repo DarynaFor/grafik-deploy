@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=95';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=104';
 
 const $ = id => document.getElementById(id);
 
@@ -676,6 +676,15 @@ async function loadPresence() {
 }
 const ROLE_LABELS = { owner: 'владелец', operator: 'оператор', cashier1: 'касса · Бух 1', cashier2: 'карта / 1С · Бух 2', ceo: 'директор' };
 const isStaff = () => ['owner', 'operator', 'ceo'].includes(store.me()?.role);   // кто работает с карточками
+/* Кто выдаёт наличные из рук в руки (085). Кассы (cashier1/2) в списке есть, но
+   СЕГОДНЯ до окна не доходят: «Расчёт» — staffOnly, а v_month_total им отдаёт
+   ноль строк. То есть право у них пока теоретическое; список держим таким же,
+   как can_pay_out в базе, чтобы два перечня не разошлись, когда кассу пустят.
+   Скрытую ЗП тут НЕ проверяем и проверять нечем — фронт про hidden_salary не
+   знает; но человека, которого роли не видно, нет и в payrollRows, а окно
+   открывается только оттуда. Последнее слово за базой: payout_give спрашивает
+   can_pay_out и откажет, что бы ни решил экран. */
+const canPayOut = () => ['owner', 'operator', 'ceo', 'cashier1', 'cashier2'].includes(store.me()?.role);
 // График ведёт оператор (Алёна) с переданных головами отделений листов. Владелец
 // (Милена) тоже может править — чтобы протестировать и объяснить Алёне, а также
 // поправить как надзор (решение Дарины 27.07: раньше владелец был только-просмотр).
@@ -1264,7 +1273,10 @@ function confirmBigAmounts(amounts) {
     const list = amounts.map(a => `<b>${fmt(a)} ₽</b>`).join(', ');
     // ВТОРОЙ слой (showModal2): диалог ложится ПОВЕРХ формы, а не затирает её —
     // иначе «Исправить» возвращал бы в пустоту, потеряв весь ввод карточки.
-    showModal2(`<h3>Проверьте сумму</h3><div class="msub">Крупная ставка — это точно не опечатка?</div>
+    // «сумма», а не «ставка»: окно общее на семь мест — ставки, внесение денег,
+    // выручка и выдача наличных на руки. Про ставку оно говорило и там, где
+    // ставки нет и в помине.
+    showModal2(`<h3>Проверьте сумму</h3><div class="msub">Крупная сумма — это точно не опечатка?</div>
       <div class="rc-diff"><div>Вводите: ${list}</div></div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="baNo">Исправить</button>
         <button class="btn btn-primary btn-sm" id="baYes">${ICONS.check}Да, всё верно</button></div>`);
@@ -3236,7 +3248,7 @@ const J_ENTITY = { employee: 'Карточка', rate_line: 'Ставка', spec
   schedule: 'График', closed_day: 'День', day: 'День', import_batch: 'Импорт',
   // без этих подписей владелец видит сырые имена таблиц вместо человеческой строки
   salary_override: 'Финальная сумма', employee_month_norm: 'Норма часов',
-  doctor_month_revenue: 'Выручка врача' };
+  doctor_month_revenue: 'Выручка врача', payout: 'Выдача наличных' };
 const J_FIELD = { fio: 'ФИО', position: 'должность', phone: 'телефон', status: 'статус', specialty: 'специальность', specialty_id: 'специальность', norm_hours: 'норма часов', week_hours: 'рабочая неделя', hired_on: 'принят', left_on: 'уволен', 'новая строка': 'новая строка', 'закрыта': 'строка закрыта', 'ставка добавлена': 'ставка добавлена', 'ставка закрыта': 'ставка закрыта' };
 // Действия, которые надо ПОКАЗАТЬ, а не проглотить: раньше j.action только
 // сравнивался с 'created' и никогда не выводился — то есть «сторно», единственное
@@ -3610,6 +3622,57 @@ function confirmStorno(row) {
   });
 }
 
+/* Подтверждение выдачи наличных (085). Своё окно, а не системный confirm: во
+   всём остальном приложении подтверждения свои, и здесь тем более — это
+   единственная проверка, которая вообще стоит между кнопкой и отданными из
+   рук деньгами. Называем обе вещи, в которых ошибаются: КОМУ и СКОЛЬКО. */
+function confirmGive(fio, kop, per, осталось) {
+  // Выдача ВПЕРЁД — не ошибка, а обычное дело (Дарина 04.08: «дають наперед…
+  // перед відпусткою, ще людина не заробила їх, а їй на відпустку видали
+  // одразу»). Поэтому не запрещаем и не ругаемся, а объясняем, что запись будет
+  // красной, и предлагаем сказать ПОЧЕМУ. Причина едет в журнал рядом с суммой:
+  // без неё владелица видит красную строку и не знает, аванс это или ошибка кассы.
+  const вперёд = kop - (осталось || 0);
+  return new Promise(resolve => {
+    showModal2(`<h3>Выдать наличными на руки?</h3>
+      <div class="msub">${esc(fio)} · ${esc(periodLabel(per))}</div>
+      <div class="rc-warn">К выдаче <b>${rub(kop)} ₽</b>. СМС-кода нет — подтверждаете вы.
+        Запись сразу уйдёт владельцу в журнал: кому, сколько и когда.
+        ${вперёд > 0 ? `<br><br><b>Это выдача вперёд.</b> ${вперёд >= 100
+            ? `На <b>${rub(вперёд)} ₽</b> больше, чем человек заработал на этот момент.`
+            : 'Чуть больше, чем человек заработал на этот момент.'}
+          Так можно — но владелец увидит запись красной, поэтому лучше сказать, за что.` : ''}</div>
+      ${вперёд > 0 ? `<input class="input" id="gvWhy" autocomplete="off" maxlength="200" style="margin-top:10px;width:100%"
+        placeholder="за что (необязательно): напр. «вперёд, перед отпуском»">` : ''}
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="gvNo">Отмена</button>
+        <button class="btn btn-primary btn-sm" id="gvYes">${ICONS.check}Выдал</button></div>`);
+    modalOnClose2 = () => resolve(null);           // крестик = «Отмена» (Escape тут не ловится: guard)
+    $('gvNo').onclick = () => { resolve(null); closeModal2(); };
+    // Возвращаем СТРОКУ (пусть и пустую), а не true: null означает «передумал».
+    $('gvYes').onclick = () => { const v = $('gvWhy')?.value || ''; resolve(v); closeModal2(); };
+  });
+}
+
+/* Отмена выдачи. Причина необязательна (решение Дарины: «просто робимо запис
+   про скасування і все»), поэтому поле есть, но пустое не мешает. Возвращаем
+   либо строку причины, либо null — и null означает именно «передумал»:
+   системный prompt отличить «Отмена» от пустого ввода нормально не даёт. */
+function confirmUnpay(fio, kop) {
+  return new Promise(resolve => {
+    showModal2(`<h3>Отменить выдачу?</h3>
+      <div class="msub">${esc(fio)} · ${rub(kop)} ₽</div>
+      <div class="rc-warn">Запись не удаляется. Рядом встанет встречная на <b>−${rub(kop)} ₽</b>,
+        и обе останутся видны владельцу в журнале.</div>
+      <input class="input" id="upWhy" placeholder="причина (необязательно): напр. «ошиблась суммой»"
+        autocomplete="off" maxlength="200" style="margin-top:10px;width:100%">
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="upNo">Назад</button>
+        <button class="btn btn-primary btn-sm" id="upYes">${ICONS.check}Отменить выдачу</button></div>`);
+    modalOnClose2 = () => resolve(null);           // крестик = «Назад» (Escape тут не ловится: guard)
+    $('upNo').onclick = () => { resolve(null); closeModal2(); };
+    $('upYes').onclick = () => { const v = $('upWhy').value || ''; resolve(v); closeModal2(); };
+  });
+}
+
 /* Здесь был автоматический «Отпускных осталось выплатить» = начислено − карта −
    наличные. УБРАН НАМЕРЕННО: обе суммы брались из ОДНОГО месяца, а весь смысл
    отдельной графы «начислено» в том, что начислить могут в июле, а выплатить в
@@ -3975,6 +4038,8 @@ async function payrollDialog(empId) {
       <button class="btn btn-ghost btn-sm" id="pmToCard">${ICONS.user || ''}Карточка</button>
       <button class="btn btn-ghost btn-sm" id="pmToSched">${ICONS.calendar || ''}График</button>
     </div>
+    ${canPayOut() ? `<label class="flbl" style="margin-top:12px">Выдача наличных на руки</label>
+      <div id="pmPay" class="pm-pay"><span class="muted small">загружаем…</span></div>` : ''}
     <label class="flbl" style="margin-top:12px">Кто внёс и когда</label>
     <div id="pmHist" class="pm-hist"><span class="muted small">загружаем…</span></div>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="pmClose">Закрыть</button></div>`);
@@ -3987,6 +4052,103 @@ async function payrollDialog(empId) {
   if ($('pmToCard')) $('pmToCard').onclick = () => focusOn('employees', empId) || openCard(empId);
   if ($('pmToSched')) $('pmToSched').onclick = () => focusOn('schedule', empId);
   $('pmClose').onclick = closeModal;
+
+  /* ── Выдача наличных на руки (085) ──────────────────────────────────────
+     Показываем ТРИ числа и одну кнопку. Основание — delta_kop, то самое
+     «Осталось выдать» из шапки. Решает payout_give — один раз, в момент выдачи,
+     и кладёт ответ в payout.given_ahead. На экранах эту разницу больше НЕ
+     пересчитывают: delta_kop движется весь месяц (бухгалтер заносит карту), и
+     законная выдача сама становилась бы нарушением. «Обзор» читает готовый
+     признак и считает по нему ЛЮДЕЙ.
+     Ошибку не правим и не удаляем: рядом встаёт минусовая строка, обе видны.  */
+  // Метка «чьё окно открыто». Пока идёт запрос, окно успевают закрыть или открыть
+  // ДРУГОГО человека — а `$('pmPay')` тогда найдёт узел уже чужой модалки и мы
+  // впишем туда выдачи не того. Тот же приём, что payrollShown у таблицы.
+  $('modalBox').dataset.pmEmp = String(empId);
+  const моё = () => $('pmPay') && $('modalBox').dataset.pmEmp === String(empId)
+    && $('modalOv').classList.contains('show');   // именно первый слой, а не «любая модалка»
+  const loadPay = async () => {
+    if (!моё()) return;
+    try {
+      const list = await store.listPayouts(empId, per);
+      if (!моё()) return;
+      const дано = list.reduce((s, p) => s + (p.amount_kop || 0), 0);   // сторно уже минусовое
+      // ОСНОВАНИЕ = delta_kop, то самое «Осталось выдать» из шапки. Сначала здесь
+      // стоял to_pay_kop («записано в кассу наличными»), и на живых данных это
+      // оказалось почти всегда НОЛЬ: за июль 2026 он положителен у двух человек
+      // из 99, тогда как на руки причитается семидесяти восьми. Экран показывал
+      // бы «к выдаче 0 ₽» тем, кому должны сто пятьдесят тысяч, а каждая
+      // настоящая выдача уходила бы в журнал красной «выдано больше
+      // назначенного». Тот же delta_kop теперь берёт и триггер log_payout —
+      // основание должно быть ОДНО, иначе флаг переплаты врёт по построению.
+      const назначено = r.delta_kop || 0;
+      const осталось = назначено - дано;
+      const отменено = new Set(list.filter(p => p.reverses_id).map(p => p.reverses_id));
+      const строки = list.filter(p => !p.reverses_id).map(p => {
+        const мёртвая = отменено.has(p.id);
+        return `<div class="pm-ev${мёртвая ? ' pm-dead' : ''}">
+          <span><b>${rub(p.amount_kop)} ₽</b>${p.is_self_payout ? ' <b class="jact">себе</b>' : ''}
+            ${мёртвая ? '' : `<button class="btn btn-ghost btn-sm pm-unpay" data-id="${p.id}">Отменить</button>`}</span>
+          <span class="muted small">${esc(fmtDT(p.confirmed_at))}${p.note ? ' · ' + esc(p.note) : ''}${мёртвая ? ' · отменено' : ''}</span>
+        </div>`;
+      }).join('');
+      $('pmPay').innerHTML =
+        `<div class="me-row"><span class="muted">Осталось выдать за месяц</span><b class="money${назначено < 0 ? ' neg' : ''}">${rub(назначено)} ₽</b></div>
+         <div class="me-row"><span class="muted">Уже выдано на руки</span><b class="money">${rub(дано)} ₽</b></div>
+         <div class="me-row me-sum"><span>К выдаче сейчас</span><b class="money${осталось < 0 ? ' neg' : ''}">${rub(осталось)} ₽</b></div>
+         <div class="me-add" style="margin-top:8px">
+           <input class="input" id="pmPaySum" placeholder="сумма ₽" autocomplete="off" inputmode="numeric"
+             value="${осталось >= 100 ? fmt(Math.floor(осталось / 100)) : ''}">
+           <button class="btn btn-primary btn-sm" id="pmPayGive">${ICONS.check}Выдал</button>
+         </div>
+         <div class="msub">Подтверждаете вы: сумма перед глазами, СМС-кода нет. Запись сразу уходит владельцу в журнал — кому, сколько и когда. Ошиблись — «Отменить», запись останется, рядом встанет минусовая.</div>
+         ${строки || '<span class="muted small">Наличными на руки пока не выдавали</span>'}`;
+
+      // Enter в поле суммы = «Выдал», как у соседнего «Внести деньги». Подтверждение
+      // всё равно спросят отдельным окном, случайно ничего не уйдёт.
+      $('pmPaySum').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('pmPayGive').click(); } };
+      $('pmPayGive').onclick = async () => {
+        const b = $('pmPayGive'); if (b.disabled) return;
+        // parseNum отдаёт РУБЛИ (как во всех денежных полях), в базу идут копейки.
+        let руб;
+        try { руб = parseNum($('pmPaySum').value, { field: 'сумму выдачи', thousands: true, max: RATE_ABSURD }); }
+        catch (err) { return toast(err.message, true); }
+        if (руб == null || руб <= 0) return toast('Укажите сумму больше 0', true);
+        if (руб > RATE_CONFIRM && !(await confirmBigAmounts([руб]))) return;
+        const kop = Math.round(руб * 100);
+        const заЧто = await confirmGive(r.fio, kop, per, осталось);
+        if (заЧто === null) return;                 // «Отмена», крестик, Escape
+        b.disabled = true;
+        try {
+          await store.payoutGive(empId, per, kop, заЧто);
+          toast(ICONS.check + 'Выдано ' + rub(kop) + ' ₽');
+        } catch (e) { toast(e.message || e, true); }
+        // Перечитываем ВСЕГДА, и после ошибки тоже. Запрос мог дойти до базы и
+        // записаться, а ответ — потеряться (таймаут, шлюз): человек видит
+        // «не удалось», сумма осталась в поле, жмёт второй раз — и в реестре
+        // наличных две выдачи. Повтор здесь законен (две выдачи за месяц —
+        // норма), поэтому единственная защита — показать, прошло или нет.
+        finally {
+          await loadPay();
+          if ($('pmPayGive')) $('pmPayGive').disabled = false;
+        }
+      };
+      $('pmPay').querySelectorAll('.pm-unpay').forEach(b => b.onclick = async () => {
+        const p = list.find(x => x.id === +b.dataset.id); if (!p) return;
+        const причина = await confirmUnpay(r.fio, p.amount_kop);
+        if (причина === null) return;                // «Назад», крестик, Escape
+        b.disabled = true;
+        // finally, как и у выдачи: сторно могло пройти, а ответ потеряться —
+        // тогда без перечитывания список показывал бы отменённую выдачу живой.
+        try { await store.payoutReverse(p.id, причина); toast('Выдача отменена'); }
+        catch (e) { toast(e.message || e, true); }
+        finally { await loadPay(); }
+      });
+    } catch (e) {
+      if (моё()) $('pmPay').innerHTML = `<span class="muted small">Не удалось загрузить выдачи: ${esc(e.message || e)}</span>`;
+    }
+  };
+  loadPay();
 
   const loadHist = async () => {
     try {
@@ -4099,7 +4261,6 @@ function shiftOvMonth(d) { if (!ovPeriod) ovPeriod = nowPeriod(); let [y, m] = o
 // Порядок массива = порядок показа. Клик ведёт на «Расчёт», где это видно построчно.
 // key может быть строкой-колонкой флага ИЛИ функцией-предикатом (r)=>bool.
 const OV_ALERTS = [
-  { key: 'flag_overpaid', red: true, t: 'Выдано больше назначенного', d: 'проверьте кассу — это не должно случаться' },
   { key: 'flag_money_without_calc', red: true, t: 'Деньги есть, а расчёта нет', d: 'выплата без начисления под ней' },
   // Δ (начислено − записано) — проверка ПОЛНОТЫ расчёта, один из двух контролей
   // владельца. Раньше её на обзоре не было вовсе: если Алёна записывала наличку
@@ -4130,7 +4291,7 @@ async function renderOverview(reset = true) {
   let rows, remarks, payouts;
   try {
     [rows, remarks, payouts] = await Promise.all([
-      store.listPayroll(want), store.listRedRemarks(6), store.listRecentPayouts(5),
+      store.listPayroll(want), store.listRedRemarks(6), store.listRecentPayouts(5, want),
     ]);
   // Месяц не загрузился — откатываем ovPeriod к тому, что РЕАЛЬНО на экране, а не
   // только заголовок. Иначе расходятся три вещи: данные (старый месяц), ‹/› (шагали
@@ -4138,14 +4299,14 @@ async function renderOverview(reset = true) {
   // человек перешлёт — получатель уехал бы в месяц, которого отправитель не видел.
   } catch (e) { if (seq === ovSeq) { toast(e.message || e, true); ovPeriod = ovData?.period || want; workPeriod = ovPeriod; $('oLabel').textContent = periodLabel(ovPeriod); syncHash(false); } return; }
   if (seq !== ovSeq) return;                       // месяц сменили, пока грузили
-  ovData = { rows, remarks, payouts, period: want };
+  ovData = { rows, remarks, payouts: payouts?.list || [], aheadCnt: payouts?.ahead || 0, period: want };
   $('oLabel').textContent = periodLabel(want);
   drawOverview();
 }
 
 function drawOverview() {
   if (!ovData) return;
-  const { rows, remarks, payouts } = ovData;
+  const { rows, remarks, payouts, aheadCnt } = ovData;
   const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
   const salary = sum('salary_kop');
   // Плюсы и минусы НЕ складываем (решение Дарины 01.08). Раньше главное число
@@ -4212,14 +4373,24 @@ function drawOverview() {
   }).filter(Boolean);
   const remarkAlerts = (remarks || []).slice(0, 4).map(j =>
     `<button class="ov-alert red" data-go="journal-red"><span class="oa-ic">${ICONS.alert}</span><div><div class="oa-t">${esc(J_FIELD[j.field] || j.field || 'запись')}${j.new_value ? ' · ' + esc(j.new_value) : ''}</div><div class="oa-d">${esc(j.actor || '')} · ${esc(fmtDT(j.at))}</div></div></button>`);
-  const alerts = [...flagAlerts, ...remarkAlerts];
+  /* «Выдано вперёд» — отдельным пунктом, а не через колонку расчёта. Считаем по
+     given_ahead: этот признак поставлен в момент выдачи и не меняется НИКОГДА —
+     ни когда бухгалтер заносит карту, ни при сторно. Пересчитывать его нельзя:
+     тогда тревогу гасят, выдав и отменив копейку (см. 085, там разобрано).
+     И не полагаемся на красные записи журнала: их показываем всего четыре
+     последние, а красное пишет обычная работа (правка графика, сторно) — за
+     месяц таких записей сотни, и выдача уходила бы с экрана за минуты. */
+  const aheadAlert = aheadCnt
+    ? `<button class="ov-alert red" data-go="journal-payout"><span class="oa-ic">${ICONS.alert}</span><div><div class="oa-t">Выдано вперёд · ${aheadCnt}</div><div class="oa-d">на руки отдали больше, чем человек заработал к тому дню — проверьте, что так и задумано</div></div></button>`
+    : '';
+  const alerts = [aheadAlert, ...flagAlerts, ...remarkAlerts].filter(Boolean);
   const attention = alerts.length
     ? alerts.join('')
     : `<div class="ov-alert ok"><span class="oa-ic">${ICONS.check}</span><div><div class="oa-t">Всё в порядке</div><div class="oa-d">крупных расхождений, переплат и пробелов не видно</div></div></div>`;
 
   // Последние выдачи
   const paysHtml = (payouts && payouts.length) ? payouts.map(p =>
-    `<div class="jrow"><div class="oa-ic" style="color:var(--green)">${ICONS.check}</div><div style="flex:1"><div style="font-weight:700;font-size:13.5px">${esc(p.fio || '—')}${p.is_self_payout ? ' <span class="pd-rev">себе</span>' : ''}</div><div class="who">подтверждено кодом · ${esc(fmtDT(p.confirmed_at))}</div></div><div class="fin" style="font-weight:700;color:var(--green-d)">${rub(p.amount_kop)} ₽</div></div>`).join('')
+    `<div class="jrow"><div class="oa-ic" style="color:var(--green)">${ICONS.check}</div><div style="flex:1"><div style="font-weight:700;font-size:13.5px">${esc(p.fio || '—')}${p.is_self_payout ? ' <span class="pd-rev">себе</span>' : ''}</div><div class="who">${p.code_sent_at ? 'подтверждено кодом' : 'выдано без кода'} · ${esc(fmtDT(p.confirmed_at))}</div></div><div class="fin" style="font-weight:700;color:var(--green-d)">${rub(p.amount_kop)} ₽</div></div>`).join('')
     : `<div class="jrow" style="border:none"><div style="flex:1;color:var(--ink-3);font-size:13px">Выдач ещё не было</div></div>`;
 
   $('overviewBody').innerHTML = hero + bento
@@ -4236,6 +4407,11 @@ function drawOverview() {
     // который перешлют, так что расхождение стало видимым и заразным.
     if (b.dataset.go === 'payroll' && ovPeriod) payPeriod = ovPeriod;
     if (b.dataset.go === 'journal-red') { journalFilter = 'red'; go('journal'); renderJournal(true); }
+    // Ведём в Журнал с фильтром «Выдачи», а не на «Расчёт»: там нет ни колонки
+    // «выдано на руки», ни признака «вперёд», то есть узнать ИМЕНА было бы
+    // неоткуда — пришлось бы открывать сто диалогов. В журнале же строка
+    // называет и человека, и сумму, и месяц, и причину.
+    else if (b.dataset.go === 'journal-payout') { journalFilter = 'payout'; go('journal'); renderJournal(true); }
     else go(b.dataset.go);
   });
 }
@@ -4559,7 +4735,6 @@ const GAP_CHECKS = [
   { g: 0, t: 'Не заведена ставка', d: 'без ставки зарплата не считается вовсе', go: RATES_GO, test: e => cardGaps(e).rate },
   { g: 0, t: 'Ставка обрывается посреди месяца', d: 'часть дней не по чему считать', go: RATES_GO, test: (e, r) => !!r?.flag_rate_gap },
   { g: 0, t: 'Отрицательная зарплата', d: 'начислено меньше нуля — так быть не должно', go: 'payroll', test: (e, r) => (r?.salary_kop || 0) < 0 },
-  { g: 0, t: 'Переплата: выдано больше начисленного', d: 'проверьте кассу', go: 'payroll', test: (e, r) => !!r?.flag_overpaid },
   { g: 0, t: 'Деньги есть, а расчёта нет', d: 'выплата без начисления под ней', go: 'payroll', test: (e, r) => !!r?.flag_money_without_calc },
   // Порог тот же, что на Обзоре и в payrollDialog: сигналим, только когда
   // запись уже началась, иначе Δ ненулевая весь месяц по построению.
@@ -4794,8 +4969,22 @@ function journalRowHtml(j) {
   // карту»). Теперь имя стоит отдельной строкой сверху, и в тексте оно повторялось
   // дважды подряд. Срезаем повтор — трогаем только показ, сам журнал не меняем.
   const fld = String(j.field || '');
-  const fldShort = j.subject_fio && fld.startsWith(j.subject_fio + ' · ') ? fld.slice(j.subject_fio.length + 3) : fld;
-  if (j.action === 'created') what = `${J_ENTITY[j.entity] || esc(j.entity)} создана: <b>${esc(j.new_value || '')}</b>`;
+  // Срезаем и в начале, и в СЕРЕДИНЕ: старые триггеры ставят ФИО первым
+  // («Иванов И.И. · июль 2026 · …»), а 085 — после действия («ВЫДАНО, без кода ·
+  // Иванов И.И.»). Без второго случая строка выдачи печатала имя дважды подряд:
+  // отдельной строкой сверху и внутри текста.
+  const fldShort = !j.subject_fio ? fld
+    : fld.startsWith(j.subject_fio + ' · ') ? fld.slice(j.subject_fio.length + 3)
+    : fld.split(' · ' + j.subject_fio).join('');
+  // Обычная «создана» показывает только сумму — у большинства сущностей весь
+  // смысл и правда в new_value. Но у выдачи наличных он в ПОЛЕ: «ВЫДАНО, без
+  // кода», «ОТМЕНА выдачи · причина», «ВЫДАНО БОЛЬШЕ НАЗНАЧЕННОГО». Без этого
+  // владелица видела бы «Выдача создана: 40 000 ₽», то есть ровно то, ради чего
+  // писался текст в 085, до неё бы не дошло. Только payout: у остальных 499
+  // старых записей field свой и менять их показ мы не собирались.
+  if (j.action === 'created' && j.entity === 'payout' && fldShort)
+    what = `${esc(fldShort)}: <b>${esc(j.new_value || '')}</b>`;
+  else if (j.action === 'created') what = `${J_ENTITY[j.entity] || esc(j.entity)} создана: <b>${esc(j.new_value || '')}</b>`;
   else what = `${act}${J_ENTITY[j.entity] || esc(j.entity)} · ${J_FIELD[fldShort] || esc(fldShort)}: ${j.old_value ? `<s>${esc(j.old_value)}</s> → ` : ''}<b>${esc(j.new_value || '—')}</b>`;
   // У КОГО и за какой день — главное, чего журналу не хватало: строка «клетка:
   // → day 08:00» не давала ни имени, ни даты, и красный флаг «правка после
