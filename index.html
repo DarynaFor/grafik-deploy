@@ -19,7 +19,7 @@
 <meta name="theme-color" content="#0C0D10" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#EBE6DD" media="(prefers-color-scheme: light)">
 <script>(function(){try{var t=localStorage.getItem('milena-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-<link rel="stylesheet" href="styles.css?v=100">
+<link rel="stylesheet" href="styles.css?v=101">
 </head>
 <body>
 
@@ -84,6 +84,18 @@
         <div id="vacStat" class="sched-stat"></div>
       </div>
       <div id="vacBody"></div>
+    </section>
+
+    <section class="screen" id="s-archive">
+      <div class="page-head">
+        <div><h1>Архив</h1><p>Кого убрали из списка: когда, кем и остались ли за ним деньги. Отсюда же можно вернуть в активные.</p></div>
+      </div>
+      <div class="sched-tools">
+        <div class="search"><span data-ic="search"></span><input id="arcSearch" placeholder="Поиск по ФИО…" autocomplete="off"></div>
+        <label class="rt-toggle" title="Только те, за кем остались незакрытые деньги"><input type="checkbox" id="arcOnlyMoney"> с деньгами</label>
+        <div id="arcStat" class="sched-stat"></div>
+      </div>
+      <div id="arcBody"></div>
     </section>
 
     <section class="screen" id="s-employees">
@@ -234,7 +246,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
-<script type="module" src="app.js?v=131"></script>
+<script type="module" src="app.js?v=132"></script>
 <!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
      без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
      index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —

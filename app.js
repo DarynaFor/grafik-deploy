@@ -256,6 +256,7 @@ const NAV = [
   // спрятанный человек просто не появится ни в одной денежной группе.
   { s: 'gaps', i: 'alert', l: 'Пробелы', staffOnly: true },
   { s: 'vacation', i: 'cal', l: 'Отпуска', staffOnly: true },
+  { s: 'archive', i: 'users', l: 'Архив', ownerOnly: true },
   { s: 'employees', i: 'users', l: 'Сотрудники', staffOnly: true },
   { s: 'schedule', i: 'cal', l: 'График', staffOnly: true },
   { s: 'payroll', i: 'coin', l: 'Расчёт', staffOnly: true },
@@ -330,6 +331,7 @@ function go(screen, replace) {
   if (screen === 'overview') renderOverview();
   if (screen === 'gaps') renderGaps();
   if (screen === 'vacation') renderVacation();
+  if (screen === 'archive') renderArchive();
   if (screen === 'payroll') renderPayroll($('payrollSearch')?.value || '');
   // Грузим ВСЕГДА, как renderPayroll выше. Условие `patShown !== patPeriod` было
   // сломано дважды: при обоих null оно давало false и экран не открывался НИКОГДА;
@@ -396,6 +398,7 @@ const ROUTES = [
   // нельзя было ни прислать ссылкой, ни удержать в общем месяце.
   { s: 'gaps',        slug: 'probely',      arg: 'period' },
   { s: 'vacation',    slug: 'otpuska',      arg: 'period' },
+  { s: 'archive',     slug: 'arhiv' },
   { s: 'schedule',    slug: 'grafik',       arg: 'period' },
   { s: 'payroll',     slug: 'raschet',      arg: 'period' },
   { s: 'rates',       slug: 'stavki' },
@@ -4142,7 +4145,7 @@ function stickFooterRows(host) {
 
    «Была 4 минуты назад» вместо голого «офлайн» — ради этого всё и делалось:
    Милена заходит периодически и решает, писать человеку сейчас или он уже ушёл. */
-const SCREEN_RU = { overview: 'Обзор', gaps: 'Пробелы', vacation: 'Отпуска', employees: 'Сотрудники', card: 'Карточка',
+const SCREEN_RU = { overview: 'Обзор', gaps: 'Пробелы', vacation: 'Отпуска', archive: 'Архив', employees: 'Сотрудники', card: 'Карточка',
   schedule: 'График', payroll: 'Расчёт', rates: 'Ставки', patients: 'Оплаты пациентов',
   import: 'Импорт', specialties: 'Специальности', journal: 'Журнал', soon: '—' };
 function agoRu(iso) {
@@ -4202,6 +4205,90 @@ let gapsPeriod = null, gapsData = null, gapsSeq = 0;
    в «Расчёте» видны суммы, в «Графике» дни, вместе их никто не сводил.
    Отдельная таблица в базе не нужна — всё считается из того, что уже есть. */
 let vacPeriod = null, vacData = null, vacSeq = 0;
+
+/* ── АРХИВ ─────────────────────────────────────────────────────────────────
+   Архивных 31 человек, и увидеть их можно было только кнопкой «Показать архив»
+   внутри «Сотрудников» — то есть если знать, что она там есть. При этом за
+   архивным могут висеть деньги: Частухина отправили в архив с 27 000 ₽ к
+   выдаче, и заметили это случайно.
+   Экран отвечает на три вопроса: кто в архиве, когда его туда убрали и не
+   осталось ли за ним долга. Отсюда же возвращаем в активные. */
+let arcRows = [], arcSeq = 0;
+
+async function renderArchive() {
+  if (!isOwner()) { $('arcBody').innerHTML = ''; return; }
+  const seq = ++arcSeq;
+  let emps, pay;
+  try {
+    [emps, pay] = await Promise.all([store.listEmployees(), store.listPayroll(payPeriod || nowPeriod())]);
+  } catch (e) { if (seq === arcSeq) { $('arcBody').innerHTML = ''; toast(e.message || e, true); } return; }
+  if (seq !== arcSeq) return;
+  const money = new Map(pay.map(r => [r.employee_id, r]));
+  arcRows = emps.filter(e => e.status === 'archived').map(e => {
+    const r = money.get(e.id) || {};
+    return { id: e.id, fio: e.fio || '—', spec: specName(e.specialty_id),
+             left_on: e.left_on || null, delta: r.delta_kop || 0, salary: r.salary_kop || 0 };
+  }).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || a.fio.localeCompare(b.fio, 'ru'));
+  drawArchive();
+}
+
+function drawArchive() {
+  const f = ($('arcSearch')?.value || '').trim().toLowerCase();
+  const onlyMoney = !!$('arcOnlyMoney')?.checked;
+  const list = arcRows.filter(x => (!f || x.fio.toLowerCase().includes(f)) && (!onlyMoney || x.delta));
+  const withMoney = arcRows.filter(x => x.delta).length;
+  const noLeft = arcRows.filter(x => !x.left_on).length;
+  $('arcStat').innerHTML = `<span class="mini-chip neutral">${arcRows.length} чел</span>`
+    + (withMoney ? `<span class="mini-chip">с деньгами: ${withMoney}</span>` : '')
+    + (noLeft ? `<span class="mini-chip neutral">без даты увольнения: ${noLeft}</span>` : '');
+
+  $('arcBody').innerHTML = list.length ? `<div class="gridwrap"><table class="pw arc"><thead><tr>
+      <th class="pw-name">Сотрудник</th><th>Специальность</th><th>Дата увольнения</th>
+      <th class="num">Начислено</th><th class="num pw-pay">Осталось выдать</th><th></th></tr></thead><tbody>${
+    list.map(x => `<tr class="arc-row${x.delta ? ' arc-money' : ''}">
+      <td class="pw-name"><span class="pw-fio">${esc(x.fio)}</span>${
+        x.delta ? '<span class="mini-chip">остались деньги</span>' : ''}</td>
+      <td class="muted">${esc(x.spec)}</td>
+      <td>${x.left_on ? esc(dmy(x.left_on)) : '<span class="muted">не проставлена</span>'}</td>
+      <td class="num fin">${x.salary ? rub(x.salary) : '<span class="muted">—</span>'}</td>
+      <td class="num pw-pay fin">${x.delta ? `<b class="money${x.delta < 0 ? ' neg' : ''}">${rub(x.delta)}</b>` : '<span class="muted">—</span>'}</td>
+      <td class="num"><button class="btn btn-ghost btn-sm arc-back" data-id="${x.id}">Вернуть</button>
+        <button class="btn btn-ghost btn-sm arc-hist" data-fio="${esc(x.fio)}">История</button></td></tr>`).join('')
+    }</tbody></table></div>`
+    : `<div class="empty">${arcRows.length ? 'Никого не нашлось по этому условию.' : 'Архив пуст.'}</div>`;
+
+  $('arcBody').querySelectorAll('.arc-row .pw-name').forEach((td, i) =>
+    td.onclick = () => openCard(list[i].id));
+  // «История» — тот же журнал, но сразу отфильтрованный по этому человеку:
+  // ответ на «кто и когда его убрал» лежит именно там.
+  $('arcBody').querySelectorAll('.arc-hist').forEach(b => b.onclick = () => {
+    jWho = (b.dataset.fio.split(' ')[0] || '').trim(); jAct = jFrom = jTo = '';
+    go('journal'); renderJournal(true);
+  });
+  $('arcBody').querySelectorAll('.arc-back').forEach(b => b.onclick = async () => {
+    const x = list.find(y => y.id === +b.dataset.id); if (!x) return;
+    if (!(await confirmBack(x))) return;
+    b.disabled = true;
+    try { await store.updateEmployee(x.id, { status: 'active' });
+      toast(ICONS.check + 'Вернули в активные'); await refresh(); await renderArchive(); }
+    catch (e) { b.disabled = false; toast(e.message || e, true); }
+  });
+}
+
+function confirmBack(x) {
+  return new Promise(resolve => {
+    showModal(`<h3>Вернуть в активные?</h3>
+      <div class="msub">${esc(x.fio)}${x.delta ? ` · за ним остаётся <b>${rub(x.delta)} ₽</b>` : ''}</div>
+      <div class="msub" style="margin-top:8px">Человек снова появится в списках и графике,
+        и ему снова будет начисляться зарплата за отработанное.</div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="abNo">Отмена</button>
+        <button class="btn btn-primary btn-sm" id="abYes">${ICONS.check}Вернуть</button></div>`);
+    modalOnClose = () => resolve(false);
+    $('abNo').onclick = () => { resolve(false); closeModal(); };
+    $('abYes').onclick = () => { resolve(true); closeModal(); };
+  });
+}
+
 
 /* Дни отпуска идут подряд, поэтому показываем ПЕРИОДАМИ, а не списком чисел:
    «11–31 июля» вместо двадцати одной даты. Разрыв больше суток — новый период
@@ -4719,6 +4806,8 @@ $('empSearch').oninput = e => renderEmployees(e.target.value);
   if (p) p.onclick = () => shiftVac(-1);
   if (n) n.onclick = () => shiftVac(1); }
 { const vs = $('vacSearch'); if (vs) vs.oninput = () => drawVacation(); }
+{ const as = $('arcSearch'); if (as) as.oninput = () => drawArchive(); }
+{ const am = $('arcOnlyMoney'); if (am) am.onchange = () => drawArchive(); }
 { const vf = $('vacFlat'); if (vf) vf.onchange = () => drawVacation(); }
 { const mp = $('mPrev'), mn = $('mNext'); if (mp) mp.onclick = () => shiftMonth(-1); if (mn) mn.onclick = () => shiftMonth(1); }
 { const ss = $('schedSearch'); if (ss) ss.oninput = () => drawSchedule(); }
