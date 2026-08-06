@@ -1928,8 +1928,21 @@ function employeeForm(e) {
     specialties.map(s => `<option value="${s.id}" ${e?.specialty_id_2 === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
   showModal(`<h3>${e ? 'Редактировать карточку' : 'Новая карточка'}</h3><div class="msub">${ICONS.lock} ФИО, телефон и ставки заводит владелец — изменения попадут в журнал</div>
     <label class="flbl">ФИО</label><input class="input" id="mFio" value="${esc(e?.fio || '')}" placeholder="Фамилия Имя Отчество">
-    <div class="frow"><div><label class="flbl">Специальность</label><select class="input" id="mSpec">${so}</select></div>
+    <div class="frow"><div><label class="flbl">Специальность</label>
+      <div class="sp-pick"><select class="input" id="mSpec">${so}</select>
+        <button class="btn btn-ghost btn-sm" id="mSpecNew" type="button" title="Завести новую специальность">${ICONS.plus}</button></div></div>
     <div><label class="flbl">Должность</label><input class="input" id="mPos" value="${esc(e?.position === FIO_SENTINEL ? '' : (e?.position || ''))}" placeholder="напр. Заведующий"></div></div>
+    <!-- Милена 06.08: «Бухгалтер записан врачом. Я полезла редактировать, а там нет
+         возможности добавить название». Справочник правился ТОЛЬКО на отдельном
+         экране «Специальности» — то есть посреди правки карточки надо было уйти,
+         завести, вернуться и начать заново. Заводим прямо здесь, без вложенного
+         окна: модалка тут уже открыта, вторая поверх неё стёрла бы первую. -->
+    <div class="sp-new" id="mSpecNewBox" hidden>
+      <input class="input" id="mSpecName" placeholder="название, напр. Бухгалтер">
+      <input class="input" id="mSpecCat" list="catlist2" placeholder="категория">
+      <datalist id="catlist2">${[...new Set(specialties.map(s => s.category))].map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
+      <button class="btn btn-primary btn-sm" id="mSpecAdd" type="button">Добавить</button>
+    </div>
     <label class="flbl">Вторая работа</label><select class="input" id="mSpec2">${so2}</select>
     <div class="msub" style="margin-top:-4px">Заполните, если человек работает у нас на ДВУХ работах — дежурит по ночам или совмещает вторую должность. В «Графике» появится вторая строка: свои смены, свои часы, отдельная оплата по ставке-совместителю.</div>
     <label class="flbl">Телефон (для СМС)</label><input class="input" id="mPhone" type="tel" inputmode="tel" value="${esc(fmtPhone(e?.phone) || '')}" placeholder="+7 921 554-12-31">
@@ -1944,6 +1957,32 @@ function employeeForm(e) {
   const init = e ? activeLines(e) : [null];
   (init.length ? init : [null]).forEach(l => { box.insertAdjacentHTML('beforeend', lineBlockHtml(l)); wireLineBlock(box.lastElementChild, l); });
   $('mAddLine').onclick = () => { box.insertAdjacentHTML('beforeend', lineBlockHtml(null)); wireLineBlock(box.lastElementChild, null); };
+  // Новая специальность прямо из карточки. Форму НЕ перерисовываем — введённое
+  // (ФИО, телефон, строки начисления) осталось бы в старом DOM и пропало; просто
+  // дописываем вариант в список и сразу его выбираем.
+  $('mSpecNew').onclick = () => {
+    const b = $('mSpecNewBox'); b.hidden = !b.hidden;
+    if (!b.hidden) $('mSpecName').focus();
+  };
+  $('mSpecAdd').onclick = async () => {
+    const btn = $('mSpecAdd'); if (btn.disabled) return;
+    const name = $('mSpecName').value.trim();
+    if (!name) { $('mSpecName').focus(); return; }
+    btn.disabled = true;
+    try {
+      const sp = await store.addSpecialty(name, $('mSpecCat').value.trim() || 'Прочие');
+      specialties.push(sp);                       // список в памяти — чтобы и «Вторая работа» его увидела
+      for (const id of ['mSpec', 'mSpec2']) {
+        const sel = $(id); if (!sel) continue;
+        sel.insertAdjacentHTML('beforeend', `<option value="${sp.id}">${esc(sp.name)}</option>`);
+      }
+      $('mSpec').value = String(sp.id);           // ради чего и заводили — сразу ставим человеку
+      $('mSpecNewBox').hidden = true; $('mSpecName').value = ''; $('mSpecCat').value = '';
+      fillCatSelects();                           // фильтры по отделениям на других экранах
+      toast(ICONS.check + 'Добавлено: ' + esc(name));
+    } catch (err) { toast(err.message || err, true); }
+    finally { btn.disabled = false; }
+  };
   $('mCancel').onclick = closeModal;
   $('mSave').onclick = async () => {
     const btn = $('mSave'); if (btn.disabled) return; btn.disabled = true;   // защита от двойного клика

@@ -867,3 +867,12 @@ tr.pw-total.pw-over{z-index:5}
   /* Нижнее меню перекрывает экран — таблице оставляем место под него */
   #s-schedule.show,#s-payroll.show{padding-bottom:88px}
 }
+
+/* Новая специальность прямо в карточке (Милена 06.08: «нет возможности добавить
+   название»). Кнопка «+» рядом с выбором, поля разворачиваются под ним. */
+.sp-pick{display:flex;gap:6px;align-items:center}
+.sp-pick select{flex:1;min-width:0}
+.sp-pick .btn{flex:0 0 auto;padding:0 10px}
+.sp-new{display:flex;gap:6px;margin:8px 0 0;flex-wrap:wrap}
+.sp-new input{flex:1 1 140px;min-width:0}
+.sp-new .btn{flex:0 0 auto}
