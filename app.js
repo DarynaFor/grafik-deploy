@@ -1006,6 +1006,8 @@ async function loadCardPanel(id) {
       ${payRow('Премия', r.premia_kop, 'premia', canEdit)}
       ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
       ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
+      ${payRow('Своё начисление', r.nach_other_kop, 'nach_other', canEdit)}
+      ${payRow('Удержание', r.uderz_other_kop, 'uderz_other', canEdit)}
       <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
       ${(r.card_avans_kop || r.card_rasch_kop || r.card_uvol_kop || r.otpusk_kop
         || r.bolnich_kop || r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop)
@@ -3336,6 +3338,8 @@ const MONEY_KINDS = [
   ['otpusk_nach', 'Отпускные начислено (не выплата)'],
   ['bolnich_nach', 'Больничные начислено (не выплата)'],
   ['bolnich', 'Больничные на карту'],
+  ['nach_other', 'Своё начисление (+)'],
+  ['uderz_other', 'Удержание (−)'],
 ];
 const moneyKindLabel = k => (MONEY_KINDS.find(x => x[0] === k) || [k, k])[1];
 // Показываем только то, что роль реально может записать: политика ml_ins
@@ -3472,7 +3476,7 @@ function drawPayroll(filter = '') {
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
     <th class="num sep">Зарплата</th><th class="num pw-earned">Всего заработано</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
-    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num">Больн. карта</th></tr></thead>`;
+    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num" title="Своё начисление минус удержания">Прочее</th><th class="num">Больн. карта</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по отделению,
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
@@ -3487,7 +3491,7 @@ function drawPayroll(filter = '') {
       curCat = cat;
       const inCat = rows.filter(x => catOf(x) === cat);
       const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="21"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="22"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
@@ -3510,6 +3514,9 @@ function drawPayroll(filter = '') {
       <td class="num fin">${rub(r.otpusk_cash_kop)}</td>
       <td class="num fin">${rub(r.premia_kop)}</td>
       <td class="num fin">${rub(r.bolnich_nach_kop)}</td>
+      <td class="num fin">${(r.nach_other_kop || r.uderz_other_kop)
+        ? `<b class="money${(r.nach_other_kop || 0) - (r.uderz_other_kop || 0) < 0 ? ' neg' : ''}">${rub((r.nach_other_kop || 0) - (r.uderz_other_kop || 0))}</b>`
+        : '<span class="muted">—</span>'}</td>
       <td class="num fin">${rub(r.bolnich_kop)}</td>
 `;
     if (!my.length) {
@@ -3549,20 +3556,23 @@ function drawPayroll(filter = '') {
     <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('otpusk_cash_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
     <td class="num fin">${rub(sum('bolnich_nach_kop'))}</td>
+    <td class="num fin">${rub(sum('nach_other_kop') - sum('uderz_other_kop'))}</td>
     <td class="num fin">${rub(sum('bolnich_kop'))}</td>
 </tr>
     <tr class="pw-total pw-accrued"><td class="pw-name">Всего начислено</td>
       <td colspan="8" class="muted small">зарплата ${rub(sum('salary_kop'))}${
         sum('premia_kop') ? ' + премии ' + rub(sum('premia_kop')) : ''}${
         sum('otpusk_nach_kop') ? ' + отпускные ' + rub(sum('otpusk_nach_kop')) : ''}${
-        sum('bolnich_nach_kop') ? ' + больничные ' + rub(sum('bolnich_nach_kop')) : ''}</td>
+        sum('bolnich_nach_kop') ? ' + больничные ' + rub(sum('bolnich_nach_kop')) : ''}${
+        sum('nach_other_kop') ? ' + прочее ' + rub(sum('nach_other_kop')) : ''}${
+        sum('uderz_other_kop') ? ' − удержания ' + rub(sum('uderz_other_kop')) : ''}</td>
       <td class="num pw-cardtot"></td><td class="num pw-carry"></td>
-      <td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop'))}</b></td>
-      <td colspan="9"></td></tr>
+      <td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop') + sum('nach_other_kop') - sum('uderz_other_kop'))}</b></td>
+      <td colspan="10"></td></tr>
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
       <td colspan="10" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
       <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td>
-      <td colspan="9"></td></tr>` : ''}</tfoot>`;
+      <td colspan="10"></td></tr>` : ''}</tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
   stickFooterRows($('payrollTable'));
@@ -4011,6 +4021,8 @@ async function payrollDialog(empId) {
       ${payRow('Премия', r.premia_kop, 'premia', canEdit)}
       ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
       ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
+      ${payRow('Своё начисление', r.nach_other_kop, 'nach_other', canEdit)}
+      ${payRow('Удержание', r.uderz_other_kop, 'uderz_other', canEdit)}
       <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
       ${(r.card_avans_kop || r.card_rasch_kop || r.card_uvol_kop || r.otpusk_kop
         || r.bolnich_kop || r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop)
