@@ -107,7 +107,7 @@ const DEMO_SEED = {
   specialties: [
     { id: 1, name: 'Врач-терапевт', category: 'Врачи' },
     { id: 2, name: 'Хирург', category: 'Врачи' },
-    { id: 3, name: 'Медсестра', category: 'Средний персонал' },
+    { id: 3, name: 'Медсестра', category: 'Медсестры' },
     { id: 4, name: 'Администратор', category: 'Прочие' },
   ],
   employees: [],   // реальные карточки вводит владелица — демо стартует пустым
@@ -679,8 +679,8 @@ export class MockStore {
      кнопку, которая «всегда работает», и первое же несовпадение вылезло бы
      на проде. Скрытую ЗП тут не изображаем — в демо её нет. */
   // В демо базы нет — показываем в консоли, чтобы путь был проверяем и здесь.
-  async logError(kind, message, stack, screen, version) {
-    console.warn('[ошибка бы ушла в базу]', { kind, message, screen, version });
+  async logError(kind, message, stack, screen, version, ms) {
+    console.warn('[ушло бы в базу]', { kind, message, screen, version, ms });
   }
   async listPayouts(employee_id, period) {
     return (this.db.payouts || [])
@@ -1355,11 +1355,12 @@ export class SupabaseStore {
   /* Ошибка у пользователя → в базу (094). Тихо: это последний рубеж, и он не
      имеет права сам стать источником ошибки. Любой сбой отправки проглатываем —
      человеку и так уже плохо, второе красное окно ему не поможет. */
-  async logError(kind, message, stack, screen, version) {
+  async logError(kind, message, stack, screen, version, ms) {
     try {
       await this.sb.rpc('log_client_error', {
         p_kind: kind, p_message: message, p_stack: stack,
-        p_screen: screen, p_version: version, p_ua: navigator.userAgent });
+        p_screen: screen, p_version: version, p_ua: navigator.userAgent,
+        p_ms: (ms == null ? null : Math.round(ms)) });
     } catch (e) { /* молчим намеренно */ }
   }
   async listPayouts(employee_id, period) {

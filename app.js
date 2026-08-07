@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=105';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=155';
 
 const $ = id => document.getElementById(id);
 
@@ -27,13 +27,13 @@ const $ = id => document.getElementById(id);
   let послано = 0;                       // ещё и здесь предел: сеть тоже жалко
   const версия = () => (document.querySelector('script[src*="app.js?v="]')
     ?.getAttribute('src').match(/v=(\d+)/) || [])[1] || '?';
-  const записать = (kind, message, stack) => {
+  const записать = (kind, message, stack, мс) => {
     if (послано >= 10) return;
     послано++;
     // store может быть ещё не создан (ошибка на самой загрузке) — тогда молча.
     try { store?.logError?.(kind, String(message || '').slice(0, 500),
                             String(stack || '').slice(0, 2000),
-                            typeof curScreen === 'string' ? curScreen : null, версия()); }
+                            typeof curScreen === 'string' ? curScreen : null, версия(), мс); }
     catch (e) { /* последний рубеж не имеет права падать сам */ }
   };
   window.addEventListener('error', e => {
@@ -46,6 +46,40 @@ const $ = id => document.getElementById(id);
     const r = e.reason;
     записать('promise', r?.message || String(r), r?.stack);
   });
+
+  /* ── Секундомер (095) ────────────────────────────────────────────────
+     Виталий 07.08: «тупит в обычном хроме, но нормально грузится в безопасном
+     режиме». Падений при этом нет — значит ловец выше молчит, и мы не знаем
+     ничего, кроме «человеку кажется». Теперь будем знать цифру: 14 секунд у
+     него против 0,4 у Алёны на том же действии — это ответ на вопрос «сайт
+     медленный или машина медленная», а не догадка.
+     Порог 5 секунд: ниже — обычная жизнь на плохом канале, выше — то, из-за
+     чего пишут «висит». */
+  const ПОРОГ_МС = 5000;
+  const виделиДолгим = new Set();       // одно имя действия — один раз за загрузку
+  window.замерить = (действие, мс, ошибка) => {
+    if (действие === 'logError') return;               // иначе замер замера, и так по кругу
+    if (ошибка) {
+      // Обрыв и таймаут: запрос НЕ дошёл. Отличаем от отказа базы — у тех есть
+      // код и внятный текст, а здесь обычно «Failed to fetch».
+      const текст = String(ошибка?.message || ошибка || '');
+      if (/fetch|network|timeout|aborted|соедин/i.test(текст))
+        записать('netfail', действие + ': ' + текст.slice(0, 120), null, мс);
+      return;
+    }
+    if (мс < ПОРОГ_МС || виделиДолгим.has(действие)) return;
+    виделиДолгим.add(действие);
+    записать('slow', действие, null, мс);
+  };
+
+  // Сколько поднималась сама страница. Один раз, после полной загрузки.
+  window.addEventListener('load', () => setTimeout(() => {
+    try {
+      const n = performance.getEntriesByType('navigation')[0];
+      const мс = n && n.loadEventEnd > 0 ? n.loadEventEnd : 0;
+      if (мс > 10000) записать('load', 'страница поднималась', null, мс);
+    } catch (e) {}
+  }, 1500));
 }
 
 /* ── «Идёт обмен с базой» ────────────────────────────────────────────────
@@ -96,7 +130,16 @@ function withNetIndicator(s) {
         const out = v.apply(t, args);
         if (!out || typeof out.then !== 'function') return out;   // синхронный ответ — не сеть
         netStart();
-        return out.finally(netEnd);
+          // СЕКУНДОМЕР (095). «Тупит» — не ошибка: ничего не падает, программа
+          // просто ждёт, и в журнале было бы пусто, хотя человеку плохо. Меряем
+          // здесь, потому что через эту обёртку проходят ВСЕ запросы к базе —
+          // одно место вместо трёх десятков.
+          // Аргументы НЕ трогаем: в них суммы и ФИО. Пишем только имя действия.
+          const начало = performance.now();
+          return out.then(
+            r => { window.замерить?.(prop, performance.now() - начало, null); return r; },
+            e => { window.замерить?.(prop, performance.now() - начало, e); throw e; },
+          ).finally(netEnd);
       });
       return cache.get(prop);
     },
@@ -1049,7 +1092,7 @@ async function loadCardPanel(id) {
       ${payRow('Удержание', r.uderz_other_kop, 'uderz_other', canEdit)}
       <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
       ${(r.card_avans_kop || r.card_rasch_kop || r.card_uvol_kop || r.otpusk_kop
-        || r.bolnich_kop || r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop)
+        || r.bolnich_kop || r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop || r.pay_other_kop)
         ? '<div class="me-cap">Выдано</div>' : ''}
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
       ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
@@ -1059,6 +1102,7 @@ async function loadCardPanel(id) {
       ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
       ${payRow('Аванс наличными', r.cash_avans_kop, 'cash_avans', canEdit)}
       ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
+      ${payRow('Прочая выплата', r.pay_other_kop, 'pay_other', canEdit)}
       ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
       ${r.carry_kop || canEdit ? `<div class="me-row me-sum cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
@@ -2215,7 +2259,7 @@ function specForm(s) {
     <div class="msub">${s ? 'Название и отделение поменяются у всех, кому она стоит' + (used ? ` — сейчас это ${used} чел` : '') + '. Изменение попадёт в журнал.'
                         : 'Добавится в справочник и группировку'}</div>
     <label class="flbl">Название</label><input class="input" id="mSn" placeholder="напр. Невролог" value="${esc(s?.name || '')}">
-    <label class="flbl">Отделение</label><input class="input" id="mSc" list="catlist" placeholder="Врачи / Средний персонал / своё…" value="${esc(s?.category || '')}"><datalist id="catlist">${cats.map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
+    <label class="flbl">Отделение</label><input class="input" id="mSc" list="catlist" placeholder="Врачи / Медсестры / своё…" value="${esc(s?.category || '')}"><datalist id="catlist">${cats.map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button><button class="btn btn-primary btn-sm" id="mSave">${s ? ICONS.check + 'Сохранить' : ICONS.plus + 'Добавить'}</button></div>`);
   $('mCancel').onclick = closeModal;
   $('mSave').onclick = async () => {
@@ -3332,6 +3376,18 @@ const J_ACTION = { 'сторно': 'СТОРНО', 'правило расчёт�
    03.08: «нарахування не йдуть туди у все на карту», это ещё не деньги на
    руках. «Расчёт при увольнении» тоже карточный, но в перечень не назван —
    не подмешиваем молча, добавим явно, если понадобится. */
+/* Ячейка «Прочее»: сумма всех нестандартных строк со знаком. Начисление плюс,
+   удержание и прочая выплата минус — знак совпадает с тем, как они двигают
+   «Осталось выдать». Названия («Алименты», «Доп. выходы ЭСТ») лежат в записях,
+   поэтому подписи подтягиваем отдельным запросом при клике: держать их в
+   строке таблицы значило бы тянуть все записи месяца ради шести человек. */
+const otherSum = r => (r.nach_other_kop || 0) - (r.uderz_other_kop || 0) - (r.pay_other_kop || 0);
+const hasOther = r => !!((r.nach_other_kop || 0) || (r.uderz_other_kop || 0) || (r.pay_other_kop || 0));
+function otherCell(r) {
+  const v = otherSum(r);
+  if (!hasOther(r)) return '<span class="muted">—</span>';
+  return `<b class="money${v < 0 ? ' neg' : ''}">${rub(v)}</b><span class="oth-q" title="Показать, на что">?</span>`;
+}
 const cardTotal = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0)
   + (r.otpusk_kop || 0) + (r.bolnich_kop || 0);
 /* Формула начисления словами: «70 000 × 96 ч ÷ 180 ч». Дарина 03.08 — «щоб у нас
@@ -3368,7 +3424,12 @@ function rateFormula(l, r, nh, emp) {
    Перенос с прошлого месяца сюда НЕ входит: это не заработок июля, а долг с
    июня, и в «Осталось выдать» он приходит отдельным слагаемым. */
 const earned = r => (r.salary_kop || 0) + (r.premia_kop || 0)
-  + (r.otpusk_nach_kop || 0) + (r.bolnich_nach_kop || 0);
+  + (r.otpusk_nach_kop || 0) + (r.bolnich_nach_kop || 0)
+  // ⚠ «своё начисление» и «удержание» (093) сюда входят обязательно: база кладёт
+  // их в delta_kop, и без них «Всего заработано» расходилось со строками прямо
+  // над ним — у Руфиной блок показывал 96 330 + 60 000 + 3 500, а итогом писал
+  // 156 330. Ровно та ошибка, от которой предостерегает комментарий выше.
+  + (r.nach_other_kop || 0) - (r.uderz_other_kop || 0);
 const MONEY_KINDS = [
   ['cash', 'Наличные'], ['cash_avans', 'Аванс наличными'], ['otpusk_cash', 'Отпускные наличными'],
   ['premia', 'Премия'],
@@ -3379,6 +3440,7 @@ const MONEY_KINDS = [
   ['bolnich', 'Больничные на карту'],
   ['nach_other', 'Своё начисление (+)'],
   ['uderz_other', 'Удержание (−)'],
+  ['pay_other', 'Прочая выплата (алименты, займ…)'],
 ];
 const moneyKindLabel = k => (MONEY_KINDS.find(x => x[0] === k) || [k, k])[1];
 // Показываем только то, что роль реально может записать: политика ml_ins
@@ -3515,7 +3577,7 @@ function drawPayroll(filter = '') {
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
     <th class="num sep">Зарплата</th><th class="num pw-earned">Всего заработано</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
-    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num" title="Своё начисление минус удержания">Прочее</th><th class="num">Больн. карта</th></tr></thead>`;
+    <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num" title="Нестандартное: свои начисления, удержания и выплаты. Нажмите на число — покажет, на что именно">Прочее</th><th class="num">Больн. карта</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по отделению,
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
@@ -3553,9 +3615,7 @@ function drawPayroll(filter = '') {
       <td class="num fin">${rub(r.otpusk_cash_kop)}</td>
       <td class="num fin">${rub(r.premia_kop)}</td>
       <td class="num fin">${rub(r.bolnich_nach_kop)}</td>
-      <td class="num fin">${(r.nach_other_kop || r.uderz_other_kop)
-        ? `<b class="money${(r.nach_other_kop || 0) - (r.uderz_other_kop || 0) < 0 ? ' neg' : ''}">${rub((r.nach_other_kop || 0) - (r.uderz_other_kop || 0))}</b>`
-        : '<span class="muted">—</span>'}</td>
+      <td class="num fin pw-other${hasOther(r) ? ' pw-tap' : ''}" data-oth="${r.employee_id}"${hasOther(r) ? ' title="Показать, на что"' : ''}>${otherCell(r)}</td>
       <td class="num fin">${rub(r.bolnich_kop)}</td>
 `;
     if (!my.length) {
@@ -3595,7 +3655,7 @@ function drawPayroll(filter = '') {
     <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_kop'))}</td><td class="num fin">${rub(sum('otpusk_cash_kop'))}</td><td class="num fin">${rub(sum('premia_kop'))}</td>
     <td class="num fin">${rub(sum('bolnich_nach_kop'))}</td>
-    <td class="num fin">${rub(sum('nach_other_kop') - sum('uderz_other_kop'))}</td>
+    <td class="num fin">${rub(sum('nach_other_kop') - sum('uderz_other_kop') - sum('pay_other_kop'))}</td>
     <td class="num fin">${rub(sum('bolnich_kop'))}</td>
 </tr>
     <tr class="pw-total pw-accrued"><td class="pw-name">Всего начислено</td>
@@ -3603,7 +3663,7 @@ function drawPayroll(filter = '') {
         sum('premia_kop') ? ' + премии ' + rub(sum('premia_kop')) : ''}${
         sum('otpusk_nach_kop') ? ' + отпускные ' + rub(sum('otpusk_nach_kop')) : ''}${
         sum('bolnich_nach_kop') ? ' + больничные ' + rub(sum('bolnich_nach_kop')) : ''}${
-        sum('nach_other_kop') ? ' + прочее ' + rub(sum('nach_other_kop')) : ''}${
+        sum('nach_other_kop') ? ' + прочие начисления ' + rub(sum('nach_other_kop')) : ''}${
         sum('uderz_other_kop') ? ' − удержания ' + rub(sum('uderz_other_kop')) : ''}</td>
       <td class="num pw-cardtot"></td><td class="num pw-carry"></td>
       <td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop') + sum('nach_other_kop') - sum('uderz_other_kop'))}</b></td>
@@ -3627,6 +3687,10 @@ function drawPayroll(filter = '') {
       cb.onclick = () => carryFromPrev(payPeriod, () => renderPayroll($('payrollSearch')?.value || ''));
     }
   }
+  // «Прочее» — клик показывает расшифровку по названиям: ради этого графа и есть
+  $('payrollTable').querySelectorAll('.pw-other.pw-tap[data-oth]').forEach(td => {
+    td.onclick = async e => { e.stopPropagation(); await otherDetails(+td.dataset.oth); };
+  });
   $('payrollTable').querySelectorAll('.pw-carry.pw-tap[data-carry]').forEach(td => {
     td.onclick = e => { e.stopPropagation(); editCarry(+td.dataset.carry, payPeriod, () => renderPayroll($('payrollSearch')?.value || '')); };
   });
@@ -3782,11 +3846,22 @@ async function editPayout(empId, per, kind, onDone) {
   const live = liveOf(ev, kind);
   const cur = live.reduce((s, x) => s + x.amount_kop, 0);
   if (!live.length) { toast('Записей этого вида за месяц нет', true); return; }
+  /* Виды «прочего» (093, 095) держатся на названии: колонка «Прочее» затем и
+     сделана, чтобы было подписано, на что ушли деньги. Правка суммы сторнирует
+     прежние записи и пишет одну новую — без этого поля название «Алименты»
+     превратилось бы в «исправление суммы», и расшифровка перестала бы отвечать
+     на свой единственный вопрос. Если живых записей несколько, они схлопнутся в
+     одну: об этом сказано прямо в окне, а не постфактум. */
+  const named = ['nach_other', 'uderz_other', 'pay_other'].includes(kind);
+  const curNote = live.length === 1 ? (live[0].note || '') : '';
 
   showModal2(`<h3>${esc(moneyKindLabel(kind))}</h3>
     <div class="msub">${esc(periodLabel(per))} · сейчас <b>${rub(cur)} ₽</b> ${live.length > 1 ? `(${live.length} записей)` : ''}</div>
     <label class="flbl">Новая сумма</label>
     <input class="input" id="epVal" inputmode="numeric" autocomplete="off" value="${rub(cur)}">
+    ${named ? `<label class="flbl" style="margin-top:10px">На что — название</label>
+      <input class="input" id="epNote" autocomplete="off" maxlength="120" value="${esc(curNote)}" placeholder="Алименты · займ · доплата за ЭСТ…">
+      ${live.length > 1 ? '<div class="msub" style="margin-top:6px">Записей несколько — они сложатся в одну с этим названием.</div>' : ''}` : ''}
     <div class="msub" style="margin-top:8px">Запишем разницу: прежние записи уйдут встречными на минус, новая сумма — отдельной строкой.
       В истории останется видно, кто вносил и кто менял. «Осталось выдать» пересчитается само.</div>
     <div class="modal-foot">
@@ -3799,7 +3874,8 @@ async function editPayout(empId, per, kind, onDone) {
   const apply = async (newKop) => {
     try {
       for (const row of live) await store.reverseMoneyLine(row);          // по одной: база проверяет каждую
-      if (newKop > 0) await store.addMoneyLine({ employee_id: empId, period: per, kind, amount_kop: newKop, note: 'исправление суммы' });
+      const note = (named && ($('epNote')?.value || '').trim()) || 'исправление суммы';
+      if (newKop > 0) await store.addMoneyLine({ employee_id: empId, period: per, kind, amount_kop: newKop, note });
       closeModal2();
       toast(ICONS.check + (newKop > 0 ? 'Стало ' + rub(newKop) + ' ₽' : 'Убрано · ' + rub(cur) + ' ₽'));
       if (onDone) await onDone();
@@ -3906,6 +3982,37 @@ async function carryFromPrev(per, onDone) {
     }
   };
 }
+/* Что именно лежит в «Прочем» у человека: каждая строка своим названием.
+   Тянем записи месяца по этому сотруднику — их единицы, поэтому дёшево. */
+async function otherDetails(empId) {
+  const per = payPeriod || nowPeriod();
+  const KINDS = { nach_other: ['Своё начисление', 1], uderz_other: ['Удержание', -1], pay_other: ['Прочая выплата', -1] };
+  let ev = [];
+  try { ev = await store.listMoneyEvents(empId, per); }
+  catch (e) { toast(e.message || e, true); return; }
+  const live = liveOf(ev || []).filter(x => KINDS[x.kind]);   // сторно и сторнированные — мимо
+  const emp = employees.find(x => x.id === empId);
+  if (!live.length) {
+    showModal(`<h3>Прочее</h3><div class="msub">${esc(emp?.fio || '')} · ${esc(periodLabel(per))}</div>
+      <div class="msub" style="margin-top:10px">Здесь пусто. Добавить можно в окне человека — «Внести деньги».</div>
+      <div class="modal-foot"><button class="btn btn-primary btn-sm" id="odOk">Понятно</button></div>`);
+    $('odOk').onclick = closeModal; return;
+  }
+  const rows = live.map(x => {
+    const [label, sign] = KINDS[x.kind];
+    return `<div class="me-row"><span class="muted">${esc(x.note || label)}</span>
+      <b class="money${sign < 0 ? ' neg' : ''}">${sign < 0 ? '−' : '+'}${rub(x.amount_kop)} ₽</b></div>`;
+  }).join('');
+  const total = live.reduce((a, x) => a + KINDS[x.kind][1] * x.amount_kop, 0);
+  showModal(`<h3>Прочее</h3><div class="msub">${esc(emp?.fio || '')} · ${esc(periodLabel(per))}</div>
+    <div class="rc-diff" style="margin-top:10px">${rows}</div>
+    <div class="me-row me-sum" style="margin-top:6px"><span>Итого</span>
+      <b class="money${total < 0 ? ' neg' : ''}">${rub(total)} ₽</b></div>
+    <div class="msub" style="margin-top:8px">Названия задаются при вводе — в окне человека, «Внести деньги».</div>
+    <div class="modal-foot"><button class="btn btn-primary btn-sm" id="odOk">Закрыть</button></div>`);
+  $('odOk').onclick = closeModal;
+}
+
 async function editCarry(empId, per, onDone, row) {
   const src = row || payrollRows.find(x => x.employee_id === empId) || {};
   const fio = src.fio || '';
@@ -4064,7 +4171,7 @@ async function payrollDialog(empId) {
       ${payRow('Удержание', r.uderz_other_kop, 'uderz_other', canEdit)}
       <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
       ${(r.card_avans_kop || r.card_rasch_kop || r.card_uvol_kop || r.otpusk_kop
-        || r.bolnich_kop || r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop)
+        || r.bolnich_kop || r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop || r.pay_other_kop)
         ? '<div class="me-cap">Выдано</div>' : ''}
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
       ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
@@ -4074,6 +4181,7 @@ async function payrollDialog(empId) {
       ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
       ${payRow('Аванс наличными', r.cash_avans_kop, 'cash_avans', canEdit)}
       ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
+      ${payRow('Прочая выплата', r.pay_other_kop, 'pay_other', canEdit)}
       ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
       ${r.carry_kop || canEdit ? `<div class="me-row me-sum cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
@@ -4399,7 +4507,11 @@ function drawOverview() {
   // премия, начисленные отпускные и больничные — тоже начисления, и без них
   // главная цифра занижена. За июль зарплата 7 317 731, а начислено 8 044 829.
   const premia = sum('premia_kop'), otpNach = sum('otpusk_nach_kop'), bol = sum('bolnich_nach_kop');
-  const accrued = salary + premia + otpNach + bol;
+  // Нестандартное — «своё начисление», «удержание» (093) и «прочая выплата» (095):
+  // алименты, займы, доплаты за разовые выходы. База учитывает их в «Осталось
+  // выдать», поэтому без них раскладка «Начислено − Выдано = Осталось» не сходилась.
+  const othNach = sum('nach_other_kop'), othUderz = sum('uderz_other_kop'), othPay = sum('pay_other_kop');
+  const accrued = salary + premia + otpNach + bol + othNach - othUderz;
   const carry = sum('carry_kop');                                   // перенос с прошлого месяца, со знаком
   const cash = sum('cash_kop') + sum('cash_avans_kop') + sum('otpusk_cash_kop');
   const people = rows.filter(r => r.status === 'active').length;
@@ -4421,11 +4533,14 @@ function drawOverview() {
       + (premia ? line('· премии', rub(premia) + ' ₽', 'sub') : '')
       + (otpNach ? line('· отпускные', rub(otpNach) + ' ₽', 'sub') : '')
       + (bol ? line('· больничные', rub(bol) + ' ₽', 'sub') : '')
+        + (othNach ? line('· прочие начисления', rub(othNach) + ' ₽', 'sub') : '')
+        + (othUderz ? line('· удержания', '−' + rub(othUderz) + ' ₽', 'sub') : '')
       + (carry ? line('С прошлого месяца', (carry < 0 ? '−' : '') + rub(Math.abs(carry)) + ' ₽', 'sub neg') : '')
-      + line('Выдано', rub(card + uvol + cash) + ' ₽', 'sum')
+      + line('Выдано', rub(card + uvol + cash + othPay) + ' ₽', 'sum')
       + line('· на карту', rub(card) + ' ₽', 'sub')
       + (uvol ? line('· расчёт при увольнении', rub(uvol) + ' ₽', 'sub') : '')
       + (cash ? line('· наличными', rub(cash) + ' ₽', 'sub') : '')
+        + (othPay ? line('· прочие выплаты (алименты, займы)', rub(othPay) + ' ₽', 'sub') : '')
     + `</div></div>`;
   const bento = `<div class="ov-bento">`
     + metric('Начислено всего', rub(accrued) + ' ₽', '', 'rgba(139,123,232,.34)')
