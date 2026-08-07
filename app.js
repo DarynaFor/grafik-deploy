@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=158';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=159';
 
 const $ = id => document.getElementById(id);
 
@@ -1035,6 +1035,15 @@ async function loadCardPanel(id) {
   } catch (e) { box.innerHTML = ''; return; }
   if (+$('cardBody').dataset.emp !== id) return;      // пока грузили, открыли другого
   if (!r) { box.innerHTML = ''; return; }
+    // Подписи «прочих» записей («Алименты», «Доп. выходы ЭСТ») лежат ВНУТРИ записей,
+  // а не в строке расчёта. Тянем их только если такие суммы вообще есть: это
+  // лишний круг к серверу, а «прочее» стоит у единиц — при тамошнем интернете
+  // гонять запрос всем ради шести человек нельзя.
+  let oNotes = {};
+  if (r.nach_other_kop || r.uderz_other_kop || r.pay_other_kop) {
+    try { oNotes = otherNotes(await store.listMoneyEvents(id, per)); }
+    catch (e) { console.warn('listMoneyEvents:', e); }
+  }
 
   const my = linesForRow(r, (lines || []).filter(l => l.employee_id === id));
   // процентник: ЗП = % × выручка. Выручку вводят руками, и именно её Дарина
@@ -1092,22 +1101,22 @@ async function loadCardPanel(id) {
       ${payRow('Премия', r.premia_kop, 'premia', canEdit)}
       ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
       ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
-      ${payRow('Своё начисление', r.nach_other_kop, 'nach_other', canEdit)}
-      ${payRow('Удержание', r.uderz_other_kop, 'uderz_other', canEdit)}
+      ${payRow('Своё начисление', r.nach_other_kop, 'nach_other', canEdit, oNotes.nach_other)}
       <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
-      ${(r.card_avans_kop || r.card_rasch_kop || r.card_uvol_kop || r.otpusk_kop
-        || r.bolnich_kop || r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop || r.pay_other_kop)
-        ? '<div class="me-cap">Выдано</div>' : ''}
+      ${cardBlock(r) ? '<div class="me-cap">На карту</div>' : ''}
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
       ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
       ${payRow('Расчёт на карту (увольнение)', r.card_uvol_kop, 'card_uvol', canEdit)}
       ${payRow('Отпускные на карту', r.otpusk_kop, 'otpusk', canEdit)}
       ${payRow('Больничные на карту', r.bolnich_kop, 'bolnich', canEdit)}
-      ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
+      ${payRow('Удержание', r.uderz_other_kop, 'uderz_other', canEdit, oNotes.uderz_other)}
+      ${payRow('Прочая выплата', r.pay_other_kop, 'pay_other', canEdit, oNotes.pay_other)}
+      ${cardBlock(r) ? `<div class="me-row me-sum me-card"><span>Всего перечислено</span><b class="money">${rub(cardBlock(r))} ₽</b></div>` : ''}
+      ${(r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop) ? '<div class="me-cap">Дополнительные поступления</div>' : ''}
       ${payRow('Аванс наличными', r.cash_avans_kop, 'cash_avans', canEdit)}
+      ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
       ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
-      ${payRow('Прочая выплата', r.pay_other_kop, 'pay_other', canEdit)}
-      ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
+      ${handBlock(r) ? `<div class="me-row me-sum me-hand"><span>Всего дополнительно</span><b class="money">${rub(handBlock(r))} ₽</b></div>` : ''}
       ${r.carry_kop || canEdit ? `<div class="me-row me-sum cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
         ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
@@ -3613,6 +3622,24 @@ function otherCell(r) {
 }
 const cardTotal = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0)
   + (r.otpusk_kop || 0) + (r.bolnich_kop || 0);
+/* Итог блока в КАРТОЧКЕ. Называется «Всего перечислено», а НЕ «Всего на карту» —
+   и это не придирка к словам. У Коноплина в карточке выходит 150 994, а в колонке
+   таблицы «Всего на карту» — 113 247. Разница 37 747 — алименты: клиника их
+   перечислила, но не ЕМУ, а получателю. То есть это два честных ответа на разные
+   вопросы: «сколько потратили по его зарплате» и «сколько пришло ему на карту».
+   Пока подпись была одна на оба, цифры выглядели как ошибка (Дарина 07.08).
+   Отдельно от cardTotal намеренно: cardTotal —
+   это колонка таблицы и плитка Обзора, где Дарина 03.08 просила именно «сколько
+   пришло на карту», без расчёта при увольнении. А блок карточки Виталий 06.08
+   расписал шире: «аванс, зп на карту, алименты, больничные, прочее…» — то есть
+   ВСЁ, что по карте прошло или удержано. Строки блока обязаны сходиться с его
+   итогом, поэтому итог считается ровно по ним, а не заимствуется. */
+/* Итог блока «Выдано на руки». Виталий 06.08 просил вычитать «одной цифрой» —
+   без итога блок не считается глазами, а именно ради счёта он и просил разбивку. */
+const handBlock = r => (r.cash_avans_kop || 0) + (r.cash_kop || 0) + (r.otpusk_cash_kop || 0);
+const cardBlock = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0)
+  + (r.card_uvol_kop || 0) + (r.otpusk_kop || 0) + (r.bolnich_kop || 0)
+  + (r.uderz_other_kop || 0) + (r.pay_other_kop || 0);
 /* Формула начисления словами: «70 000 × 96 ч ÷ 180 ч». Дарина 03.08 — «щоб у нас
    в розрахунку теж так зрозуміло і докладно все було розписано».
    Раньше строка гласила «Оклад · 8 из 8 — 37 333 ₽», и откуда взялись 37 333 при
@@ -3648,11 +3675,12 @@ function rateFormula(l, r, nh, emp) {
    июня, и в «Осталось выдать» он приходит отдельным слагаемым. */
 const earned = r => (r.salary_kop || 0) + (r.premia_kop || 0)
   + (r.otpusk_nach_kop || 0) + (r.bolnich_nach_kop || 0)
-  // ⚠ «своё начисление» и «удержание» (093) сюда входят обязательно: база кладёт
-  // их в delta_kop, и без них «Всего заработано» расходилось со строками прямо
-  // над ним — у Руфиной блок показывал 96 330 + 60 000 + 3 500, а итогом писал
-  // 156 330. Ровно та ошибка, от которой предостерегает комментарий выше.
-  + (r.nach_other_kop || 0) - (r.uderz_other_kop || 0);
+  // «Своё начисление» входит — это заработок. «Удержание» отсюда УБРАНО: по
+  // структуре Виталия (06.08) оно переехало в блок «На карту», к алиментам.
+  // Инвариант прежний и он важен: строки блока обязаны сходиться с его итогом.
+  // Раньше удержание вычиталось здесь, а строка стояла в «Заработано» — теперь
+  // и стоит, и вычитается в СВОЁМ блоке.
+  + (r.nach_other_kop || 0);
 const MONEY_KINDS = [
   ['cash', 'Наличные'], ['cash_avans', 'Аванс наличными'], ['otpusk_cash', 'Отпускные наличными'],
   ['premia', 'Премия'],
@@ -4044,13 +4072,31 @@ function confirmUnpay(fio, kop) {
    Внутри это по-прежнему сторно (встречная запись), а не удаление: деньги в этой
    системе — не число, а перечень событий, и стереть событие значит потерять след
    «кто внёс». Пользователю про сторно знать не нужно — он видит «убрать». */
-function payRow(label, kop, kind, canEdit) {
+/* Строка денег в карточке. `note` — подпись самой записи: у «прочих» видов
+   (своё начисление, удержание, прочая выплата) в названии строки стоит только
+   ВИД, а ЧТО это — «Алименты», «Доп. выходы ЭСТ» — лежит внутри записи.
+   Дарина 07.08: «не видно усі дані, наприклад новий вид з аліментами». Алименты
+   и правда были на экране — строкой «Прочая выплата 37 747 ₽», и глазами их там
+   не найти. Показываем подпись рядом. */
+function payRow(label, kop, kind, canEdit, note) {
   if (!kop) return '';
   const can = canEdit && kind && moneyKindsFor(store.me()?.role).some(k => k[0] === kind);
   return `<div class="me-row${can ? ' me-tap' : ''}"${can ? ` data-kind="${kind}" title="Изменить или убрать"` : ''}>`
-       + `<span class="muted">${esc(label)}</span><b>${rub(kop)} ₽</b>`
+       + `<span class="muted">${esc(label)}${note ? ` · <b class="pr-note">${esc(note)}</b>` : ''}</span><b>${rub(kop)} ₽</b>`
        + (can ? `<span class="me-pen">${ICONS.pencil || '✎'}</span>` : '')
        + `</div>`;
+}
+/* Подписи «прочих» записей за месяц, по видам. Несколько записей одного вида
+   склеиваем через запятую — так в строке видно всё, из чего сложилась сумма. */
+function otherNotes(events) {
+  const m = {};
+  for (const e of events || []) {
+    if (!['nach_other', 'uderz_other', 'pay_other'].includes(e.kind)) continue;
+    if (e.reverses_id || !e.note) continue;
+    (m[e.kind] = m[e.kind] || []).push(e.note);
+  }
+  Object.keys(m).forEach(k => { m[k] = [...new Set(m[k])].join(', '); });
+  return m;
 }
 /* Живые записи вида за месяц: не сторно и не сторнированные ранее. Повторное
    сторно база запретит, а тихо проглотить отказ здесь было бы хуже всего. */
@@ -4343,6 +4389,15 @@ async function payrollDialog(empId) {
   // Отдельного поля ему НЕ даём: сумма живёт в «Финальной сумме вручную» ниже,
   // просто подписываем блок так, чтобы было видно — это норма, а не костыль.
   const piece = periodLines.some(l => l.pay_kind === 'сдельно');
+  // Подписи «прочих» записей («Алименты», «Доп. выходы ЭСТ») лежат ВНУТРИ записей,
+  // а не в строке расчёта: без них строка читается как «Прочая выплата 37 747 ₽»
+  // и что это — не понять (Дарина 07.08). Тянем только когда такие суммы есть:
+  // лишний круг к серверу ради шести человек при тамошнем интернете не нужен.
+  let oNotes = {};
+  if (r.nach_other_kop || r.uderz_other_kop || r.pay_other_kop) {
+    try { oNotes = otherNotes(await store.listMoneyEvents(empId, per)); }
+    catch (e) { console.warn('listMoneyEvents:', e); }
+  }
   let curRev = 0;
   if (pctLine && canEdit) { try { curRev = await store.getDoctorRevenue(empId, per); } catch (e) {} }
   let curOverride = null;                                 // финальная сумма вручную (миграция 049)
@@ -4391,27 +4446,27 @@ async function payrollDialog(empId) {
       ${payRow('Премия', r.premia_kop, 'premia', canEdit)}
       ${payRow('Отпускные начислено', r.otpusk_nach_kop, 'otpusk_nach', canEdit)}
       ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
-      ${payRow('Своё начисление', r.nach_other_kop, 'nach_other', canEdit)}
-      ${payRow('Удержание', r.uderz_other_kop, 'uderz_other', canEdit)}
+      ${payRow('Своё начисление', r.nach_other_kop, 'nach_other', canEdit, oNotes.nach_other)}
       <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
-      ${(r.card_avans_kop || r.card_rasch_kop || r.card_uvol_kop || r.otpusk_kop
-        || r.bolnich_kop || r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop || r.pay_other_kop)
-        ? '<div class="me-cap">Выдано</div>' : ''}
+      ${cardBlock(r) ? '<div class="me-cap">На карту</div>' : ''}
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
       ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
       ${payRow('Расчёт на карту (увольнение)', r.card_uvol_kop, 'card_uvol', canEdit)}
       ${payRow('Отпускные на карту', r.otpusk_kop, 'otpusk', canEdit)}
       ${payRow('Больничные на карту', r.bolnich_kop, 'bolnich', canEdit)}
-      ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
+      ${payRow('Удержание', r.uderz_other_kop, 'uderz_other', canEdit, oNotes.uderz_other)}
+      ${payRow('Прочая выплата', r.pay_other_kop, 'pay_other', canEdit, oNotes.pay_other)}
+      ${cardBlock(r) ? `<div class="me-row me-sum me-card"><span>Всего перечислено</span><b class="money">${rub(cardBlock(r))} ₽</b></div>` : ''}
+      ${(r.cash_kop || r.cash_avans_kop || r.otpusk_cash_kop) ? '<div class="me-cap">Дополнительные поступления</div>' : ''}
       ${payRow('Аванс наличными', r.cash_avans_kop, 'cash_avans', canEdit)}
+      ${payRow('Наличными', r.cash_kop, 'cash', canEdit)}
       ${payRow('Отпускные наличными', r.otpusk_cash_kop, 'otpusk_cash', canEdit)}
-      ${payRow('Прочая выплата', r.pay_other_kop, 'pay_other', canEdit)}
-      ${cardTotal(r) ? `<div class="me-row me-sum me-card"><span>Всего на карту</span><b class="money">${rub(cardTotal(r))} ₽</b></div>` : ''}
+      ${handBlock(r) ? `<div class="me-row me-sum me-hand"><span>Всего дополнительно</span><b class="money">${rub(handBlock(r))} ₽</b></div>` : ''}
       ${r.carry_kop || canEdit ? `<div class="me-row me-sum cp-carry${canEdit ? ' me-tap' : ''}"${canEdit ? ' title="Изменить или убрать перенос"' : ''}>
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
         ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
-      <div class="me-row"><span class="muted small">«Всего заработано» минус всё уже выданное — на карту и наличными — плюс перенос с прошлого месяца. Столько ещё раздать, в основном наличными.<br>Начисленные отпускные и больничные <b>входят</b> в заработок, а выплаченные — вычитаются: если начислили и выплатили поровну, на разницу они не влияют.</span></div>
+      <div class="me-row"><span class="muted small"><b>Заработано</b> − <b>на карту</b> − <b>дополнительные поступления</b> + перенос с прошлого месяца. Столько ещё раздать наличными.<br>Начисленные отпускные и больничные входят в заработок, а выплаченные — вычитаются: если начислили и выплатили поровну, на разницу они не влияют. Удержания (алименты и прочее) стоят в блоке «На карту» — они тоже уменьшают выдачу.</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
     ${pctLine && canEdit ? `<label class="flbl">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё</label>
       <div class="me-add">
