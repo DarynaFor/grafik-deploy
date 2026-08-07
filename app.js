@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=157';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=158';
 
 const $ = id => document.getElementById(id);
 
@@ -561,7 +561,9 @@ function parseHash() {
     if (!/^[1-9]\d*$/.test(arg || '')) return null;
     t.id = Number(arg);
   }
-  if (r.arg === 'period' && PERIOD_RE.test(arg || '')) t.period = arg;
+  // Ссылка может назвать месяц раньше начала учёта — прижимаем к границе, иначе
+  // человек попадёт на пустой экран и решит, что программа сломалась.
+  if (r.arg === 'period' && PERIOD_RE.test(arg || '')) t.period = clampPeriod(arg);
   return t;
 }
 // Карточка в меню не значится — её пускаем тем же условием, что и список
@@ -1148,7 +1150,7 @@ async function loadCardPanel(id) {
 function shiftCardMonth(delta, id) {
   let [y, m] = (payPeriod || nowPeriod()).split('-').map(Number);
   m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
-  payPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = payPeriod;
+  payPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = payPeriod;
   loadCardMoney(id); loadCardPanel(id);
 }
 
@@ -2299,6 +2301,27 @@ let curPeriod = null, schedShown = null, scheduleRows = [], shiftKinds = [], sch
    расчёт и вынесен в базу. Один хелпер на оба места. */
 const mskNow = () => new Date(Date.now() + 3 * 3600e3);              // «сейчас» по Москве (UTC+3)
 const nowPeriod = () => { const n = mskNow(); return n.getUTCFullYear() + '-' + String(n.getUTCMonth() + 1).padStart(2, '0'); };
+/* Раньше июля 2026 данных нет и не будет: учёт начали с него — проверено по базе,
+   деньги, график, переносы и ручные суммы начинаются 2026-07-01. Дарина 07.08
+   ушла стрелкой в июнь, увидела «данных нет» и решила, что программа сломалась:
+   «знову щось зламалось… це негайно потрібно вирішити». Пустой экран за месяц,
+   которого не существует, неотличим от аварии — поэтому ниже границы не пускаем,
+   а если туда попали по ссылке, объясняем словами вместо пустоты. */
+const FIRST_PERIOD = '2026-07';
+const clampPeriod = p => (p && p < FIRST_PERIOD) ? FIRST_PERIOD : p;
+/* Стрелка «‹» на первом месяце гаснет. Одного clampPeriod мало: клик по живой
+   стрелке, которая ничего не делает, читается как зависание — человек жмёт ещё
+   и ещё. Зовём после каждой отрисовки месяца. */
+function paintMonthNav() {
+  for (const [prevId, get] of [['mPrev', () => curPeriod], ['pPrev', () => payPeriod],
+                               ['oPrev', () => ovPeriod], ['gPrev', () => gapsPeriod],
+                               ['qPrev', () => patPeriod], ['cpPrev', () => payPeriod]]) {
+    const b = $(prevId); if (!b) continue;
+    const at = (get() || nowPeriod()) <= FIRST_PERIOD;
+    b.disabled = at;
+    b.title = at ? 'Раньше июля 2026 учёт не вёлся' : 'Пред. месяц';
+  }
+}
 // Русские падежи после числа: 1 приём / 2 приёма / 5 приёмов. Без этого экран
 // говорил бы «2 приём», и владелец читал бы отчёт, спотыкаясь на каждой строке.
 function plural(n, one, few, many) {
@@ -2342,8 +2365,8 @@ function dayMark(day) {
    График: тот показывал июль с июльскими клетками, а клик писал в август —
    факты уходили не в тот месяц молча. */
 let payPeriod = null;
-function shiftPayMonth(delta) { let [y, m] = payPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } payPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = payPeriod; syncHash(false); }
-function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = curPeriod; syncHash(false); renderSchedule(); }
+function shiftPayMonth(delta) { let [y, m] = payPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } payPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = payPeriod; syncHash(false); }
+function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = curPeriod; syncHash(false); renderSchedule(); }
 const REST_KINDS = ['off', 'absent', 'отпуск'];   // нерабочие виды: НЕ в норму, НЕ «прогул», без оплаты смены
 const isRest = k => REST_KINDS.includes(k);
 function cellText(c) {
@@ -2790,6 +2813,7 @@ async function renderSchedule() {
   }
 }
 function drawSchedule() {
+  paintMonthNav();
   if (!isStaff() || !$('scheduleGrid')) return;
   // Тот же замок, что у drawPayroll: в scheduleRows лежит месяц schedShown. Пока
   // грузится ДРУГОЙ — рисовать нечем, и без этой строки поиск, выбор отделения или
@@ -3743,6 +3767,7 @@ function linesForRow(r, raw) {
 }
 
 function drawPayroll(filter = '') {
+  paintMonthNav();
   // В payrollRows лежат деньги за payrollShown. Если сейчас грузится ДРУГОЙ месяц —
   // рисовать нечего. Поиск по ФИО и выбор отделения зовут drawPayroll НАПРЯМУЮ,
   // минуя renderPayroll: без этой строки один символ в поиске перерисовывал старые
@@ -4631,7 +4656,7 @@ async function payrollDialog(empId) {
    каждый пункт КЛИКАБЕЛЕН на нужный экран. График «Наличка по дням» отложен —
    он пуст до первого дня выдач (3b-6), рисовать диаграмму нулевого ряда рано. */
 let ovPeriod = null, ovData = null, ovSeq = 0;
-function shiftOvMonth(d) { if (!ovPeriod) ovPeriod = nowPeriod(); let [y, m] = ovPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } ovPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = ovPeriod; syncHash(false); renderOverview(); }
+function shiftOvMonth(d) { if (!ovPeriod) ovPeriod = nowPeriod(); let [y, m] = ovPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } ovPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = ovPeriod; syncHash(false); renderOverview(); }
 
 // Флаги v_month_total → человеческие строки «Требует внимания». Красные — сверху.
 // Порядок массива = порядок показа. Клик ведёт на «Расчёт», где это видно построчно.
@@ -4681,6 +4706,7 @@ async function renderOverview(reset = true) {
 }
 
 function drawOverview() {
+  paintMonthNav();
   if (!ovData) return;
   const { rows, remarks, payouts, aheadCnt } = ovData;
   const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
@@ -5171,7 +5197,7 @@ function shiftGapsMonth(d) {
   if (!gapsPeriod) gapsPeriod = nowPeriod();
   let [y, m] = gapsPeriod.split('-').map(Number); m += d;
   if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
-  gapsPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = gapsPeriod; syncHash(false); renderGaps();
+  gapsPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = gapsPeriod; syncHash(false); renderGaps();
 }
 
 // Проверки идут ПО РОСТЕРУ (активные сотрудники), а расчётная строка из
@@ -5256,6 +5282,7 @@ async function renderGaps() {
 }
 
 function drawGaps() {
+  paintMonthNav();
   if (!gapsData) return;
   const { rows, emps, hasCell } = gapsData;
   const active = (emps || []).filter(e => e.status === 'active');
@@ -5316,7 +5343,7 @@ function drawGaps() {
    контроль. Итоги берём ГОТОВЫМИ из v_patient_month: список постраничный, и
    сумма по загруженной странице врала бы. */
 let patPeriod = null, patRows = [], patLastId = null, patHasMore = false, patMonth = [], patShown = null, patSeq = 0;
-function shiftPatMonth(d) { if (!patPeriod) patPeriod = nowPeriod(); let [y, m] = patPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } patPeriod = y + '-' + String(m).padStart(2, '0'); workPeriod = patPeriod; syncHash(false); renderPatients(); }
+function shiftPatMonth(d) { if (!patPeriod) patPeriod = nowPeriod(); let [y, m] = patPeriod.split('-').map(Number); m += d; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } patPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = patPeriod; syncHash(false); renderPatients(); }
 
 async function renderPatients(reset = true) {
   if (!isStaff()) { $('patList').innerHTML = ''; return; }
@@ -5373,6 +5400,7 @@ function emptyPatText(f, month) {
 }
 
 function drawPatients() {
+  paintMonthNav();
   const f = ($('patSearch')?.value || '').toLowerCase().trim();
   const hit = s => !f || String(s || '').toLowerCase().includes(f);
   const month = patMonth.filter(m => hit(m.fio));
