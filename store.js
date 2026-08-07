@@ -179,6 +179,37 @@ export class MockStore {
     this._log('created', 'specialty', s.id, null, null, name);
     this._save(); return s;
   }
+  /* Правила отделения и именованные суммы за смену (101). В демо держим в той же
+     локальной базе — экран «Правила» должен работать и без сети. */
+  async listShiftPresets() { return [...(this.db.presets || [])]; }
+  async saveShiftPreset(row) {
+    if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять варианты оплаты может владелец или директор');
+    this.db.presets = this.db.presets || [];
+    const i = row.id ? this.db.presets.findIndex(p => p.id === row.id) : -1;
+    if (i >= 0) { this.db.presets[i] = { ...this.db.presets[i], ...row }; this._log('updated', 'shift_preset', row.id, 'вариант оплаты', null, row.code); }
+    else { row.id = (this.db.nextId.preset = (this.db.nextId.preset || 1) + 1); this.db.presets.push(row); this._log('created', 'shift_preset', row.id, 'вариант оплаты', null, row.code); }
+    this._save(); return row;
+  }
+  async deleteShiftPreset(id) {
+    if (this.user?.role !== 'owner') throw new Error('Удалять варианты может только владелец');
+    this.db.presets = (this.db.presets || []).filter(p => p.id !== id);
+    this._log('deleted', 'shift_preset', id, 'вариант оплаты', null, null); this._save();
+  }
+  async listDeptRules() { return [...(this.db.deptRules || [])]; }
+  async saveDeptRule(row) {
+    if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять норму отделения может владелец или директор');
+    this.db.deptRules = this.db.deptRules || [];
+    const i = this.db.deptRules.findIndex(r => r.category === row.category);
+    if (i >= 0) this.db.deptRules[i] = { ...this.db.deptRules[i], ...row };
+    else { row.id = (this.db.nextId.rule = (this.db.nextId.rule || 1) + 1); this.db.deptRules.push(row); }
+    this._log('updated', 'dept_rule', row.id || 0, 'норма отделения', null, row.category);
+    this._save(); return row;
+  }
+  async deleteDeptRule(category) {
+    if (this.user?.role !== 'owner') throw new Error('Удалять правила может только владелец');
+    this.db.deptRules = (this.db.deptRules || []).filter(r => r.category !== category);
+    this._save();
+  }
   async listCategoryOrder() { return [...(this.db.catOrder || [])]; }
   async setCategoryOrder(rows) {
     if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять порядок может владелец или директор');
@@ -1066,6 +1097,41 @@ export class SupabaseStore {
   /* Переименование справочника. .select() обязателен: RLS не «запрещает», а не
      находит строку, и без него PostgREST вернул бы успех на нуле изменённых
      строк — оператор увидел бы «Сохранено», а в базе осталось бы старое имя. */
+  /* Правила отделения и именованные суммы за смену (101).
+     .select() после записи обязателен: RLS не «запрещает», а не находит строку, и
+     без него PostgREST вернул бы успех на нуле изменённых строк — человек увидел
+     бы «Сохранено», а в базе осталось бы старое. */
+  async listShiftPresets() {
+    const { data, error } = await this.sb.from('shift_preset').select('*')
+      .order('category').order('sort').order('valid_from', { nullsFirst: true });
+    if (error) throw error; return data || [];
+  }
+  async saveShiftPreset(row) {
+    const q = row.id
+      ? this.sb.from('shift_preset').update(row).eq('id', row.id)
+      : this.sb.from('shift_preset').insert(row);
+    const { data, error } = await q.select().single();
+    if (error) throw error; return data;
+  }
+  async deleteShiftPreset(id) {
+    const { data, error } = await this.sb.from('shift_preset').delete().eq('id', id).select();
+    if (error) throw error;
+    if (!data?.length) throw new Error('Удалить не удалось — нет прав или вариант уже удалён');
+  }
+  async listDeptRules() {
+    const { data, error } = await this.sb.from('dept_rule').select('*').order('category');
+    if (error) throw error; return data || [];
+  }
+  async saveDeptRule(row) {
+    const { data, error } = await this.sb.from('dept_rule')
+      .upsert(row, { onConflict: 'category' }).select().single();
+    if (error) throw error; return data;
+  }
+  async deleteDeptRule(category) {
+    const { data, error } = await this.sb.from('dept_rule').delete().eq('category', category).select();
+    if (error) throw error;
+    if (!data?.length) throw new Error('Удалить не удалось — нет прав или правила уже нет');
+  }
   async listCategoryOrder() {
     const { data, error } = await this.sb.from('category_order').select('*').order('sort');
     if (error) throw error;

@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=155';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=157';
 
 const $ = id => document.getElementById(id);
 
@@ -351,6 +351,7 @@ const NAV = [
   // что роль реально может внести, и то же проверит база. show: canImport.
   { s: 'import', i: 'upload', l: 'Импорт', show: () => canImport() },
   { s: 'specialties', i: 'tag', l: 'Специальности', staffOnly: true },
+  { s: 'rules', i: 'tag', l: 'Правила', staffOnly: true },
   { s: 'journal', i: 'journal', l: 'Журнал', ownerOnly: true },
 ];
 function isOwner() { return store.me()?.role === 'owner'; }
@@ -495,6 +496,7 @@ const ROUTES = [
   { s: 'patients',    slug: 'patsienty',    arg: 'period' },
   { s: 'import',      slug: 'import' },
   { s: 'specialties', slug: 'specialnosti' },
+  { s: 'rules', slug: 'pravila' },
   { s: 'journal',     slug: 'zhurnal' },
   { s: 'soon',        slug: 'skoro' },      // заглушка кассиров: адрес есть, ссылки на неё нет
 ];
@@ -2554,6 +2556,203 @@ let closedDays = new Set();               // закрытые даты теку�
 let monthNorms = new Map();
 // renderSchedule — грузит данные месяца из сети, затем рисует. drawSchedule — только рисует
 // из уже загруженных scheduleRows + текущих фильтров (мгновенно, без сети → без гонок/мерцания).
+/* ── Экран «Правила» ──────────────────────────────────────────────────────────
+   Дарина 07.08: «щоб можна було заводити свої правила, і редагувати їх і робити
+   виключення з правил», и отдельно — «щоб ці ставки усі вони самі могли міняти
+   без мене». Поэтому здесь то, что раньше жило в коде: норма часов отделения и
+   именованные суммы за смену (СанАм12, МсСтац24 и прочие от Гелига).
+
+   Два обещания, которые экран обязан держать:
+   1. Правило отделения — НИЖНИЙ слой. Оно срабатывает только там, где человеку
+      лично ничего не задано. Ни одна из 147 личных норм и ни один из 31
+      «40-часовая неделя» не переписываются. Сказано прямо на экране: иначе
+      правка правила выглядит опаснее, чем она есть, и её будут бояться.
+   2. Сумма за смену живёт во ВРЕМЕНИ: у «СанАмОдна» до августа 4 500, с августа
+      4 350 (Дарина 07.08). Правка «на сегодня» не смеет менять прошлые месяцы,
+      поэтому у варианта есть срок действия, а не одно число. */
+let rulePresets = [], ruleNorms = [], rulesSeq = 0;
+
+async function renderRules() {
+  if (!isStaff()) { $('ruleNorms').innerHTML = ''; $('rulePresets').innerHTML = ''; return; }
+  const seq = ++rulesSeq;
+  $('ruleNorms').innerHTML = '<div class="empty">Загружаем…</div>';
+  $('rulePresets').innerHTML = '';
+  let p, n;
+  try { [p, n] = await Promise.all([store.listShiftPresets(), store.listDeptRules()]); }
+  catch (e) { if (seq === rulesSeq) $('ruleNorms').innerHTML = `<div class="empty">${esc(e.message || e)}</div>`; return; }
+  if (seq !== rulesSeq) return;
+  rulePresets = p || []; ruleNorms = n || [];
+  drawRules();
+}
+
+const normLabel = r => r?.fixed_hours ? fmt(+r.fixed_hours) + ' ч в месяц'
+  : r?.week_hours ? fmt(+r.week_hours) + '-часовая неделя' : '—';
+
+/* Срок действия суммы, словами. Пусто с обеих сторон — «всегда», и это не то же
+   самое, что «сейчас»: такой вариант применим и к прошлым месяцам тоже. */
+function presetTerm(x) {
+  if (!x.valid_from && !x.valid_to) return 'всегда';
+  if (!x.valid_to) return 'с ' + dmy(x.valid_from);
+  if (!x.valid_from) return 'по ' + dmy(x.valid_to);
+  return dmy(x.valid_from) + ' — ' + dmy(x.valid_to);
+}
+const presetLive = x => !x.valid_to || x.valid_to >= (workPeriod || nowPeriod()) + '-01';
+
+function drawRules() {
+  const canEdit = isOwner() || store.me()?.role === 'ceo';
+  const cats = catsOrdered([...new Set([...specialties.map(s => s.category), ...ruleNorms.map(r => r.category)])]);
+
+  const normRows = cats.map(c => {
+    const r = ruleNorms.find(x => x.category === c);
+    const people = employees.filter(e => e.status === 'active' && specCat(e.specialty_id) === c).length;
+    return `<div class="rl-row${canEdit ? ' rl-tap' : ''}" data-norm="${esc(c)}">
+      <span class="rl-name"><i class="cat-dot" style="background:${catColor(c)}"></i>${esc(c)}
+        <span class="muted small"> · ${people} чел</span></span>
+      <b class="${r ? '' : 'muted'}">${esc(normLabel(r))}</b>
+      ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>`;
+  }).join('');
+
+  $('ruleNorms').innerHTML = `<div class="me-cap">Норма часов по отделению</div>
+    <div class="msub" style="margin-bottom:10px">На норму делится оклад: <b>оклад ÷ норма × отработанные часы</b>.
+      Правило действует только там, где человеку не задано своё — личные настройки оно не трогает.</div>
+    ${normRows || '<div class="empty">Отделений нет</div>'}`;
+
+  const byCat = {};
+  for (const x of rulePresets) (byCat[x.category || 'Всем'] ||= []).push(x);
+  const presetBlocks = Object.keys(byCat).sort((a, b) => catSort(a) - catSort(b) || a.localeCompare(b, 'ru'))
+    .map(c => `<div class="rl-cap">${esc(c)}</div>` + byCat[c].map(x => `
+      <div class="rl-row${canEdit ? ' rl-tap' : ''}${presetLive(x) ? '' : ' rl-old'}" data-preset="${x.id}">
+        <span class="rl-name">${esc(x.label)}<span class="muted small"> · ${esc(x.code)} · ${esc(presetTerm(x))}</span></span>
+        <b class="money">${rub(x.amount_kop)} ₽</b>
+        ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>`).join('')).join('');
+
+  $('rulePresets').innerHTML = `<div class="me-cap">Суммы за смену</div>
+    <div class="msub" style="margin-bottom:10px">Подставляются кликом по клетке графика тем, кому платят за выход, а не за часы.
+      В клетке остаётся само число — правка варианта <b>не меняет</b> уже проставленные дни.</div>
+    ${presetBlocks || '<div class="empty">Вариантов пока нет</div>'}
+    ${canEdit ? '<div class="me-jump"><button class="btn btn-ghost btn-sm" id="rlAdd">+ Добавить вариант</button></div>' : ''}`;
+
+  if (!canEdit) return;
+  $('ruleNorms').querySelectorAll('[data-norm]').forEach(el => { el.onclick = () => deptNormDialog(el.dataset.norm); });
+  $('rulePresets').querySelectorAll('[data-preset]').forEach(el => {
+    el.onclick = () => presetDialog(rulePresets.find(x => x.id === +el.dataset.preset));
+  });
+  const add = $('rlAdd'); if (add) add.onclick = () => presetDialog(null);
+}
+
+/* Норма отделения. Два взаимоисключающих способа: тип недели (дальше считает
+   производственный календарь, и норма сама меняется от месяца к месяцу) или
+   жёсткие часы месяца, как у администрации — 180 = 15 смен × 12 ч. */
+async function deptNormDialog(cat) {
+  const cur = ruleNorms.find(x => x.category === cat);
+  const kind = cur?.fixed_hours ? 'fixed' : cur?.week_hours ? 'week' : '';
+  const who = employees.filter(e => e.status === 'active' && specCat(e.specialty_id) === cat);
+  // Сколько человек правило РЕАЛЬНО затронет: у кого нет ни личной нормы месяца,
+  // ни своего типа недели. Без этого числа правка выглядит слепой.
+  const touched = who.filter(e => !e.week_hours).length;
+  showModal(`<h3>Норма · ${esc(cat)}</h3>
+    <div class="msub">${who.length} чел в отделении${touched < who.length
+      ? ` · правило коснётся ${touched}, у остальных задано своё` : ''}</div>
+    <label class="flbl" style="margin-top:12px">Как считать</label>
+    <select class="input" id="nmKind">
+      <option value=""${kind ? '' : ' selected'}>Правила нет — считать по личным настройкам</option>
+      <option value="week"${kind === 'week' ? ' selected' : ''}>Тип недели — норму даёт производственный календарь</option>
+      <option value="fixed"${kind === 'fixed' ? ' selected' : ''}>Жёстко часов в месяц</option>
+    </select>
+    <div id="nmValWrap" style="margin-top:10px"></div>
+    <div class="msub" style="margin-top:10px">На норму делится оклад. Личные настройки людей это правило не переписывает —
+      оно срабатывает только там, где у человека своего ничего не задано.</div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost btn-sm" id="nmNo">Отмена</button>
+      <button class="btn btn-primary btn-sm" id="nmOk">${ICONS.check}Сохранить</button></div>`);
+  const paint = () => {
+    const k = $('nmKind').value;
+    $('nmValWrap').innerHTML = !k ? ''
+      : k === 'week'
+        ? `<label class="flbl">Часов в неделю</label>
+           <input class="input" id="nmVal" inputmode="decimal" autocomplete="off" value="${cur?.week_hours ? fmt(+cur.week_hours) : '40'}" placeholder="40 / 36 / 24">`
+        : `<label class="flbl">Часов в месяц</label>
+           <input class="input" id="nmVal" inputmode="decimal" autocomplete="off" value="${cur?.fixed_hours ? fmt(+cur.fixed_hours) : '180'}" placeholder="180">`;
+  };
+  paint(); $('nmKind').onchange = paint;
+  $('nmNo').onclick = closeModal;
+  $('nmOk').onclick = async () => {
+    const k = $('nmKind').value;
+    try {
+      if (!k) { await store.deleteDeptRule(cat); }
+      else {
+        let v; try { v = parseNum($('nmVal').value, { field: 'норму' }); }
+        catch (err) { toast(err.message, true); return; }
+        if (!v || v <= 0 || v > (k === 'week' ? 80 : 400)) { toast('Проверьте число часов', true); return; }
+        await store.saveDeptRule({ category: cat, week_hours: k === 'week' ? v : null, fixed_hours: k === 'fixed' ? v : null });
+      }
+      closeModal(); toast(ICONS.check + 'Сохранено'); await renderRules();
+    } catch (e) { toast(e.message || e, true); }
+  };
+}
+
+/* Вариант суммы за смену. Срок действия — не украшение: сумма «СанАмОдна» в
+   июле 4 500, а с августа 4 350. Правка без даты переписала бы подсказку и для
+   прошлых месяцев, и человек, правя июльский день, получил бы августовское
+   число. Поэтому меняя сумму «с такого-то», мы закрываем прежнюю строку днём
+   раньше и заводим новую, а не переписываем старую. */
+function presetDelConfirm(x) {
+  return new Promise(resolve => {
+    showModal2(`<h3>Убрать вариант?</h3>
+      <div class="msub">${esc(x.label)} · ${rub(x.amount_kop)} ₽</div>
+      <div class="msub" style="margin-top:8px">Уже проставленные в графике суммы <b>останутся</b> —
+        в клетке лежит само число, а не ссылка на вариант. Пропадёт только подсказка при вводе.</div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="pdNo">Отмена</button>
+        <button class="btn btn-primary btn-sm" id="pdYes">Убрать</button></div>`, () => resolve(false));
+    $('pdNo').onclick = () => { resolve(false); closeModal2(); };
+    $('pdYes').onclick = () => { resolve(true); closeModal2(); };
+  });
+}
+
+async function presetDialog(x) {
+  const cats = catsOrdered([...new Set(specialties.map(s => s.category))]);
+  showModal(`<h3>${x ? 'Вариант оплаты' : 'Новый вариант'}</h3>
+    ${x ? `<div class="msub">${esc(x.code)} · сейчас <b>${rub(x.amount_kop)} ₽</b> · ${esc(presetTerm(x))}</div>` : ''}
+    <label class="flbl" style="margin-top:12px">Короткий код</label>
+    <input class="input" id="psCode" autocomplete="off" maxlength="40" value="${esc(x?.code || '')}" placeholder="СанАм12">
+    <label class="flbl" style="margin-top:10px">Название по-человечески</label>
+    <input class="input" id="psLabel" autocomplete="off" maxlength="120" value="${esc(x?.label || '')}" placeholder="Санитарка амбулаторно, 12 ч">
+    <label class="flbl" style="margin-top:10px">Сумма за смену, ₽</label>
+    <input class="input" id="psAmt" inputmode="numeric" autocomplete="off" value="${x ? rub(x.amount_kop) : ''}" placeholder="3200">
+    <label class="flbl" style="margin-top:10px">Отделение</label>
+    <select class="input" id="psCat">
+      <option value="">Предлагать всем</option>
+      ${cats.map(c => `<option${x?.category === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+    </select>
+    <label class="flbl" style="margin-top:10px">Действует с (пусто — всегда)</label>
+    <input class="input" id="psFrom" type="date" value="${x?.valid_from || ''}">
+    <div class="msub" style="margin-top:8px">Если сумму меняют с какого-то месяца — поставьте дату, а прежний вариант
+      оставьте: прошлые месяцы должны подсказывать своё число.</div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost btn-sm" id="psNo">Отмена</button>
+      ${x && isOwner() ? '<button class="btn btn-ghost btn-sm" id="psDel">Удалить</button>' : ''}
+      <button class="btn btn-primary btn-sm" id="psOk">${ICONS.check}Сохранить</button></div>`);
+  $('psNo').onclick = closeModal;
+  const del = $('psDel');
+  if (del) del.onclick = async () => {
+    if (!await presetDelConfirm(x)) return;
+    try { await store.deleteShiftPreset(x.id); closeModal(); toast(ICONS.check + 'Убрано'); await renderRules(); }
+    catch (e) { toast(e.message || e, true); }
+  };
+  $('psOk').onclick = async () => {
+    const code = $('psCode').value.trim(), label = $('psLabel').value.trim();
+    if (!code || !label) { toast('Заполните код и название', true); return; }
+    let v; try { v = parseNum($('psAmt').value, { thousands: true, field: 'сумму' }); }
+    catch (err) { toast(err.message, true); return; }
+    if (!v || v <= 0 || v > 1000000) { toast('Проверьте сумму', true); return; }
+    const row = { code, label, amount_kop: Math.round(v * 100),
+      category: $('psCat').value || null, valid_from: $('psFrom').value || null };
+    if (x) row.id = x.id;
+    try { await store.saveShiftPreset(row); closeModal(); toast(ICONS.check + 'Сохранено'); await renderRules(); }
+    catch (e) { toast(e.message || e, true); }
+  };
+}
+
 async function renderSchedule() {
   if (!isStaff() || !$('scheduleGrid')) return;
   if (!curPeriod) curPeriod = nowPeriod();

@@ -19,7 +19,7 @@
 <meta name="theme-color" content="#0C0D10" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#EBE6DD" media="(prefers-color-scheme: light)">
 <script>(function(){try{var t=localStorage.getItem('milena-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-<link rel="stylesheet" href="styles.css?v=154">
+<link rel="stylesheet" href="styles.css?v=157">
 <!-- Говорим браузеру про ВСЕ файлы сразу. Замерено на живом сайте: без этого
      он узнаёт о них по цепочке — app.js стартует на 1160 мс, store.js только на
      1274 (после того как app.js докачался и в нём нашёлся import), supabase.js
@@ -30,7 +30,7 @@
 
      ⚠ Версия store.js должна СОВПАДАТЬ с той, что в import внутри app.js, иначе
      браузер скачает файл дважды. Совпадение проверяет publish.sh. -->
-<link rel="modulepreload" href="store.js?v=155">
+<link rel="modulepreload" href="store.js?v=157">
 <link rel="preload" as="script" href="vendor/supabase.js">
 </head>
 <body>
@@ -134,6 +134,16 @@
         <div class="right"><button class="btn btn-primary btn-sm" id="addSpecBtn"><span data-ic="plus"></span>Добавить</button></div>
       </div>
       <div class="card cardpad" id="specList" style="max-width:560px"></div>
+    </section>
+
+    <section class="screen" id="s-rules">
+      <div class="page-head">
+        <div><h1>Правила</h1><p>Норма часов по отделениям и суммы за смену. Меняются здесь — без разработчика. Всё, что задано человеку лично, правила НЕ перезаписывают.</p></div>
+      </div>
+      <div class="rules-wrap">
+        <div class="card cardpad" id="ruleNorms"></div>
+        <div class="card cardpad" id="rulePresets"></div>
+      </div>
     </section>
 
     <section class="screen" id="s-schedule">
@@ -291,7 +301,7 @@
 })();
 </script>
 <script src="config.js"></script>
-<script type="module" src="app.js?v=156"></script>
+<script type="module" src="app.js?v=157"></script>
 <!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
      без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
      index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —
