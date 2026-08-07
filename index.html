@@ -19,7 +19,11 @@
 <meta name="theme-color" content="#0C0D10" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#EBE6DD" media="(prefers-color-scheme: light)">
 <script>(function(){try{var t=localStorage.getItem('milena-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<<<<<<< HEAD
 <link rel="stylesheet" href="styles.css?v=110">
+=======
+<link rel="stylesheet" href="styles.css?v=111">
+>>>>>>> claude/page-links-app-a75b9c
 </head>
 <body>
 
@@ -245,8 +249,45 @@
 <div class="netbar" id="netBar"></div>
 <div class="toast" id="toast"></div>
 
+<!-- Service worker: после первого захода программа не качает ничего тяжёлого.
+     Клиника в России, интернет плохой, на компьютерах постоянно включён VPN, и
+     заходят из режима инкогнито — а там кэш пуст КАЖДЫЙ раз. Замерено: холодный
+     заход ≈ 800 КБ и сервер их не сжимает (Timeweb этого не умеет). С sw второй
+     и все следующие заходы — только index.html, ≈ 33 КБ. И программа
+     открывается вообще без сети.
+     Ответы базы НЕ кэшируются: показать вчерашние суммы как сегодняшние в
+     программе про наличные опаснее, чем не показать ничего. Подробности — в sw.js.
+
+     ⚠ ВЫКЛЮЧАТЕЛЬ ЖИВЁТ ЗДЕСЬ и появляется ТЕМ ЖЕ коммитом, что регистрация:
+     открыть сайт с ?nosw=1 — service worker снимется и почистит кэши. Без этого
+     он был бы ловушкой: сам себя с сервера такой файл не удаляет, а сломанный
+     sw держит старую версию у всех и лечится только руками у каждого. -->
+<script>
+(function () {
+  if (!('serviceWorker' in navigator)) return;
+  var снять = /[?&]nosw=1/.test(location.search);
+  if (снять) {
+    navigator.serviceWorker.getRegistrations().then(function (rs) {
+      rs.forEach(function (r) { r.unregister(); });
+      if (window.caches && caches.keys) caches.keys().then(function (ks) {
+        ks.forEach(function (k) { caches.delete(k); });
+      });
+    }).catch(function () {});
+    return;                       // и НЕ регистрируем обратно в этой загрузке
+  }
+  // Регистрируем после load: на плохом канале незачем спорить за него с самой
+  // страницей, ради ускорения которой всё и делается.
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () {});
+  });
+})();
+</script>
 <script src="config.js"></script>
+<<<<<<< HEAD
 <script type="module" src="app.js?v=150"></script>
+=======
+<script type="module" src="app.js?v=151"></script>
+>>>>>>> claude/page-links-app-a75b9c
 <!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
      без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
      index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —
@@ -268,7 +309,7 @@ function hardReload(v) {
 /* и убираем ?v= из адреса, чтобы он не оставался в закладке/иконке Dock */
 (function () {
   try {
-    if (/[?&]v=\d+/.test(location.search) && history.replaceState)
+    if (/[?&](v=\d+|nosw=1)/.test(location.search) && history.replaceState)
       history.replaceState(null, '', location.pathname + location.hash);
   } catch (e) {}
 })();
