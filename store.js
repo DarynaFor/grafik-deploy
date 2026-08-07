@@ -678,6 +678,10 @@ export class MockStore {
      сторно одно на выдачу и сторно не сторнируют. Без этого демо показывало бы
      кнопку, которая «всегда работает», и первое же несовпадение вылезло бы
      на проде. Скрытую ЗП тут не изображаем — в демо её нет. */
+  // В демо базы нет — показываем в консоли, чтобы путь был проверяем и здесь.
+  async logError(kind, message, stack, screen, version) {
+    console.warn('[ошибка бы ушла в базу]', { kind, message, screen, version });
+  }
   async listPayouts(employee_id, period) {
     return (this.db.payouts || [])
       .filter(p => p.employee_id === employee_id && p.period === period && p.status === 'confirmed')
@@ -1348,6 +1352,16 @@ export class SupabaseStore {
   /* Выдача наличных из рук в руки (085). Пишем ТОЛЬКО через RPC: политик
      insert/update на payout нет и не будет — кассира и статус ставит сервер,
      иначе «кто выдал» стало бы полем, которому нельзя верить. */
+  /* Ошибка у пользователя → в базу (094). Тихо: это последний рубеж, и он не
+     имеет права сам стать источником ошибки. Любой сбой отправки проглатываем —
+     человеку и так уже плохо, второе красное окно ему не поможет. */
+  async logError(kind, message, stack, screen, version) {
+    try {
+      await this.sb.rpc('log_client_error', {
+        p_kind: kind, p_message: message, p_stack: stack,
+        p_screen: screen, p_version: version, p_ua: navigator.userAgent });
+    } catch (e) { /* молчим намеренно */ }
+  }
   async listPayouts(employee_id, period) {
     // ТОЛЬКО confirmed: так же считают v_month_payout и триггер переплаты.
     // СМС-ветка жива (статусы pending/cancelled/expired разрешены схемой), и
