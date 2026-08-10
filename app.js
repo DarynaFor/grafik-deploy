@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=166';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=167';
 
 const $ = id => document.getElementById(id);
 
@@ -2355,6 +2355,18 @@ const daysInMonth = p => { const [y, m] = p.split('-').map(Number); return new D
 // ISO-даты сравниваются лексикографически — это и есть сравнение по дате.
 const nextPeriodStart = p => { let [y, m] = p.split('-').map(Number); if (++m > 12) { m = 1; y++; } return y + '-' + String(m).padStart(2, '0') + '-01'; };
 const cellDate = day => curPeriod + '-' + String(day).padStart(2, '0');
+/* Вид смены по длительности. Нужен в двух местах, и оба раза потому, что без
+   вида день бесполезен: при вводе плана — сохранение молча УДАЛЯЛО клетку, при
+   отметке факта — клетка сохранялась и не оплачивалась (ставка привязана к виду).
+   Догадка, а не истина: у человека со ставкой «сутки» 12 отработанных часов —
+   это половина суток, а не двенадцатичасовая смена. Поэтому вид не навязываем,
+   а ПОДСТАВЛЯЕМ в поле — человек видит его и меняет одним движением. */
+const kindByHours = h => {
+  const has = c => shiftKinds.some(k => k.code === c);
+  if (h != null && h >= 20 && has('day24')) return 'day24';
+  if (h != null && h >= 11 && has('day12')) return 'day12';
+  return has('day') ? 'day' : (shiftKinds.find(k => !isRest(k.code) && k.code !== 'custom')?.code || null);
+};
 const cellOf = (empId, day, pos = 'main') => scheduleRows.find(s => s.employee_id === empId && s.work_date === cellDate(day) && (s.position || 'main') === pos);
 // Гос. праздники РФ — ТОЛЬКО фиксированные по ТК РФ ст.112 (одни и те же каждый год),
 // БЕЗ ежегодных переносов выходных. Причина двойная: переносы меняются постановлением
@@ -3202,16 +3214,6 @@ function scheduleCellPopup(empId, day, pos = 'main') {
      через полночь, это нормально. */
   const mins = t => { const [h, m] = (t || '').split(':').map(Number); return Number.isFinite(h) ? h * 60 + (m || 0) : null; };
   const hoursBetween = (a, b) => { const x = mins(a), y = mins(b); return (x == null || y == null) ? null : (((y - x) + 1440) % 1440) / 60; };
-  /* Тип смены — не украшение: без него setScheduleCell считает клетку пустой и
-     УДАЛЯЕТ строку, а экран говорит «Сохранено». Человек нажимает «08–20», жмёт
-     «Сохранить» и получает пустую клетку с зелёной галочкой. Поэтому тип
-     подставляем сами — по длительности, из справочника видов. */
-  const kindByHours = h => {
-    const has = c => shiftKinds.some(k => k.code === c);
-    if (h != null && h >= 20 && has('day24')) return 'day24';
-    if (h != null && h >= 11 && has('day12')) return 'day12';
-    return has('day') ? 'day' : (shiftKinds.find(k => !isRest(k.code) && k.code !== 'custom')?.code || null);
-  };
   const paintHours = () => {
     const st = $('scStart').value, en = $('scEnd').value, w = $('scWarn');
     const a = mins(st), b = mins(en);
@@ -3316,7 +3318,7 @@ function scheduleFactPopup(empId, day, pos = 'main') {
       ${isWork ? `<button class="btn btn-ghost fact-btn fact-miss" data-f="x">— Не вышел</button>` : ''}
       ${!isWork ? `<label class="flbl">Вышел на замену — добавить смену</label>
       <div class="frow" style="align-items:flex-end">
-        <div style="flex:1"><select class="input" id="fKind"><option value="">— тип смены —</option>${kindOpts}</select></div>
+        <div style="flex:1"><select class="input" id="fKind"><option value="">— тип смены (подставим по часам) —</option>${kindOpts}</select></div>
         <input class="input" id="fKindStart" type="time" style="max-width:116px" title="время начала (необязательно)">
         <button class="btn btn-primary btn-sm" id="fKindSave">${ICONS.check}Смена</button>
       </div>
@@ -3350,8 +3352,11 @@ function scheduleFactPopup(empId, day, pos = 'main') {
     if (isNaN(v) || v < 0 || v > 24) return toast('Часы 0–24', true);
     v = Math.round(v * 2) / 2;                       // до получаса (шаг поля 0.5) → проходит CHECK
     if (p) return apply(String(v));                  // план есть — вид уже задан, пишем только факт
-    const kind = $('fKind')?.value;
-    if (!kind) return toast('Сначала выберите тип смены — без него день не оплачивается', true);
+    // Плана нет — вид подставляем по отработанным часам, а не требуем выбрать:
+    // отметка «вышел» должна оставаться одним движением. Вид виден в поле —
+    // человек поправит; пустое поле он бы просто не заметил, а день молча
+    // не оплатился бы.
+    const kind = $('fKind')?.value || kindByHours(v);
     const btn = $('fSave'); if (btn.disabled) return; btn.disabled = true;
     try {
       const saved = await store.setScheduleCell(empId, date,
