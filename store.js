@@ -1297,9 +1297,11 @@ export class SupabaseStore {
     // читалось как пустая клетка и УДАЛЯЛО строку целиком: клик до «пусто» у
     // санитарки сносил вместе с суммой и саму смену 12ч, а с ней норму и факт
     // дня. Терялось молча — на экране клетка и так становится пустой.
-    const touchesShift = 'plan_kind' in cell || 'plan_start' in cell || 'fact' in cell;
+    const touchesShift = 'plan_kind' in cell || 'plan_start' in cell || 'fact' in cell
+      || 'fact_start' in cell || 'fact_end' in cell;
     const empty = touchesShift && (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null
-      && (cell.fact ?? null) === null && (cell.amount_kop ?? null) === null;
+      && (cell.fact ?? null) === null && (cell.amount_kop ?? null) === null
+      && (cell.fact_start ?? null) === null;
     if (empty) {   // очистка = удаление строки, чтобы таблица не копила пустышки
       const { error } = await this.sb.from('schedule').delete()
         .eq('employee_id', employeeId).eq('work_date', work_date).eq('position', position);
@@ -1311,6 +1313,11 @@ export class SupabaseStore {
     if ('plan_kind' in cell) row.plan_kind = cell.plan_kind ?? null;
     if ('fact' in cell) row.fact = cell.fact ?? null;
     if ('amount_kop' in cell) row.amount_kop = cell.amount_kop ?? null;   // оплата за смену целиком (074)
+    // Своё время факта (108): «вышла с 9 до 21» — это ФАКТ, а не план. Раньше
+    // такое наблюдение писать было некуда, кроме плана, и заливка из документа
+    // его затирала.
+    if ('fact_start' in cell) row.fact_start = cell.fact_start ?? null;
+    if ('fact_end' in cell) row.fact_end = cell.fact_end ?? null;
     const { data, error } = await this.sb.from('schedule')
       .upsert(row, { onConflict: 'employee_id,work_date,position' }).select().single();
     if (error) throw error; return data;

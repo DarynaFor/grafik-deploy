@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=168';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=169';
 
 const $ = id => document.getElementById(id);
 
@@ -2418,6 +2418,12 @@ function factHoursOf(c) {                                           // факт�
   if (!c) return 0;
   const fx = c.fact ?? null;
   if (fx === 'x') return 0;                                         // не вышел
+  // Своё время факта (108) точнее числа — тот же порядок, что в базе
+  // (sched_fact_hours): иначе экран и расчёт разошлись бы.
+  if (c.fact_start && c.fact_end) {
+    const m = t => +String(t).slice(0, 2) * 60 + +String(t).slice(3, 5);
+    return (((m(c.fact_end) - m(c.fact_start)) + 1440) % 1440) / 60;
+  }
   if (fx !== null && fx !== '' && !isNaN(parseFloat(fx))) return parseFloat(fx);   // свои часы
   return planHoursOf(c);                                            // null = отработано по плану
 }
@@ -2611,6 +2617,14 @@ function schedCellInner(c, past, pos = 'main') {                   // содер
   const noPlan = !p;
   const chip = esc(p ? planTxt : 'вне гр.');
   if (fx === 'x') return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh miss">—</span>`;
+  /* Своё время факта (108) показываем ВМЕСТО часов: «9–21» говорит больше, чем
+     «12ч», и сразу видно, чем факт отличается от плана сверху. */
+  if (c && c.fact_start && c.fact_end) {
+    const hh = t => String(t).slice(0, 5).replace(/:00$/, '').replace(/^0(\d)/, '$1');
+    const fh = factHoursOf(c), dev = Math.abs(fh - planHoursOf(c)) > 0.05;
+    return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span>`
+      + `<span class="fh ${dev ? 'dev' : 'ok'}">${esc(hh(c.fact_start))}–${esc(hh(c.fact_end))}</span>`;
+  }
   if (fx !== null && fx !== '' && !isNaN(parseFloat(fx))) {
     const n = parseFloat(fx), dev = Math.abs(n - planHoursOf(c)) > 0.05;   // ровно плановые часы = «по плану» (зелёным), иначе отклонение (янтарь)
     return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh ${dev ? 'dev' : 'ok'}">${fmtH(n)}</span>`;
@@ -3367,6 +3381,15 @@ function scheduleFactPopup(empId, day, pos = 'main') {
           <input class="input" id="fH" type="number" min="0" max="24" step="0.5" placeholder="напр. 6" value="${hVal}"></div>
         <button class="btn btn-primary btn-sm" id="fSave">${ICONS.check}ОК</button>
       </div>
+      <label class="flbl" style="margin-top:10px">…или фактическое время</label>
+      <div class="sc-range">
+        <input class="input" id="fFrom" type="time" value="${esc((c?.fact_start || '').slice(0, 5))}">
+        <span class="sc-dash">—</span>
+        <input class="input" id="fTo" type="time" value="${esc((c?.fact_end || '').slice(0, 5))}">
+        <b class="sc-hours" id="fRangeH"></b>
+        <button class="btn btn-primary btn-sm" id="fRangeSave">${ICONS.check}ОК</button>
+      </div>
+      <div class="msub" style="margin-top:6px">Когда вышли не как в плане: часы посчитаются сами, а план останется как назначен.</div>
     </div>
     <div class="modal-foot"><span class="msub">сейчас: <b>${now}</b></span><button class="btn btn-ghost btn-sm" id="fVac">Отпуск…</button><button class="btn btn-ghost btn-sm" id="fClear">Сбросить</button></div>`);
   { const b = $('fcEditPlan'); if (b) b.onclick = () => { closeModal(); scheduleCellPopup(empId, day, pos); }; }
@@ -3414,6 +3437,32 @@ function scheduleFactPopup(empId, day, pos = 'main') {
     }
     catch (err) { kb.disabled = false; toast(err.message || err, true); }
   };
+  /* Фактическое время. Пишем ВМЕСТЕ с видом смены: без вида день не оплатится
+     (ставка привязана к виду), а плана здесь может и не быть — человек вышел на
+     замену. Вид берём из плана, если он есть, иначе по длительности. Число часов
+     чистим: часы теперь считаются из времени, и оставленное число только путало
+     бы — в базе время приоритетнее. */
+  { const rb = $('fRangeSave');
+    const rangeH = () => {
+      const a = $('fFrom').value, b = $('fTo').value;
+      if (!a || !b) return null;
+      return ((((+b.slice(0, 2) * 60 + +b.slice(3, 5)) - (+a.slice(0, 2) * 60 + +a.slice(3, 5))) + 1440) % 1440) / 60;
+    };
+    const paintRange = () => { const h = rangeH(); $('fRangeH').textContent = h == null ? '' : fmtH(h); };
+    paintRange(); $('fFrom').oninput = paintRange; $('fTo').oninput = paintRange;
+    if (rb) rb.onclick = async () => {
+      const h = rangeH();
+      if (h == null) return toast('Укажите время выхода и ухода', true);
+      if (rb.disabled) return; rb.disabled = true;
+      const patch = { fact_start: $('fFrom').value, fact_end: $('fTo').value, fact: null };
+      if (!p) { patch.plan_kind = kindByHours(h); patch.plan_start = null; patch.plan_end = null; }
+      try {
+        const saved = await store.setScheduleCell(empId, date, patch, pos);
+        cacheCell(empId, date, pos, saved); closeModal();
+        toast(ICONS.check + 'Отмечено · ' + fmtH(h)); drawSchedule();
+      } catch (err) { rb.disabled = false; toast(err.message || err, true); }
+    };
+  }
   $('fClear').onclick = () => apply(null);
 }
 
