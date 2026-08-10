@@ -1001,3 +1001,18 @@ tr.pw-total.pw-over{z-index:5}
 
 /* Первый месяц учёта: стрелка «назад» гаснет, а не молчит вхолостую */
 .mn-btn:disabled{opacity:.3;cursor:default;pointer-events:none}
+
+
+/* Ввод смены диапазоном: «с — до», часы рядом, быстрые кнопки под полями */
+.sc-range{display:flex;align-items:center;gap:8px}
+.sc-range .input{max-width:124px}
+.sc-dash{color:var(--ink-3);font-weight:700}
+.sc-hours{margin-left:2px;color:var(--green);font-weight:700;font-size:13px;white-space:nowrap}
+.sc-quick{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.sc-q{border:1px solid var(--line);background:var(--fill-1);color:var(--ink-2);
+  border-radius:999px;padding:4px 11px;font-size:12px;font-weight:600;cursor:pointer;
+  font-variant-numeric:tabular-nums}
+.sc-q:hover{background:var(--green);border-color:var(--green);color:#fff}
+.sc-warn{margin-top:8px;padding:8px 10px;border-radius:9px;
+  background:color-mix(in srgb, var(--orange, #e0992a) 12%, transparent);
+  border:1px solid color-mix(in srgb, var(--orange, #e0992a) 32%, transparent)}

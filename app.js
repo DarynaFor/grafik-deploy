@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=159';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=160';
 
 const $ = id => document.getElementById(id);
 
@@ -3144,15 +3144,62 @@ function scheduleCellPopup(empId, day, pos = 'main') {
   const e = employees.find(x => x.id === empId); if (!e) return;
   const date = cellDate(day), c = cellOf(empId, day, pos);
   const opts = shiftKinds.filter(k => k.code !== 'custom').map(k => `<option value="${k.code}" ${c && c.plan_kind === k.code ? 'selected' : ''}>${esc(k.label)}</option>`).join('');   // custom без конца смены = 0ч → исключаем (как в шаблоне)
-  showModal(`${personHead(e, `${day} ${esc(periodLabel(curPeriod))} · смена = тип + время начала`)}
+  /* Смена задаётся ДИАПАЗОНОМ «с… до…», а не одним временем начала.
+     Раньше поле было одно, и Алёна, перенося из графика клиники «08-20»,
+     вписывала его в «Время начала» — база понимала это как 8 часов 20 минут,
+     а конец оставался пустым. Так легло 56 записей за август. Её вопрос звучал
+     буквально: «как выставить время с 11 до 19:30» — выставить было нечем.
+     Быстрые кнопки — шесть самых частых смен, взяты из того, что она уже
+     вводила: один клик вместо двух полей. */
+  const HH = t => t ? String(t).slice(0, 5) : '';
+  showModal(`${personHead(e, `${day} ${esc(periodLabel(curPeriod))} · смена = тип + время «с… до…»`)}
     <label class="flbl">Тип смены</label><select class="input" id="scKind"><option value="">— пусто —</option>${opts}</select>
-    <label class="flbl">Время начала</label><input class="input" id="scStart" type="time" value="${c && c.plan_start ? esc(String(c.plan_start).slice(0, 5)) : ''}">
+    <label class="flbl" style="margin-top:10px">Время работы</label>
+    <div class="sc-range">
+      <input class="input" id="scStart" type="time" value="${esc(HH(c?.plan_start))}">
+      <span class="sc-dash">—</span>
+      <input class="input" id="scEnd" type="time" value="${esc(HH(c?.plan_end))}">
+      <b class="sc-hours" id="scHours"></b>
+    </div>
+    <div class="sc-quick" id="scQuick">${
+      [['08:00', '20:00'], ['09:00', '21:00'], ['11:00', '19:00'],
+       ['08:00', '16:00'], ['10:00', '18:00'], ['09:00', '17:00']]
+        .map(([a, b]) => `<button class="sc-q" data-a="${a}" data-b="${b}">${a.slice(0, 2)}–${b.slice(0, 2)}</button>`).join('')}</div>
+    <div class="msub sc-warn" id="scWarn" style="display:none"></div>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="scVac">Отпуск…</button><button class="btn btn-ghost btn-sm" id="scClear">Очистить</button><button class="btn btn-primary btn-sm" id="scSave">${ICONS.check}Сохранить</button></div>`);
+
+  /* Часы считаем сразу под полями: человек видит «8.5ч» и замечает описку до
+     сохранения, а не через неделю в расчёте. Конец меньше начала — ночная смена
+     через полночь, это нормально. */
+  const mins = t => { const [h, m] = (t || '').split(':').map(Number); return Number.isFinite(h) ? h * 60 + (m || 0) : null; };
+  const paintHours = () => {
+    const st = $('scStart').value, en = $('scEnd').value, w = $('scWarn');
+    const a = mins(st), b = mins(en);
+    $('scHours').textContent = (a == null || b == null) ? '' : fmtH(Math.round((((b - a) + 1440) % 1440) / 6) / 10);
+    // Тот самый случай: «11:19» в начале — почти наверняка «с 11 до 19».
+    const sm = +(st.split(':')[1] || 0);
+    if (st && !en && sm >= 10 && sm <= 23) {
+      w.innerHTML = `Похоже, это <b>с ${esc(st.slice(0, 2))} до ${String(sm).padStart(2, '0')}</b>, а записано «${esc(st)}» —
+        то есть ${esc(st.slice(0, 2))} часов ${sm} минут.
+        <button class="btn btn-ghost btn-sm" id="scFix" style="margin-left:6px">Исправить</button>`;
+      w.style.display = '';
+      $('scFix').onclick = () => {
+        $('scStart').value = st.slice(0, 2) + ':00';
+        $('scEnd').value = String(sm).padStart(2, '0') + ':00';
+        paintHours();
+      };
+    } else w.style.display = 'none';
+  };
+  paintHours();
+  $('scStart').oninput = paintHours; $('scEnd').oninput = paintHours;
+  $('scQuick').querySelectorAll('.sc-q').forEach(b => {
+    b.onclick = () => { $('scStart').value = b.dataset.a; $('scEnd').value = b.dataset.b; paintHours(); };
+  });
   $('scVac').onclick = () => vacationDialog(empId, day);
   $('scSave').onclick = async () => {
     const btn = $('scSave'); if (btn.disabled) return; btn.disabled = true;
     const kind = $('scKind').value || null;   // время без типа смены не сохраняем (иначе невидимая строка-пустышка)
-    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, plan_end: null, fact: null }, pos); closeModal(); toast(ICONS.check + 'Сохранено'); renderSchedule(); }
+    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, plan_end: kind ? ($('scEnd').value || null) : null, fact: null }, pos); closeModal(); toast(ICONS.check + 'Сохранено'); renderSchedule(); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
   $('scClear').onclick = async () => {
