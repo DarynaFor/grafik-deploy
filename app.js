@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=167';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=168';
 
 const $ = id => document.getElementById(id);
 
@@ -2606,11 +2606,14 @@ function schedCellInner(c, past, pos = 'main') {                   // содер
   const planTxt = cellText(c);                                     // «9–17» / «В» / «С» / «—»
   if (!past) return `<span class="iv mini">${esc(planTxt)}</span>`;               // будущее — только план
   const isWork = p && !isRest(p);
-  const chip = esc(p ? planTxt : 'вне гр.');                       // вышел без плана (в свой выходной)
-  if (fx === 'x') return `<span class="iv mini">${chip}</span><span class="fh miss">—</span>`;
+  // «вне гр.» — факт есть, а плана на этот день не заводили. Помечаем классом,
+  // чтобы по всей таблице было видно, куда план ещё не залит.
+  const noPlan = !p;
+  const chip = esc(p ? planTxt : 'вне гр.');
+  if (fx === 'x') return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh miss">—</span>`;
   if (fx !== null && fx !== '' && !isNaN(parseFloat(fx))) {
     const n = parseFloat(fx), dev = Math.abs(n - planHoursOf(c)) > 0.05;   // ровно плановые часы = «по плану» (зелёным), иначе отклонение (янтарь)
-    return `<span class="iv mini">${chip}</span><span class="fh ${dev ? 'dev' : 'ok'}">${fmtH(n)}</span>`;
+    return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh ${dev ? 'dev' : 'ok'}">${fmtH(n)}</span>`;
   }
   if (isWork) return `<span class="iv mini">${esc(planTxt)}</span><span class="fh ok">${fmtH(planHoursOf(c))}</span>`;
   return `<span class="iv mini faint">${esc(planTxt)}</span>`;      // выходной/отпуск по плану — просто план тускло
@@ -3043,11 +3046,22 @@ function drawSchedule() {
       const who = employees.find(x => x.id === emp);
       if (isAmountCell(who, pos)) { cycleAmountCell(emp, d, pos); return; }
       if (pos === 'second') { cycleSecondCell(emp, d); return; }
-      pastDay(d) ? scheduleFactPopup(emp, d) : scheduleCellPopup(emp, d);   // прошлое → факт, будущее → план
+      /* Прошедший день с планом отмечается ОДНИМ кликом (Дарина 10.08): клик —
+         «вышел по плану», ещё клик — прочерк, ещё — снова неотмечен. Свои часы и
+         замена остаются на правой кнопке / долгом нажатии. Раньше каждый день
+         открывал модалку — лишний шаг там, где Алёна делает 180 отметок за 78 минут.
+         Плана нет — листать нечего, открываем окно ввода как раньше. */
+      if (!pastDay(d)) return scheduleCellPopup(emp, d);
+      const cc = cellOf(emp, d, pos);
+      if (cc && cc.plan_kind && !isRest(cc.plan_kind)) return cycleFactCell(emp, d, pos);
+      scheduleFactPopup(emp, d, pos);
     });
-    // Правая кнопка на дежурстве — обычный диалог. На телефоне правой кнопки нет,
-    // поэтому то же самое вешаем на долгое нажатие.
-    grid.querySelectorAll('.gr-cell.sec, .gr-cell.amt').forEach(cell => {
+    /* Правая кнопка (на телефоне — долгое нажатие) открывает подробный ввод:
+       свои часы, замена, время смены. Раньше висела только на дежурстве и суммах —
+       там левый клик листает цикл, и без правой кнопки до диалога было не
+       добраться. Теперь цикл есть и у обычных клеток, значит правая кнопка нужна
+       везде: иначе «вышел 6 часов вместо 12» стало бы негде записать. */
+    grid.querySelectorAll('.gr-cell').forEach(cell => {
       const open = ev => {
         ev.preventDefault();
         const emp = +cell.dataset.emp, d = +cell.dataset.day;
@@ -3055,7 +3069,7 @@ function drawSchedule() {
         const p2 = cell.dataset.pos || 'main';
         const who = employees.find(x => x.id === emp);
         if (isAmountCell(who, p2)) { amountCellPopup(who, d, p2); return; }
-        pastDay(d) ? scheduleFactPopup(emp, d, 'second') : scheduleCellPopup(emp, d, 'second');
+        pastDay(d) ? scheduleFactPopup(emp, d, p2) : scheduleCellPopup(emp, d, p2);
       };
       cell.oncontextmenu = open;
       let t = null;
@@ -3069,6 +3083,31 @@ function drawSchedule() {
   if (editable) grid.querySelectorAll('.gr-name.tap').forEach(n => n.onclick = () => scheduleTemplateDialog(+n.dataset.emp));
   if (canEditNorm) grid.querySelectorAll('.s-norm.tap').forEach(n => n.onclick = () => normDialog(+n.dataset.emp));
 }
+/* Факт одним кликом: «не отмечено» → «вышел по плану» → «не вышел» → снова
+   «не отмечено». Пишем ЯВНЫЕ плановые часы, а не оставляем null: в базе null на
+   прошедшем дне и так означает «отработал по плану» и уже оплачен, но на экране
+   он неотличим от «сюда ещё не смотрели». Явная отметка отвечает на вопрос,
+   который задал СЕО, — какой день проверен, а какой нет.
+   Деньги от этого не меняются: null и плановые часы дают ту же сумму. */
+async function cycleFactCell(empId, day, pos = 'main') {
+  const c = cellOf(empId, day, pos);
+  const cur = c ? (c.fact ?? null) : null;
+  const next = cur === null ? String(planHoursOf(c)) : (cur !== 'x' ? 'x' : null);
+  const date = cellDate(day);
+  // Рисуем сразу, запрос следом: иначе на медленном интернете клетка «залипает».
+  const sel = `.gr-cell[data-emp="${empId}"][data-day="${day}"]` + (pos === 'second' ? '.sec' : ':not(.sec)');
+  const cell = $('scheduleGrid')?.querySelector(sel);
+  const before = cell ? cell.innerHTML : null;
+  if (cell) cell.innerHTML = schedCellInner({ ...(c || {}), fact: next }, true, pos);
+  try {
+    const saved = await store.setScheduleFact(empId, date, next, pos);
+    cacheCell(empId, date, pos, saved); drawSchedule();
+  } catch (err) {
+    if (cell && before !== null) cell.innerHTML = before;   // не сохранилось — возвращаем как было
+    toast(err.message || err, true);
+  }
+}
+
 /* Дежурство одним кликом: Н (ночь) → С (сутки) → «не вышел» → пусто → Н…
    Три состояния и очистка — весь словарь дежурства, поэтому модалка тут лишняя.
    Пишем ВСЕГДА планом: дежурство назначают, а не отмечают задним числом; факт

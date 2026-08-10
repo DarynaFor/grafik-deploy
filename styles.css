@@ -363,7 +363,14 @@ body.authed .login-stage{display:none}
 .cat-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle;flex-shrink:0}
 /* Табель (Вариант 2): клетка = план (мини, серым) сверху + факт (цветом) снизу */
 .gr-cell.sc2{flex-direction:column;gap:0;line-height:1.12;padding:4px 3px}
-.gr-cell .iv{font-size:10px;color:var(--ink-3);font-weight:600;letter-spacing:-.2px}
+/* План — всегда приглушённо-серый, факт — всегда цветной. Это одно правило на
+   всю программу: серое = «назначено», цветное = «так вышло на самом деле».
+   Дарина 10.08: «план наприклад сірий, а факт — кольоровий, і одразу буде видно
+   де не було плану залито». */
+.gr-cell .iv{font-size:10px;color:var(--ink-3);font-weight:600;letter-spacing:-.2px;opacity:.8}
+/* «вне гр.» — факт есть, плана нет: приглушаем ещё сильнее и курсивом, чтобы
+   пустота плана читалась с одного взгляда по всей таблице */
+.gr-cell .iv.nop{opacity:.5;font-style:italic;font-weight:600}
 .gr-cell .iv.faint{opacity:.55}
 .gr-cell .fh{font-size:11.5px;font-weight:800;margin-top:1px}
 .gr-cell .fh.ok{color:var(--green-d)}
