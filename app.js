@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=161';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=162';
 
 const $ = id => document.getElementById(id);
 
@@ -3172,6 +3172,17 @@ function scheduleCellPopup(empId, day, pos = 'main') {
      сохранения, а не через неделю в расчёте. Конец меньше начала — ночная смена
      через полночь, это нормально. */
   const mins = t => { const [h, m] = (t || '').split(':').map(Number); return Number.isFinite(h) ? h * 60 + (m || 0) : null; };
+  const hoursBetween = (a, b) => { const x = mins(a), y = mins(b); return (x == null || y == null) ? null : (((y - x) + 1440) % 1440) / 60; };
+  /* Тип смены — не украшение: без него setScheduleCell считает клетку пустой и
+     УДАЛЯЕТ строку, а экран говорит «Сохранено». Человек нажимает «08–20», жмёт
+     «Сохранить» и получает пустую клетку с зелёной галочкой. Поэтому тип
+     подставляем сами — по длительности, из справочника видов. */
+  const kindByHours = h => {
+    const has = c => shiftKinds.some(k => k.code === c);
+    if (h != null && h >= 20 && has('day24')) return 'day24';
+    if (h != null && h >= 11 && has('day12')) return 'day12';
+    return has('day') ? 'day' : (shiftKinds.find(k => !isRest(k.code) && k.code !== 'custom')?.code || null);
+  };
   const paintHours = () => {
     const st = $('scStart').value, en = $('scEnd').value, w = $('scWarn');
     const a = mins(st), b = mins(en);
@@ -3193,12 +3204,20 @@ function scheduleCellPopup(empId, day, pos = 'main') {
   paintHours();
   $('scStart').oninput = paintHours; $('scEnd').oninput = paintHours;
   $('scQuick').querySelectorAll('.sc-q').forEach(b => {
-    b.onclick = () => { $('scStart').value = b.dataset.a; $('scEnd').value = b.dataset.b; paintHours(); };
+    b.onclick = () => {
+      $('scStart').value = b.dataset.a; $('scEnd').value = b.dataset.b;
+      // Тип обязателен: без него сохранение молча УДАЛЯЕТ клетку.
+      if (!$('scKind').value) $('scKind').value = kindByHours(hoursBetween(b.dataset.a, b.dataset.b));
+      paintHours();
+    };
   });
   $('scVac').onclick = () => vacationDialog(empId, day);
   $('scSave').onclick = async () => {
     const btn = $('scSave'); if (btn.disabled) return; btn.disabled = true;
-    const kind = $('scKind').value || null;   // время без типа смены не сохраняем (иначе невидимая строка-пустышка)
+    // Время БЕЗ типа раньше уходило в никуда: все поля null → строка удалялась,
+    // а тост говорил «Сохранено». Теперь тип подставляем по длительности.
+    let kind = $('scKind').value || null;
+    if (!kind && $('scStart').value) kind = kindByHours(hoursBetween($('scStart').value, $('scEnd').value));
     try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, plan_end: kind ? ($('scEnd').value || null) : null, fact: null }, pos); closeModal(); toast(ICONS.check + 'Сохранено'); renderSchedule(); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
