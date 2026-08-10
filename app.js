@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=160';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=161';
 
 const $ = id => document.getElementById(id);
 
@@ -3245,7 +3245,11 @@ function scheduleFactPopup(empId, day, pos = 'main') {
   const date = cellDate(day), c = cellOf(empId, day, pos);
   const p = c && c.plan_kind, isWork = p && !isRest(p);
   const cur = c ? (c.fact ?? null) : null;
-  const planLine = p ? `план: <b>${esc(cellText(c))}</b>${isWork ? ' · ' + fmtH(planHoursOf(c)) : ''}` : 'плана нет';
+  /* План правится прямо отсюда. Прошедший день открывает окно ФАКТА, и до плана
+     было не добраться вообще: Алёна не могла исправить ошибочные «10:19» на
+     «10:00–19:30» — окно показывало неверный план и не давало его тронуть. */
+  const planLine = (p ? `план: <b>${esc(cellText(c))}</b>${isWork ? ' · ' + fmtH(planHoursOf(c)) : ''}` : 'плана нет')
+    + ` <button class="lnk-inline" id="fcEditPlan">изменить</button>`;
   const now = cur === 'x' ? 'не вышел' : (cur != null && cur !== '' ? fmtH(parseFloat(cur)) : (isWork ? 'по плану' : '—'));
   const hVal = (cur != null && cur !== '' && cur !== 'x') ? esc(String(cur)) : '';
   const workKinds = shiftKinds.filter(k => !isRest(k.code) && k.code !== 'custom');   // смены-замены: только рабочие типы
@@ -3268,6 +3272,7 @@ function scheduleFactPopup(empId, day, pos = 'main') {
       </div>
     </div>
     <div class="modal-foot"><span class="msub">сейчас: <b>${now}</b></span><button class="btn btn-ghost btn-sm" id="fVac">Отпуск…</button><button class="btn btn-ghost btn-sm" id="fClear">Сбросить</button></div>`);
+  { const b = $('fcEditPlan'); if (b) b.onclick = () => { closeModal(); scheduleCellPopup(empId, day, pos); }; }
   $('fVac').onclick = () => vacationDialog(empId, day);
   const apply = async fact => {
     try { await store.setScheduleFact(empId, date, fact, pos); closeModal(); toast(ICONS.check + 'Факт отмечен'); renderSchedule(); }

@@ -1016,3 +1016,9 @@ tr.pw-total.pw-over{z-index:5}
 .sc-warn{margin-top:8px;padding:8px 10px;border-radius:9px;
   background:color-mix(in srgb, var(--orange, #e0992a) 12%, transparent);
   border:1px solid color-mix(in srgb, var(--orange, #e0992a) 32%, transparent)}
+
+
+/* Ссылка внутри подписи: «план: 10–19 · 8ч [изменить]» */
+.lnk-inline{background:none;border:0;padding:0 0 0 4px;color:var(--green);
+  font:inherit;font-size:12px;font-weight:700;cursor:pointer;text-decoration:underline}
+.lnk-inline:hover{opacity:.75}
