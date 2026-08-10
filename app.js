@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=164';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=166';
 
 const $ = id => document.getElementById(id);
 
@@ -2953,8 +2953,9 @@ function drawSchedule() {
         const empty = !(c && (c.plan_kind || (c.fact ?? null) !== null));
         if (pst) { planPast += planHoursOf(c); const fh = factHoursOf(c); factPast += fh; if (fh > 0) cnt++; }
         const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
+        const noKind = !!(c && !c.plan_kind && c.fact != null && c.fact !== '' && c.fact !== 'x');
         const addable = empty && canEditDay(d) && (pst || d === todayD);   // пустая клетка прошлого/сегодня, куда можно ДОБАВИТЬ смену (замена) — подсказка «+»
-        rows += `<div class="gr-cell sc2${bg}${amtRow ? ' amt' : ''}${c && c.plan_kind === 'отпуск' ? ' k-vac' : ''}${addable ? ' addable' : ''}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
+        rows += `<div class="gr-cell sc2${bg}${amtRow ? ' amt' : ''}${c && c.plan_kind === 'отпуск' ? ' k-vac' : ''}${addable ? ' addable' : ''}${noKind ? ' no-kind' : ''}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
       }
       // numeric из Supabase приходит строкой — parseFloat обязателен
       const nrm = monthNorms.get(e.id), nh = nrm && nrm.hours != null ? parseFloat(nrm.hours) : null;
@@ -2992,7 +2993,11 @@ function drawSchedule() {
           const empty = !(c && (c.plan_kind || (c.fact ?? null) !== null));
           if (pst) { const fh = factHoursOf(c); dFact += fh; if (fh > 0) dCnt++; }
           const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
-          rows += `<div class="gr-cell sc2 sec${amtRow2 ? ' amt' : ''}${bg}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}" data-pos="second">${schedCellInner(c, pst, 'second')}</div>`;
+          /* День отмечен отработанным, а вида смены нет — платить не за что: ставка
+             привязана к виду. Такой день молча даёт 0 ₽ и на экране не отличался
+             от нормального. Красим рамкой и ставим «?». */
+          const noKind = !!(c && !c.plan_kind && c.fact != null && c.fact !== '' && c.fact !== 'x');
+          rows += `<div class="gr-cell sc2 sec${noKind ? ' no-kind' : ''}${amtRow2 ? ' amt' : ''}${bg}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}" data-pos="second">${schedCellInner(c, pst, 'second')}</div>`;
         }
         // Порядок колонок ТОТ ЖЕ, что у основной строки (master переставил их
         // на cnt · Δ · норма · факт) — иначе итоги съедут по сетке.
@@ -3333,7 +3338,27 @@ function scheduleFactPopup(empId, day, pos = 'main') {
     catch (err) { toast(err.message || err, true); }
   };
   $('modalBox').querySelectorAll('.fact-btn').forEach(b => b.onclick = () => apply(b.dataset.f === 'plan' ? null : b.dataset.f));
-  $('fSave').onclick = () => { let v = parseFloat($('fH').value); if (isNaN(v) || v < 0 || v > 24) return toast('Часы 0–24', true); v = Math.round(v * 2) / 2; apply(String(v)); };   // до получаса (шаг поля 0.5) → проходит CHECK
+  /* Часы БЕЗ вида смены записывать нельзя. Раньше это молча создавало клетку
+     plan_kind=NULL + fact=12: день считается отработанным (worked=true, попадает
+     в факт-часы), а платить не за что — ставка привязывается к ВИДУ смены, и без
+     него оплата ноль. Ни одного предупреждения при этом не было. Так за июль
+     легло 27 таких дней у девяти человек; нашла соседняя сессия, разбирая жалобу
+     СЕО «не считаются изменения в графиках».
+     Если плана нет — сначала вид смены, и пишем всё одной записью. */
+  $('fSave').onclick = async () => {
+    let v = parseFloat($('fH').value);
+    if (isNaN(v) || v < 0 || v > 24) return toast('Часы 0–24', true);
+    v = Math.round(v * 2) / 2;                       // до получаса (шаг поля 0.5) → проходит CHECK
+    if (p) return apply(String(v));                  // план есть — вид уже задан, пишем только факт
+    const kind = $('fKind')?.value;
+    if (!kind) return toast('Сначала выберите тип смены — без него день не оплачивается', true);
+    const btn = $('fSave'); if (btn.disabled) return; btn.disabled = true;
+    try {
+      const saved = await store.setScheduleCell(empId, date,
+        { plan_kind: kind, plan_start: $('fKindStart')?.value || null, plan_end: null, fact: String(v) }, pos);
+      cacheCell(empId, date, pos, saved); closeModal(); toast(ICONS.check + 'Отмечено'); drawSchedule();
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
   const kb = $('fKindSave');   // замена: добавить типовую смену (plan_kind + факт=по плану) → считается отработанной, платится по ставке типа
   if (kb) kb.onclick = async () => {
     const kind = $('fKind').value; if (!kind) return toast('Выберите тип смены', true);
