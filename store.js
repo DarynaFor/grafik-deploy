@@ -236,6 +236,15 @@ export class MockStore {
     this._log('updated', 'specialty', null, 'отделение', oldName, newName);
     this._save(); return hit.length;
   }
+  async setEmployeeHidden(id, hidden) {
+    if (this.user?.role !== 'owner') throw new Error('Убирать из архива может только владелец');
+    const e = this.db.employees.find(x => x.id === id);
+    if (!e) throw new Error('Карточка не найдена');
+    e.hidden_at = hidden ? new Date().toISOString() : null;
+    this._log('updated', 'employee', id, 'архив', hidden ? 'в списке' : 'убрана',
+              hidden ? 'убрана из списка' : 'возвращена в список');
+    this._save(); return e;
+  }
   async updateSpecialty(id, name, category) {
     if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять справочник может владелец или директор');
     const s = this.db.specialties.find(x => x.id === id);
@@ -1219,6 +1228,16 @@ export class SupabaseStore {
       if (eR) throw new Error(rateError(eR));
     }
   }
+  /* Убрать карточку из списка «Архив» или вернуть обратно (105). Не удаление:
+     запись и журнал остаются. Право проверяет ТРИГГЕР в базе — только владелец;
+     .select() обязателен, иначе отказ RLS выглядел бы как успех на нуле строк. */
+  async setEmployeeHidden(id, hidden) {
+    const { data, error } = await this.sb.from('employee')
+      .update({ hidden_at: hidden ? new Date().toISOString() : null }).eq('id', id).select();
+    if (error) throw new Error(employeeError(error));
+    if (!data || !data.length) throw new Error('Убирать из архива может только владелец');
+    return data[0];
+  }
   async setPrimaryRate(id, line, validFrom) {
     // ОДИН вызов вместо «закрыть старую» + «вставить новую» двумя запросами.
     // Раньше между ними не было транзакции: если вставку отклоняли (опечатка в
@@ -1297,10 +1316,20 @@ export class SupabaseStore {
     if (error) throw error; return data;
   }
   async setScheduleBulk(cells) {   // массовое заполнение (шаблон/импорт). fact не трогаем — это план
-    const rows = cells.map(c => ({ employee_id: c.employee_id, work_date: c.work_date,
-      position: c.position || 'main',
-      plan_kind: c.plan_kind ?? null, plan_start: c.plan_start ?? null, plan_end: c.plan_end ?? null,
-      source: c.source || 'template', updated_by: this.user.id }));
+    /* plan_end пишем ТОЛЬКО когда вызывающий его прислал. Раньше стояло
+       `c.plan_end ?? null` — и повторный прогон шаблона, который это поле не
+       передавал, ОБНУЛЯЛ конец смены у всех уже заполненных клеток: «9–17»
+       превращалось в «9», и двенадцатичасовая смена снова считалась
+       восьмичасовой, потому что часы брались из типа смены. Та же ошибка, что
+       мы правили в 64 записях Алёны, только вносил её сам шаблон. */
+    const rows = cells.map(c => {
+      const row = { employee_id: c.employee_id, work_date: c.work_date,
+        position: c.position || 'main',
+        plan_kind: c.plan_kind ?? null, plan_start: c.plan_start ?? null,
+        source: c.source || 'template', updated_by: this.user.id };
+      if ('plan_end' in c) row.plan_end = c.plan_end ?? null;
+      return row;
+    });
     const { error } = await this.sb.from('schedule').upsert(rows, { onConflict: 'employee_id,work_date,position' });
     if (error) throw error; return rows.length;
   }

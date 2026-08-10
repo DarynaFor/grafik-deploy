@@ -1022,3 +1022,8 @@ tr.pw-total.pw-over{z-index:5}
 .lnk-inline{background:none;border:0;padding:0 0 0 4px;color:var(--green);
   font:inherit;font-size:12px;font-weight:700;cursor:pointer;text-decoration:underline}
 .lnk-inline:hover{opacity:.75}
+
+
+/* Флажок с подписью в модалках */
+.chk{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:var(--ink-2)}
+.chk input{width:16px;height:16px;accent-color:var(--green);cursor:pointer;flex:none}

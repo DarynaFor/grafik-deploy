@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=162';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=163';
 
 const $ = id => document.getElementById(id);
 
@@ -339,7 +339,7 @@ const NAV = [
   { s: 'gaps', i: 'alert', l: 'Пробелы', staffOnly: true },
   { s: 'vacation', i: 'cal', l: 'Отпуска', staffOnly: true },
   { s: 'archive', i: 'users', l: 'Архив', ownerOnly: true },
-  { s: 'employees', i: 'users', l: 'Сотрудники', staffOnly: true },
+  { s: 'employees', i: 'users', l: 'Сотрудники', show: () => canEditCards() || isStaff() },
   { s: 'schedule', i: 'cal', l: 'График', staffOnly: true },
   { s: 'payroll', i: 'coin', l: 'Расчёт', staffOnly: true },
   { s: 'rates', i: 'coin', l: 'Ставки', ownerOnly: true },
@@ -783,7 +783,11 @@ const canPayOut = () => ['owner', 'operator', 'ceo', 'cashier1', 'cashier2'].inc
 const canEditSchedule = () => ['operator', 'owner', 'ceo'].includes(store.me()?.role);
 // Создание/правка карточек и ставок — владелец и СЕО (RLS emp_insert/update,
 // rate_insert/update, reconcile = owner,ceo; миграция 035). У остальных — просмотр.
-const canEditCards = () => ['owner', 'ceo'].includes(store.me()?.role);
+/* Кто правит карточку. Ровно те же роли, что пускает политика emp_update (105).
+   Дарина 07.08: «редагувати та в архів кидати можуть і інші акаунти, і альона, і
+   бухгалтер». Расходиться с базой нельзя: разойдётся — человек увидит кнопку и
+   получит отказ, либо наоборот не увидит того, что ему разрешено. */
+const canEditCards = () => ['owner', 'ceo', 'operator', 'cashier1'].includes(store.me()?.role);
 async function enter() {
   const me = store.me(); if (!me) return;
   document.body.classList.add('authed');
@@ -2309,6 +2313,7 @@ let curPeriod = null, schedShown = null, scheduleRows = [], shiftKinds = [], sch
    уже «факт». Это ровно то раздвоение источника правды, от которого весь
    расчёт и вынесен в базу. Один хелпер на оба места. */
 const mskNow = () => new Date(Date.now() + 3 * 3600e3);              // «сейчас» по Москве (UTC+3)
+const mskTodayISO = () => mskNow().toISOString().slice(0, 10);
 const nowPeriod = () => { const n = mskNow(); return n.getUTCFullYear() + '-' + String(n.getUTCMonth() + 1).padStart(2, '0'); };
 /* Раньше июля 2026 данных нет и не будет: учёт начали с него — проверено по базе,
    деньги, график, переносы и ручные суммы начинаются 2026-07-01. Дарина 07.08
@@ -3370,31 +3375,75 @@ function templateDays(pattern, period, anchor) {
   }
   return out;
 }
+/* Отдельное окно, а не confirm(): человек должен видеть, ЧТО именно исчезнет —
+   сколько дней, сколько отмеченных фактов и сколько сумм за смену. «Вы уверены?»
+   на такой вопрос не отвечает. */
+function confirmClearMonth(e, cells, facts, sums) {
+  return new Promise(resolve => {
+    const bits = [`${cells} ${plural(cells, 'день', 'дня', 'дней')} графика`];
+    if (facts) bits.push(`<b>${facts} ${plural(facts, 'отметка', 'отметки', 'отметок')} факта</b>`);
+    if (sums) bits.push(`<b>${sums} ${plural(sums, 'сумма', 'суммы', 'сумм')} за смену</b>`);
+    showModal2(`<h3>Очистить ${esc(periodLabel(curPeriod))}?</h3>
+      <div class="msub">${esc(e.fio)}</div>
+      <div class="msub sc-warn">Исчезнет: ${bits.join(', ')}. Вернуть будет нечем — только вводить заново.</div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="cmNo">Отмена</button>
+        <button class="btn btn-primary btn-sm" id="cmYes">Очистить</button></div>`, () => resolve(false));
+    $('cmNo').onclick = () => { resolve(false); closeModal2(); };
+    $('cmYes').onclick = () => { resolve(true); closeModal2(); };
+  });
+}
+
 function scheduleTemplateDialog(empId) {
   const e = employees.find(x => x.id === empId); if (!e) return;
   const nd = daysInMonth(curPeriod);
+  // Сколько дней месяца уже прошло: их шаблон трогает только по явной галочке.
+  const pastN = (() => { let n = 0; for (let d = 1; d <= nd; d++) if (cellDate(d) < mskTodayISO()) n++; return n; })();
   const kinds = shiftKinds.filter(k => !isRest(k.code) && k.code !== 'custom');
   const kopts = kinds.map(k => `<option value="${k.code}"${k.code === 'day' ? ' selected' : ''}>${esc(k.label)}</option>`).join('');
   const pats = [['5/2', '5/2 — Пн-Пт работа, Сб-Вс выходные'], ['2/2', '2/2 — два через два'], ['3/3', '3/3 — три через три'], ['sutki3', 'Сутки/3 — сутки, потом 3 выходных'], ['every', 'Каждый день одинаково']];
   showModal(`${personHead(e, `Заполнить весь ${esc(periodLabel(curPeriod))} по шаблону · потом можно поправить руками`)}
     <label class="flbl">Шаблон</label><select class="input" id="tpPat">${pats.map(p => `<option value="${p[0]}">${esc(p[1])}</option>`).join('')}</select>
     <div class="frow"><div><label class="flbl">Тип смены</label><select class="input" id="tpKind">${kopts}</select></div>
-      <div><label class="flbl">Время начала</label><input class="input" id="tpStart" type="time" value="08:00"></div></div>
+      <div><label class="flbl">Время работы</label>
+        <div class="sc-range"><input class="input" id="tpStart" type="time" value="08:00">
+          <span class="sc-dash">—</span><input class="input" id="tpEnd" type="time" value="20:00"></div></div></div>
     <label class="flbl">С какого дня начать <span style="color:var(--ink-3)">(для 2/2, 3/3, сутки)</span></label>
     <input class="input" id="tpAnchor" type="number" min="1" max="${nd}" value="1">
+    ${pastN ? `<label class="chk" style="margin-top:12px"><input type="checkbox" id="tpPast">
+      <span>Заполнить и прошедшие дни (${pastN})</span></label>
+      <div class="msub sc-warn">Прошедший день с планом и без отметки факта считается <b>отработанным</b> —
+        за него начислится зарплата. Поэтому по умолчанию трогаем сегодня и дальше.</div>` : ''}
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="tpClear">Очистить месяц</button><button class="btn btn-primary btn-sm" id="tpFill">${ICONS.check}Заполнить</button></div>`);
   $('tpFill').onclick = async () => {
     const btn = $('tpFill'); if (btn.disabled) return; btn.disabled = true;
-    const pat = $('tpPat').value, kind = $('tpKind').value, start = $('tpStart').value || null;
+    const pat = $('tpPat').value, kind = $('tpKind').value;
+    const start = $('tpStart').value || null, end = $('tpEnd').value || null;
     const anchor = Math.min(nd, Math.max(1, +$('tpAnchor').value || 1));
-    const cells = templateDays(pat, curPeriod, anchor).map(x => ({
-      employee_id: empId, work_date: cellDate(x.day),
-      plan_kind: x.work ? kind : 'off', plan_start: x.work ? start : null,
-    })).filter(c => !closedDays.has(c.work_date));   // закрытые дни шаблоном не трогаем
+    const withPast = $('tpPast')?.checked;
+    const cells = templateDays(pat, curPeriod, anchor)
+      // Прошедшие дни — только по явному согласию: план без отметки факта = отработано = деньги.
+      .filter(x => withPast || cellDate(x.day) >= mskTodayISO())
+      .map(x => ({
+        employee_id: empId, work_date: cellDate(x.day),
+        plan_kind: x.work ? kind : 'off',
+        plan_start: x.work ? start : null,
+        plan_end: x.work ? end : null,     // без него 12-часовая смена считалась бы восьмичасовой
+      })).filter(c => !closedDays.has(c.work_date));   // закрытые дни шаблоном не трогаем
+    if (!cells.length) { btn.disabled = false; toast('Все дни месяца уже прошли — отметьте галочку ниже', true); return; }
     try { await store.setScheduleBulk(cells); closeModal(); toast(ICONS.check + 'Заполнено по шаблону'); renderSchedule(); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
+  /* Очистка месяца стирает и проставленные факты, и суммы за смену — работу,
+     которую вводили руками часами. Кнопка стоит рядом с «Заполнить» и срабатывала
+     без единого вопроса: один промах = потерянный месяц человека. Сторно денег
+     подтверждения спрашивает, а это — нет. */
   $('tpClear').onclick = async () => {
+    const mine = scheduleRows.filter(r => r.employee_id === empId
+      && String(r.work_date).slice(0, 7) === curPeriod && (r.position || 'main') === 'main');
+    if (!mine.length) { toast('В этом месяце у человека ничего не проставлено'); return; }
+    const facts = mine.filter(r => r.fact != null && r.fact !== '').length;
+    const sums = mine.filter(r => r.amount_kop).length;
+    if (!await confirmClearMonth(e, mine.length, facts, sums)) return;
     const btn = $('tpClear'); if (btn.disabled) return; btn.disabled = true;
     try { await store.clearScheduleMonth(empId, curPeriod); closeModal(); toast('Месяц очищен'); renderSchedule(); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
@@ -5063,9 +5112,13 @@ async function renderArchive() {
   } catch (e) { if (seq === arcSeq) { $('arcBody').innerHTML = ''; toast(e.message || e, true); } return; }
   if (seq !== arcSeq) return;
   const money = new Map(pay.map(r => [r.employee_id, r]));
-  arcRows = emps.filter(e => e.status === 'archived').map(e => {
+  // hidden_at — карточка убрана владельцем «с глаз»: из списка уходит, запись и
+  // журнал остаются (105). Переключатель ниже показывает их обратно.
+  const showHidden = !!$('arcShowHidden')?.checked;
+  arcRows = emps.filter(e => e.status === 'archived' && (showHidden || !e.hidden_at)).map(e => {
     const r = money.get(e.id) || {};
     return { id: e.id, fio: e.fio || '—', spec: specName(e.specialty_id),
+             hidden: !!e.hidden_at,
              left_on: e.left_on || null, delta: r.delta_kop || 0, salary: r.salary_kop || 0 };
   }).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || a.fio.localeCompare(b.fio, 'ru'));
   drawArchive();
@@ -5092,10 +5145,23 @@ function drawArchive() {
       <td class="num fin">${x.salary ? rub(x.salary) : '<span class="muted">—</span>'}</td>
       <td class="num pw-pay fin">${x.delta ? `<b class="money${x.delta < 0 ? ' neg' : ''}">${rub(x.delta)}</b>` : '<span class="muted">—</span>'}</td>
       <td class="num"><button class="btn btn-ghost btn-sm arc-back" data-id="${x.id}">Вернуть</button>
-        <button class="btn btn-ghost btn-sm arc-hist" data-fio="${esc(x.fio)}">История</button></td></tr>`).join('')
+        <button class="btn btn-ghost btn-sm arc-hist" data-fio="${esc(x.fio)}">История</button>${
+          isOwner() ? `<button class="btn btn-ghost btn-sm arc-hide" data-id="${x.id}" data-h="${x.hidden ? 1 : 0}"
+            title="${x.hidden ? 'Вернуть в список архива' : 'Убрать из списка. Карточка и её история останутся'}"
+            >${x.hidden ? 'Показать' : 'Убрать'}</button>` : ''}</td></tr>`).join('')
     }</tbody></table></div>`
     : `<div class="empty">${arcRows.length ? 'Никого не нашлось по этому условию.' : 'Архив пуст.'}</div>`;
 
+  // «Убрать из архива» — только владелец. Правило держит триггер в базе
+  // (employee_a_hide_guard, 105); кнопка лишь повторяет его глазами, чтобы
+  // остальные не жали то, что им откажут.
+  $('arcBody').querySelectorAll('.arc-hide').forEach(b => b.onclick = async () => {
+    if (b.disabled) return; b.disabled = true;
+    try { await store.setEmployeeHidden(+b.dataset.id, b.dataset.h !== '1');
+          toast(ICONS.check + (b.dataset.h === '1' ? 'Возвращено в список' : 'Убрано из списка'));
+          await renderArchive(); }
+    catch (err) { b.disabled = false; toast(err.message || err, true); }
+  });
   $('arcBody').querySelectorAll('.arc-row .pw-name').forEach((td, i) =>
     td.onclick = () => openCard(list[i].id));
   // «История» — тот же журнал, но сразу отфильтрованный по этому человеку:
@@ -5745,6 +5811,7 @@ $('empSearch').oninput = e => renderEmployees(e.target.value);
 { const vs = $('vacSearch'); if (vs) vs.oninput = () => drawVacation(); }
 { const as = $('arcSearch'); if (as) as.oninput = () => drawArchive(); }
 { const am = $('arcOnlyMoney'); if (am) am.onchange = () => drawArchive(); }
+{ const ah = $('arcShowHidden'); if (ah) ah.onchange = () => renderArchive(); }
 { const vf = $('vacFlat'); if (vf) vf.onchange = () => drawVacation(); }
 { const mp = $('mPrev'), mn = $('mNext'); if (mp) mp.onclick = () => shiftMonth(-1); if (mn) mn.onclick = () => shiftMonth(1); }
 { const ss = $('schedSearch'); if (ss) ss.oninput = () => drawSchedule(); }
