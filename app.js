@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=163';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=164';
 
 const $ = id => document.getElementById(id);
 
@@ -2459,6 +2459,24 @@ function paintAmountCell(empId, day, pos, kop) {
   const i = kop ? SAN_AMOUNTS.indexOf(kop) : -1;
   el.innerHTML = kop ? `<span class="amt-v a${i < 0 ? 'x' : i}">${esc(rubShort(kop))}</span>` : '';
 }
+/* Клетка после правки обновляется В ПАМЯТИ, а не перекачиванием месяца.
+   Раньше каждый клик звал renderSchedule() — а это четыре запроса подряд
+   (график, виды смен, закрытые дни, нормы), причём график листается страницами
+   по 1000 строк ПОСЛЕДОВАТЕЛЬНО: ~3700 строк на 119 человек. На клиничьем
+   интернете через VPN это секунда с лишним на каждую клетку, а Алёна проставляет
+   их сотнями (замерено по журналу: 180 действий за 78 минут — 26 секунд на
+   клетку). Для сумм санитарок этот приём уже применён (cacheAmount), здесь —
+   то же самое для обычных клеток: база вернула сохранённую строку, кладём её на
+   место и перерисовываем сетку из памяти, без сети.
+   `row === null` — строку удалили (очистка клетки). */
+function cacheCell(empId, date, pos, row) {
+  const i = (scheduleRows || []).findIndex(s => s.employee_id === empId
+    && s.work_date === date && (s.position || 'main') === (pos || 'main'));
+  if (!row) { if (i >= 0) scheduleRows.splice(i, 1); return; }
+  if (i >= 0) scheduleRows[i] = { ...scheduleRows[i], ...row };
+  else scheduleRows.push({ position: 'main', ...row });
+}
+
 function cacheAmount(empId, day, pos, kop) {
   const d = cellDate(day);
   const i = (scheduleRows || []).findIndex(s => s.employee_id === empId
@@ -3050,9 +3068,10 @@ async function cycleSecondCell(empId, day) {
   const at = SECOND_CYCLE.findIndex(x => x.kind === (cur?.plan_kind ?? null));
   const next = SECOND_CYCLE[(at + 1) % SECOND_CYCLE.length];
   try {
-    await store.setScheduleCell(empId, cellDate(day),
+    const d2 = cellDate(day);
+    const saved = await store.setScheduleCell(empId, d2,
       { plan_kind: next.kind, plan_start: next.start, plan_end: null, fact: null }, 'second');
-    await renderSchedule();
+    cacheCell(empId, d2, 'second', saved); drawSchedule();
   } catch (err) { toast(err.message || err, true); }
 }
 
@@ -3223,11 +3242,19 @@ function scheduleCellPopup(empId, day, pos = 'main') {
     // а тост говорил «Сохранено». Теперь тип подставляем по длительности.
     let kind = $('scKind').value || null;
     if (!kind && $('scStart').value) kind = kindByHours(hoursBetween($('scStart').value, $('scEnd').value));
-    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null, plan_end: kind ? ($('scEnd').value || null) : null, fact: null }, pos); closeModal(); toast(ICONS.check + 'Сохранено'); renderSchedule(); }
+    try {
+      const saved = await store.setScheduleCell(empId, date,
+        { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null,
+          plan_end: kind ? ($('scEnd').value || null) : null, fact: null }, pos);
+      cacheCell(empId, date, pos, saved); closeModal(); toast(ICONS.check + 'Сохранено'); drawSchedule();
+    }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
   $('scClear').onclick = async () => {
-    try { await store.setScheduleCell(empId, date, { plan_kind: null, plan_start: null, plan_end: null, fact: null }, pos); closeModal(); toast('Очищено'); renderSchedule(); }
+    try {
+      const saved = await store.setScheduleCell(empId, date, { plan_kind: null, plan_start: null, plan_end: null, fact: null }, pos);
+      cacheCell(empId, date, pos, saved); closeModal(); toast('Очищено'); drawSchedule();
+    }
     catch (err) { toast(err.message || err, true); }
   };
 }
@@ -3299,7 +3326,10 @@ function scheduleFactPopup(empId, day, pos = 'main') {
   { const b = $('fcEditPlan'); if (b) b.onclick = () => { closeModal(); scheduleCellPopup(empId, day, pos); }; }
   $('fVac').onclick = () => vacationDialog(empId, day);
   const apply = async fact => {
-    try { await store.setScheduleFact(empId, date, fact, pos); closeModal(); toast(ICONS.check + 'Факт отмечен'); renderSchedule(); }
+    try {
+      const saved = await store.setScheduleFact(empId, date, fact, pos);
+      cacheCell(empId, date, pos, saved); closeModal(); toast(ICONS.check + 'Факт отмечен'); drawSchedule();
+    }
     catch (err) { toast(err.message || err, true); }
   };
   $('modalBox').querySelectorAll('.fact-btn').forEach(b => b.onclick = () => apply(b.dataset.f === 'plan' ? null : b.dataset.f));
@@ -3308,7 +3338,11 @@ function scheduleFactPopup(empId, day, pos = 'main') {
   if (kb) kb.onclick = async () => {
     const kind = $('fKind').value; if (!kind) return toast('Выберите тип смены', true);
     if (kb.disabled) return; kb.disabled = true;
-    try { await store.setScheduleCell(empId, date, { plan_kind: kind, plan_start: $('fKindStart').value || null, plan_end: null, fact: null }, pos); closeModal(); toast(ICONS.check + 'Смена добавлена'); renderSchedule(); }
+    try {
+      const saved = await store.setScheduleCell(empId, date,
+        { plan_kind: kind, plan_start: $('fKindStart').value || null, plan_end: null, fact: null }, pos);
+      cacheCell(empId, date, pos, saved); closeModal(); toast(ICONS.check + 'Смена добавлена'); drawSchedule();
+    }
     catch (err) { kb.disabled = false; toast(err.message || err, true); }
   };
   $('fClear').onclick = () => apply(null);
