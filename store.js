@@ -210,6 +210,7 @@ export class MockStore {
     this.db.deptRules = (this.db.deptRules || []).filter(r => r.category !== category);
     this._save();
   }
+  async listMonthMarked() { return []; }
   async listCategoryOrder() { return [...(this.db.catOrder || [])]; }
   async setCategoryOrder(rows) {
     if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять порядок может владелец или директор');
@@ -1158,6 +1159,12 @@ export class SupabaseStore {
     const { data, error } = await this.sb.from('dept_rule').delete().eq('category', category).select();
     if (error) throw error;
     if (!data?.length) throw new Error('Удалить не удалось — нет прав или правила уже нет');
+  }
+  /* Сколько зарплаты подтверждено отметкой факта (113). Отдельным запросом, а не
+     колонкой в расчёте: считается по дням, а расчёт — по месяцу. */
+  async listMonthMarked(period) {
+    const { data, error } = await this.sb.from('v_month_marked').select('*').eq('period', period + '-01');
+    if (error) throw error; return data || [];
   }
   async listCategoryOrder() {
     const { data, error } = await this.sb.from('category_order').select('*').order('sort');

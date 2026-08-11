@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=171';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=172';
 
 const $ = id => document.getElementById(id);
 
@@ -4042,6 +4042,7 @@ const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.car
 // считается ВЫДАННОЕ безналом, включая отпускные и больничные.
 const cardDelta = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
 let payrollRows = [], payrollLines = [], payrollSeq = 0, payrollShown = null;
+let payrollMarked = [];   // сводка «подтверждено фактом» по месяцу (113)
 // Норма часов месяца на «Расчёте» — та же v_month_norm, что и в графике.
 // Нужна, чтобы шапка окна человека говорила часами, а не днями: оклад теперь
 // считается от НОРМЫ и ФАКТА в часах (миграция 058), и дни к этому отношения
@@ -4070,9 +4071,12 @@ async function renderPayroll(filter = '') {
   // брал prevShown = месяц, который никогда не грузился, — откат уводил бы ИМЕННО
   // в него, а ввод суммы записался бы туда же.
   let rows, lines;
-  let norms = [];
-  try { [rows, lines, norms] = await Promise.all([store.listPayroll(payPeriod), store.listPayrollLines(payPeriod),
-    store.listMonthNorms(payPeriod).catch(e => { console.warn('listMonthNorms:', e); return []; })]); }   // норма не критична: ведомость должна открыться и без неё
+  let norms = [], marked = [];
+  try { [rows, lines, norms, marked] = await Promise.all([store.listPayroll(payPeriod), store.listPayrollLines(payPeriod),
+    store.listMonthNorms(payPeriod).catch(e => { console.warn('listMonthNorms:', e); return []; }),
+    // Сколько уже подтверждено отметкой факта (113). Не критично: справочная
+    // строка под итогом, ведомость без неё работает.
+    store.listMonthMarked(payPeriod).catch(e => { console.warn('listMonthMarked:', e); return []; })]); }   // норма не критична: ведомость должна открыться и без неё
   // Месяц не загрузился — откатываем payPeriod к тому, что РЕАЛЬНО лежит в
   // payrollRows (они при ошибке не обновились). Без отката любой следующий
   // drawPayroll — а его зовёт просто ввод в поиске и смена отделения — нарисовал
@@ -4092,6 +4096,7 @@ async function renderPayroll(filter = '') {
   }
   if (seq !== payrollSeq) return;                       // пришёл ответ от старого месяца — игнорируем
   payrollShown = payPeriod;                             // теперь месяц ДЕЙСТВИТЕЛЬНО показан
+  payrollMarked = marked || [];
   payrollRows = rows; payrollLines = lines;
   payrollNorms = new Map((norms || []).map(n => [n.employee_id, n]));
   drawPayroll(filter);
@@ -4245,6 +4250,23 @@ function drawPayroll(filter = '') {
       <td class="num pw-cardtot"></td><td class="num pw-carry"></td>
       <td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop') + sum('nach_other_kop') - sum('uderz_other_kop'))}</b></td>
       <td colspan="10"></td></tr>
+    ${(() => {
+      /* Подтверждено фактом (113). Дарина: «поки план не проставлен — зп не
+         рахуємо по цьому, це тільки зп планована». Деньги не трогаем — июль
+         заливали уже фактом, — но видно, какая часть месяца держится на одном
+         плане и сколько дней ещё ждут отметки. */
+      const ids = new Set(rows.map(r => r.employee_id));
+      const mk = (payrollMarked || []).filter(m => ids.has(m.employee_id));
+      const past = mk.reduce((a, m) => a + (+m.past_hours || 0), 0);
+      const done = mk.reduce((a, m) => a + (+m.marked_hours || 0), 0);
+      const wait = mk.reduce((a, m) => a + (+m.unmarked_days || 0), 0);
+      if (!past || !wait) return '';
+      return `<tr class="pw-total pw-plan"><td class="pw-name">Подтверждено фактом</td>
+        <td colspan="10" class="muted small">отмечено ${fmtH(done)} из ${fmtH(past)} отработанных ·
+          <b>${wait} ${plural(wait, 'день', 'дня', 'дней')}</b> ещё без отметки — они посчитаны по плану</td>
+        <td class="num pw-pay fin"><b class="money">${Math.round(done / past * 100)}%</b></td>
+        <td colspan="10"></td></tr>`;
+    })()}
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
       <td colspan="10" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
       <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td>

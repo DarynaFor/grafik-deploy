@@ -1063,3 +1063,8 @@ tr.pw-total.pw-over{z-index:5}
    приглушённо, тем же фиолетовым, что и в графике */
 .vac-p{color:var(--ink-1)}
 .vac-u{color:var(--violet-d,#6d5bd0);opacity:.85;font-size:12px}
+
+
+/* «Подтверждено фактом» — справочная строка под итогом: серым, как план */
+.pw-total.pw-plan td{color:var(--ink-3)}
+.pw-total.pw-plan .money{color:var(--ink-2)}
