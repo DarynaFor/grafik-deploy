@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=173';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=174';
 
 const $ = id => document.getElementById(id);
 
@@ -2661,7 +2661,12 @@ function schedCellInner(c, past, pos = 'main') {                   // содер
   // чтобы по всей таблице было видно, куда план ещё не залит.
   const noPlan = !p;
   const chip = esc(p ? planTxt : 'вне гр.');
-  if (fx === 'x') return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh miss">—</span>`;
+  /* Карандаш в углу — видимый вход в окно смены. Клик по клетке теперь листает
+     факт, и окно осталось только на правой кнопке: Алёна не смогла исправить
+     ошибочные 17–21 на 17–20 и написала «мне не даёт почему-то». Про правую
+     кнопку она знать не могла — значит нужен видимый способ. */
+  const pen = '<span class="cell-pen" title="Изменить смену">\u270E</span>';
+  if (fx === 'x') return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh miss">—</span>${pen}`;
   /* Своё время факта (108) показываем ВМЕСТО часов: «9–21» говорит больше, чем
      «12ч», и сразу видно, чем факт отличается от плана сверху. */
   if (c && c.fact_start && c.fact_end) {
@@ -2672,9 +2677,9 @@ function schedCellInner(c, past, pos = 'main') {                   // содер
   }
   if (fx !== null && fx !== '' && !isNaN(parseFloat(fx))) {
     const n = parseFloat(fx), dev = Math.abs(n - planHoursOf(c)) > 0.05;   // ровно плановые часы = «по плану» (зелёным), иначе отклонение (янтарь)
-    return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh ${dev ? 'dev' : 'ok'}">${fmtH(n)}</span>`;
+    return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh ${dev ? 'dev' : 'ok'}">${fmtH(n)}</span>${pen}`;
   }
-  if (isWork) return `<span class="iv mini">${esc(planTxt)}</span><span class="fh ok">${fmtH(planHoursOf(c))}</span>`;
+  if (isWork) return `<span class="iv mini">${esc(planTxt)}</span><span class="fh ok">${fmtH(planHoursOf(c))}</span>${pen}`;
   return `<span class="iv mini faint">${esc(planTxt)}</span>`;      // выходной/отпуск по плану — просто план тускло
 }
 let closedDays = new Set();               // закрытые даты текущего месяца (лок табеля)
@@ -2950,7 +2955,7 @@ function drawSchedule() {
   const catF = $('schedCat')?.dataset.value || '';
 
   // режим: оператор правит, владелец смотрит
-  if ($('schedSub')) $('schedSub').textContent = editable ? 'Прошедшие дни — клик по клетке отмечает факт (часы / не вышел). Будущие — задать смену. Клик по имени — шаблон на месяц.' : 'Просмотр: план (серым) и факт (цветом). Расхождения факта с планом — справа и в шапке.';
+  if ($('schedSub')) $('schedSub').textContent = editable ? 'Прошедший день: клик — вышел по плану, ещё клик — не вышел. Карандаш в углу клетки — изменить время смены. Клик по имени — шаблон на месяц.' : 'Просмотр: план (серым) и факт (цветом). Расхождения факта с планом — справа и в шапке.';
   // Красного баннера «Правки после закрытия» здесь больше нет (Дарина 05.08:
   // «він тільки місце займає, а ніхто його не читає»). Ничего не потеряно: те же
   // записи лежат в Журнале под фильтром «Красные», и Обзор ведёт туда же кнопкой
@@ -3120,6 +3125,18 @@ function drawSchedule() {
        там левый клик листает цикл, и без правой кнопки до диалога было не
        добраться. Теперь цикл есть и у обычных клеток, значит правая кнопка нужна
        везде: иначе «вышел 6 часов вместо 12» стало бы негде записать. */
+    grid.querySelectorAll('.cell-pen').forEach(pen => {
+      pen.onclick = ev => {
+        ev.stopPropagation();                       // не листать факт, а открыть окно
+        const cell = pen.closest('.gr-cell');
+        const emp = +cell.dataset.emp, d = +cell.dataset.day;
+        if (!canEditDay(d)) return;
+        const p2 = cell.dataset.pos || 'main';
+        const who = employees.find(x => x.id === emp);
+        if (isAmountCell(who, p2)) { amountCellPopup(who, d, p2); return; }
+        scheduleCellPopup(emp, d, p2);              // именно СМЕНА: время и тип
+      };
+    });
     grid.querySelectorAll('.gr-cell').forEach(cell => {
       const open = ev => {
         ev.preventDefault();

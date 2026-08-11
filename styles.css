@@ -1068,3 +1068,13 @@ tr.pw-total.pw-over{z-index:5}
 /* «Подтверждено фактом» — справочная строка под итогом: серым, как план */
 .pw-total.pw-plan td{color:var(--ink-3)}
 .pw-total.pw-plan .money{color:var(--ink-2)}
+
+
+/* Карандаш в углу клетки: видимый вход в окно смены. Клик по самой клетке
+   листает факт, поэтому правку времени нужно было чем-то показать. */
+.gr-cell{position:relative}
+.cell-pen{position:absolute;top:1px;right:2px;font-size:9px;line-height:1;opacity:0;
+  color:var(--ink-3);transition:opacity .12s;cursor:pointer;padding:2px}
+.gr-cell:hover .cell-pen{opacity:.55}
+.cell-pen:hover{opacity:1 !important;color:var(--green)}
+@media (hover:none){ .cell-pen{opacity:.35} }   /* на телефоне наведения нет — показываем всегда */
