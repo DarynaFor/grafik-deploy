@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=180';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=181';
 
 const $ = id => document.getElementById(id);
 
@@ -3452,34 +3452,114 @@ function scheduleCellPopup(empId, day, pos = 'main') {
 // Отпуск диапазоном «с…по…»: все дни периода → 'отпуск'. plan_start/plan_end/fact ОЧИЩАЕМ — иначе день с
 // остатком времени смены посчитается отработанным и оплатится. Отпуск = уважительная: не в норму, не «прогул»,
 // зарплата за эти дни не идёт (отпускные вносятся отдельной суммой). Каждый день пишется в журнал.
+/* ── Календарь выбора периода ─────────────────────────────────────────────────
+   Дарина 11.08: «краще було б як на сайтах бронювання авіаквитків… обираються
+   дуже інтуїтивно періоди і дати виставити можна з - по».
+
+   Раньше было два поля <input type="date">: браузер показывал их в своём формате
+   (у Дарины «08/22/2026» — месяц впереди), и период приходилось собирать в
+   голове из двух дат. Теперь месяц виден целиком: клик — начало, второй клик —
+   конец, между ними подсветка. Мимо месяца выбирать не нужно: отпуск почти
+   всегда внутри одного, а если нет — стрелки листают.
+
+   Возвращает { el, get() } — разметку и текущий период. Владелец окна сам
+   решает, что с ним делать. */
+function rangePicker(startISO, onPick) {
+  let from = startISO || null, to = null;
+  let [vy, vm] = (from || mskTodayISO()).split('-').map(Number);   // видимый месяц
+
+  const iso = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const el = document.createElement('div');
+  el.className = 'rp';
+
+  function draw() {
+    const first = new Date(Date.UTC(vy, vm - 1, 1));
+    const shift = (first.getUTCDay() + 6) % 7;          // неделя с понедельника
+    const days = new Date(Date.UTC(vy, vm, 0)).getUTCDate();
+    let cells = '';
+    for (let i = 0; i < shift; i++) cells += '<span class="rp-d rp-out"></span>';
+    for (let d = 1; d <= days; d++) {
+      const v = iso(vy, vm, d);
+      const isFrom = v === from, isTo = v === to;
+      const inside = from && to && v > from && v < to;
+      const wknd = [0, 6].includes(new Date(Date.UTC(vy, vm - 1, d)).getUTCDay());
+      cells += `<button type="button" class="rp-d${isFrom ? ' rp-a' : ''}${isTo ? ' rp-b' : ''}`
+        + `${inside ? ' rp-in' : ''}${wknd ? ' rp-w' : ''}" data-v="${v}">${d}</button>`;
+    }
+    const label = new Date(Date.UTC(vy, vm - 1, 1))
+      .toLocaleDateString('ru-RU', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    el.innerHTML = `<div class="rp-head">
+        <button type="button" class="rp-nav" data-go="-1">‹</button>
+        <span class="rp-m">${esc(label)}</span>
+        <button type="button" class="rp-nav" data-go="1">›</button></div>
+      <div class="rp-wd">${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(x => `<span>${x}</span>`).join('')}</div>
+      <div class="rp-grid">${cells}</div>
+      <div class="rp-sum">${sumText()}</div>`;
+    el.querySelectorAll('.rp-nav').forEach(b => b.onclick = () => {
+      vm += +b.dataset.go;
+      if (vm < 1) { vm = 12; vy--; } else if (vm > 12) { vm = 1; vy++; }
+      draw();
+    });
+    el.querySelectorAll('.rp-d[data-v]').forEach(b => b.onclick = () => {
+      const v = b.dataset.v;
+      // Первый клик задаёт начало, второй — конец. Клик раньше начала — значит
+      // человек передумал и выбирает период в другую сторону: начинаем заново.
+      if (!from || to || v < from) { from = v; to = null; } else { to = v; }
+      draw();
+      if (onPick) onPick(get());
+    });
+  }
+  function count() {
+    if (!from) return 0;
+    const a = new Date(from + 'T00:00:00Z'), b = new Date((to || from) + 'T00:00:00Z');
+    return Math.round((b - a) / 86400000) + 1;
+  }
+  function sumText() {
+    if (!from) return 'Выберите первый день';
+    const n = count();
+    if (!to) return `<b>${dmy(from)}</b> — выберите последний день`;
+    if (n > 90) return '<span class="rc-warn">Больше 90 дней — проверьте даты</span>';
+    return `<b>${dmy(from)} — ${dmy(to)}</b> · ${n} ${plural(n, 'день', 'дня', 'дней')}`;
+  }
+  function get() {
+    if (!from) return null;
+    const out = [];
+    for (let dt = new Date(from + 'T00:00:00Z'); ; dt.setUTCDate(dt.getUTCDate() + 1)) {
+      const v = dt.toISOString().slice(0, 10);
+      out.push(v);
+      if (v === (to || from)) break;
+      if (out.length > 90) return 'many';
+    }
+    return out;
+  }
+  draw();
+  return { el, get };
+}
+
 function vacationDialog(empId, startDay) {
   const e = employees.find(x => x.id === empId); if (!e) return;
   const startDate = cellDate(startDay);
-  showModal(`${personHead(e, `с <b>${esc(startDate)}</b> по какое число (включительно)`, 'Отпуск')}
+  showModal(`${personHead(e, 'выберите период в календаре', 'Отпуск')}
     <label class="flbl">Какой отпуск</label>
     <select class="input" id="vacKind">
       <option value="отпуск">Оплачиваемый — отпускные вносятся отдельной суммой</option>
       <option value="отпуск_бз">Без сохранения — денег за эти дни нет</option>
     </select>
-    <label class="flbl" style="margin-top:10px">По дату</label>
-    <input class="input" id="vacEnd" type="date" value="${esc(startDate)}" min="${esc(startDate)}">
-    <div class="msub" style="margin-top:8px">Зарплата за дни отпуска не начисляется в обоих случаях —
-      разница в отпускных: за оплачиваемый их вносят отдельно, за «без сохранения» нет.
-      В графике виды показаны разным цветом.</div>
-    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="vacCancel">Отмена</button><button class="btn btn-primary btn-sm" id="vacSave">${ICONS.check}Отметить отпуск</button></div>`);
+    <div id="vacCal" style="margin-top:12px"></div>
+    <div class="msub" style="margin-top:10px">Зарплата за дни отпуска не начисляется в обоих случаях —
+      разница в отпускных: за оплачиваемый их вносят отдельно, за «без сохранения» нет.</div>
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="vacCancel">Отмена</button>
+      <button class="btn btn-primary btn-sm" id="vacSave">${ICONS.check}Отметить отпуск</button></div>`);
+  const pick = rangePicker(startDate);
+  $('vacCal').appendChild(pick.el);
   $('vacCancel').onclick = closeModal;
   $('vacSave').onclick = async () => {
     const btn = $('vacSave'); if (btn.disabled) return;
-    const end = $('vacEnd').value;
-    if (!end || end < startDate) return toast('Дата «по» раньше начала', true);
+    const picked = pick.get();
+    if (!picked) return toast('Выберите период в календаре', true);
+    if (picked === 'many') return toast('Слишком длинный период (макс 90 дней)', true);
     const vk = $('vacKind').value || 'отпуск';
-    const days = [];
-    for (let dt = new Date(startDate + 'T00:00:00Z'); ; dt.setUTCDate(dt.getUTCDate() + 1)) {
-      const iso = dt.toISOString().slice(0, 10);
-      days.push(iso);
-      if (iso === end) break;
-      if (days.length > 90) return toast('Слишком длинный период (макс 90 дней)', true);
-    }
+    const days = picked;
     btn.disabled = true;
     try {
       for (const d of days) await store.setScheduleCell(empId, d, { plan_kind: vk, plan_start: null, plan_end: null, fact: null });
@@ -5640,34 +5720,15 @@ function vacAddDialog(preId) {
       <option value="отпуск">Оплачиваемый — отпускные вносятся отдельной суммой</option>
       <option value="отпуск_бз">Без сохранения — денег за эти дни нет</option>
     </select>
-    <div class="me-add" style="margin-top:10px">
-      <label class="flbl" style="grid-column:1/-1">Период</label>
-      <input class="input" type="date" id="vaFrom" value="${first}">
-      <input class="input" type="date" id="vaTo" value="${first}">
-    </div>
-    <div class="msub" id="vaHint" style="margin-top:8px"></div>
+    <label class="flbl" style="margin-top:10px">Период</label>
+    <div id="vaCal"></div>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="vaNo">Отмена</button>
       <button class="btn btn-primary btn-sm" id="vaOk">${ICONS.check}Отметить</button></div>`);
-  const days = () => {
-    const a = $('vaFrom').value, b = $('vaTo').value;
-    if (!a || !b || b < a) return null;
-    const out = [];
-    for (let dt = new Date(a + 'T00:00:00Z'); ; dt.setUTCDate(dt.getUTCDate() + 1)) {
-      const iso = dt.toISOString().slice(0, 10);
-      out.push(iso);
-      if (iso === b) break;
-      if (out.length > 90) return 'many';
-    }
-    return out;
-  };
-  const hint = () => {
-    const d = days();
-    $('vaHint').innerHTML = d === 'many' ? '<span class="rc-warn">Больше 90 дней — проверьте даты</span>'
-      : !d ? '<span class="rc-warn">Дата «по» раньше начала</span>'
-      : `Будет отмечено <b>${d.length}</b> дн.`;
-  };
-  hint();
-  $('vaFrom').oninput = hint; $('vaTo').oninput = hint;
+  const pick = rangePicker(first);
+  $('vaCal').appendChild(pick.el);
+  const days = () => pick.get();
+  // «Отметить» подсвечиваем только когда период выбран целиком — иначе кнопка
+  // выглядит рабочей, а даёт отказ.
   $('vaNo').onclick = closeModal;
   $('vaOk').onclick = async () => {
     const b = $('vaOk'); if (b.disabled) return;
