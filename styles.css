@@ -747,6 +747,12 @@ body.authed .login-stage{display:none}
    клинике и не деньги к выдаче, а остаток, уезжающий в следующий месяц */
 .pw-total.pw-over td{border-top:1px dashed var(--glass-bd);font-weight:600}
 .pw-total.pw-over .pw-name{color:var(--ink-2);font-weight:600}
+/* прогноз на конец месяца — тем же приглушённым приёмом, что и переплата: это
+   не деньги к выдаче, а «сколько выйдет, если доработают». Спутать эти две
+   суммы дороже всего, поэтому визуально прогноз НЕ похож на итог. */
+.pw-total.pw-forecast td{border-top:1px dashed var(--glass-bd)}
+.pw-total.pw-forecast .pw-name{color:var(--ink-2);font-weight:600}
+.pw-total.pw-forecast .money{color:var(--ink-2)}
 .money.neg{color:var(--red-d)}
 /* Имя не должно распирать колонку: длинное ФИО обрезаем, чипы уходят на 2-ю
    строку. Иначе у человека с 3–4 флагами имя занимало почти весь экран — чем
@@ -1078,3 +1084,8 @@ tr.pw-total.pw-over{z-index:5}
 .gr-cell:hover .cell-pen{opacity:.55}
 .cell-pen:hover{opacity:1 !important;color:var(--green)}
 @media (hover:none){ .cell-pen{opacity:.35} }   /* на телефоне наведения нет — показываем всегда */
+/* Прогноз в карточке — приглушённо, как и в итоге таблицы: это не деньги к
+   выдаче, а «сколько выйдет, если доработает». Отдельная линия сверху отделяет
+   его от настоящих сумм. */
+.me-row.me-forecast{border-top:1px dashed var(--glass-bd);color:var(--ink-2)}
+.me-row.me-forecast b{font-weight:600;color:var(--ink-2)}

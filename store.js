@@ -386,6 +386,13 @@ export class MockStore {
         oklad_kop: my.filter(l => l.kind === 'оклад').reduce((s, l) => s + l.money_kop, 0),
         shift_kop: my.filter(l => l.kind !== 'оклад' && l.kind !== 'процент').reduce((s, l) => s + l.money_kop, 0),
         percent_kop: my.filter(l => l.kind === 'процент').reduce((s, l) => s + l.money_kop, 0), salary_kop: salaryFinal,
+        // Прогноз на конец месяца (119) демо не считает: в боевой базе он берётся
+        // из будущих плановых дней, а MockStore их не оплачивает вовсе. Ставим
+        // равным расчёту — тогда строка «К концу месяца» просто не появится.
+        // Врать нулём или выдуманным числом здесь нельзя: демо для того и есть,
+        // чтобы показывать, как поведёт себя боевая система.
+        salary_plan_kop: salaryFinal,
+        salary_marked_kop: salaryFinal,
         cash_kop: cash, cash_avans_kop: sum('cash_avans'), premia_kop: premia, otpusk_kop: otpusk,
         otpusk_cash_kop: otpuskCash, card_uvol_kop: cardUvol,
         otpusk_nach_kop: sum('otpusk_nach'),   // начисление, не выплата: ни в to_pay, ни в delta

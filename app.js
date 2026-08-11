@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=177';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=178';
 
 const $ = id => document.getElementById(id);
 
@@ -1139,6 +1139,7 @@ async function loadCardPanel(id) {
       ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
       ${payRow('Своё начисление', r.nach_other_kop, 'nach_other', canEdit, oNotes.nach_other)}
       <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
+      ${forecastRow(r)}
       ${cardBlock(r) ? '<div class="me-cap">На карту</div>' : ''}
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
       ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
@@ -4011,6 +4012,19 @@ function rateFormula(l, r, nh, emp) {
   if (amt != null && l.worked) return `${fmt(amt)} × ${l.worked} см`;
   return '';
 }
+/* Сколько выйдет к КОНЦУ МЕСЯЦА, если человек доработает по графику (119).
+   Виталий Аркадьевич: «нам нужно понимать, какая ЗП будет у человека в конце
+   месяца… считать не только уже заработанное, но и всю ЗП».
+   Показываем ПРИГЛУШЁННО и только пока впереди есть плановые дни. Спутать
+   прогноз с суммой к выдаче — самая дорогая ошибка на этом экране, поэтому он
+   намеренно не выглядит как итог. Когда месяц дожит, salary_plan сравнивается с
+   salary_kop и строка исчезает сама. Ручная сумма перекрывает и прогноз тоже —
+   тогда сравнивать не с чем, и строки тоже нет. */
+function forecastRow(r) {
+  const fin = +r.salary_plan_kop || 0;
+  if (!fin || fin <= (+r.salary_kop || 0)) return '';
+  return `<div class="me-row me-forecast"><span class="muted">К концу месяца, если доработает по графику</span><b>${rub(fin)} ₽</b></div>`;
+}
 /* «Всего заработано» — весь заработок человека за месяц из ВСЕХ источников, одним
    числом. Просьба Виталия 03.08: «мне нужно понимать сколько суммарно будет у
    человека заработка… сделать ещё одну колонку с одной цифрой, из которой потом
@@ -4301,6 +4315,23 @@ function drawPayroll(filter = '') {
           <b>${wait} ${plural(wait, 'день', 'дня', 'дней')}</b> ещё без отметки — они посчитаны по плану,
           в «Осталось выдать» не идут</td>
         <td class="num pw-pay fin"><b class="money">${Math.round(done / past * 100)}%</b></td>
+        <td colspan="10"></td></tr>`;
+    })()}
+    ${(() => {
+      /* Сколько выйдет к КОНЦУ МЕСЯЦА, если доработают по графику (119).
+         Виталий Аркадьевич: «нам нужно понимать, какая ЗП будет у человека в
+         конце месяца, если он отработает по оставшемуся графику — считать не
+         только уже заработанное, но и всю ЗП».
+         Строка появляется только пока в месяце есть будущие плановые дни: когда
+         месяц дошёл до конца, прогноз сравнивается с фактом и говорить нечего. */
+      const done = sum('salary_marked_kop'), fin = sum('salary_plan_kop');
+      if (!fin || fin <= sum('salary_kop')) return '';
+      const left = fin - done;
+      return `<tr class="pw-total pw-forecast"><td class="pw-name">К концу месяца</td>
+        <td colspan="10" class="muted small">если доработают по графику: уже подтверждено
+          <b>${rub(done)}</b> + осталось отработать по плану ${rub(left)}.
+          Это прогноз, а не долг — в «Осталось выдать» идёт только подтверждённое</td>
+        <td class="num pw-pay fin"><b class="money">${rub(fin)}</b></td>
         <td colspan="10"></td></tr>`;
     })()}
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
@@ -4831,6 +4862,7 @@ async function payrollDialog(empId) {
       ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
       ${payRow('Своё начисление', r.nach_other_kop, 'nach_other', canEdit, oNotes.nach_other)}
       <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
+      ${forecastRow(r)}
       ${cardBlock(r) ? '<div class="me-cap">На карту</div>' : ''}
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
       ${payRow('ЗП на карту', r.card_rasch_kop, 'card_rasch', canEdit)}
