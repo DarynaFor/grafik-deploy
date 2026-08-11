@@ -1098,27 +1098,7 @@ tr.pw-total.pw-over{z-index:5}
    его от настоящих сумм. */
 .me-row.me-forecast{border-top:1px dashed var(--glass-bd);color:var(--ink-2)}
 .me-row.me-forecast b{font-weight:600;color:var(--ink-2)}
-
-
-/* Календарь выбора периода: клик — начало, второй клик — конец, между ними
-   подсветка. Заменил два <input type=date>: браузер показывал их в своём
-   формате (08/22/2026), и период приходилось собирать в голове. */
-.rp{border:1px solid var(--line);border-radius:12px;padding:10px 11px 9px;background:var(--surf-1)}
-.rp-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-.rp-m{font-weight:700;font-size:13.5px;text-transform:capitalize}
-.rp-nav{border:0;background:var(--fill-1);color:var(--ink-2);width:26px;height:26px;border-radius:8px;
-  font-size:15px;line-height:1;cursor:pointer}
-.rp-nav:hover{background:var(--fill-2)}
-.rp-wd{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:3px}
-.rp-wd span{text-align:center;font-size:10px;font-weight:700;color:var(--ink-3);letter-spacing:.02em}
-.rp-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
-.rp-d{border:0;background:none;color:var(--ink-1);height:30px;border-radius:8px;cursor:pointer;
-  font-size:12.5px;font-variant-numeric:tabular-nums;padding:0}
-.rp-d:hover{background:var(--fill-1)}
-.rp-out{cursor:default}
-.rp-w{color:var(--ink-3)}
-.rp-in{background:color-mix(in srgb,var(--green) 15%,transparent);border-radius:0}
-.rp-a,.rp-b{background:var(--green);color:var(--on-green);font-weight:700}
-.rp-a{border-radius:8px 0 0 8px} .rp-b{border-radius:0 8px 8px 0}
-.rp-a.rp-b{border-radius:8px}
-.rp-sum{margin-top:9px;font-size:12.5px;color:var(--ink-2);text-align:center;min-height:17px}
+/* Колонка «К концу месяца» в «Расчёте» — приглушённая, как и строка прогноза:
+   это не деньги к выдаче, и стоять рядом с ними она должна тише их. */
+.pw .pw-fcast{color:var(--ink-2)}
+.pw td.pw-fcast b{font-weight:600;color:var(--ink-2)}

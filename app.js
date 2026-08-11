@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=181';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=182';
 
 const $ = id => document.getElementById(id);
 
@@ -4164,6 +4164,11 @@ function rateFormula(l, r, nh, emp) {
    намеренно не выглядит как итог. Когда месяц дожит, salary_plan сравнивается с
    salary_kop и строка исчезает сама. Ручная сумма перекрывает и прогноз тоже —
    тогда сравнивать не с чем, и строки тоже нет. */
+function forecastCell(r) {
+  const fin = +r.salary_plan_kop || 0;
+  if (!fin || fin <= (+r.salary_kop || 0)) return '<span class="muted">—</span>';
+  return `<b>${rub(fin)}</b>`;
+}
 function forecastRow(r) {
   const fin = +r.salary_plan_kop || 0;
   if (!fin || fin <= (+r.salary_kop || 0)) return '';
@@ -4337,7 +4342,7 @@ function drawPayroll(filter = '') {
   // не входит (migrations/046).
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
-    <th class="num sep">Зарплата</th><th class="num pw-earned">Всего заработано</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
+    <th class="num sep">Зарплата</th><th class="num pw-earned">Всего заработано</th><th class="num pw-fcast" title="Сколько выйдет к концу месяца, если человек доработает по графику. Прогноз, а не долг">К концу месяца</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
     <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num" title="Нестандартное: свои начисления, удержания и выплаты. Нажмите на число — покажет, на что именно">Прочее</th><th class="num">Больн. карта</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по отделению,
@@ -4353,7 +4358,7 @@ function drawPayroll(filter = '') {
       curCat = cat;
       const inCat = rows.filter(x => catOf(x) === cat);
       const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="22"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="23"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
@@ -4362,6 +4367,7 @@ function drawPayroll(filter = '') {
     const right = `
       <td class="num sep fin"><b>${rub(r.salary_kop)}</b></td>
       <td class="num fin pw-earned"><b>${rub(earned(r))}</b></td>
+      <td class="num fin pw-fcast">${forecastCell(r)}</td>
       <td class="num fin">${rub(r.card_avans_kop)}</td>
       <td class="num fin">${rub(r.card_rasch_kop)}</td>
       <td class="num fin pw-cardtot"><b>${rub(cardTotal(r))}</b></td>
@@ -4407,6 +4413,7 @@ function drawPayroll(filter = '') {
     <td></td><td></td><td></td>
     <td class="num sep fin"><b>${rub(sum('salary_kop'))}</b></td>
     <td class="num fin pw-earned"><b>${rub(rows.reduce((s2, r) => s2 + earned(r), 0))}</b></td>
+    <td class="num fin pw-fcast"><b>${sum('salary_plan_kop') > sum('salary_kop') ? rub(sum('salary_plan_kop')) : '—'}</b></td>
     <td class="num fin">${rub(sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('card_rasch_kop'))}</td>
     <td class="num fin pw-cardtot"><b>${rub(sum('card_rasch_kop') + sum('card_avans_kop') + sum('otpusk_kop') + sum('bolnich_kop'))}</b></td>
     <td class="num fin pw-carry"><b class="money${sum('carry_kop') < 0 ? ' neg' : ''}">${sum('carry_kop') ? rub(sum('carry_kop')) : '—'}</b></td>
@@ -4420,7 +4427,7 @@ function drawPayroll(filter = '') {
     <td class="num fin">${rub(sum('bolnich_kop'))}</td>
 </tr>
     <tr class="pw-total pw-accrued"><td class="pw-name">Всего начислено</td>
-      <td colspan="8" class="muted small">зарплата ${rub(sum('salary_kop'))}${
+      <td colspan="9" class="muted small">зарплата ${rub(sum('salary_kop'))}${
         sum('premia_kop') ? ' + премии ' + rub(sum('premia_kop')) : ''}${
         sum('otpusk_nach_kop') ? ' + отпускные ' + rub(sum('otpusk_nach_kop')) : ''}${
         sum('bolnich_nach_kop') ? ' + больничные ' + rub(sum('bolnich_nach_kop')) : ''}${
@@ -4455,7 +4462,7 @@ function drawPayroll(filter = '') {
         ? `<span class="muted">всего по плану ${rub(plan)}</span> · всего фактически <b>${rub(fakt)}</b> · `
         : '';
       return `<tr class="pw-total pw-plan"><td class="pw-name">Подтверждено фактом</td>
-        <td colspan="10" class="muted small">${split}отмечено ${fmtH(done)} из ${fmtH(past)} отработанных ·
+        <td colspan="11" class="muted small">${split}отмечено ${fmtH(done)} из ${fmtH(past)} отработанных ·
           <b>${wait} ${plural(wait, 'день', 'дня', 'дней')}</b> ещё без отметки — они посчитаны по плану,
           в «Осталось выдать» не идут</td>
         <td class="num pw-pay fin"><b class="money">${Math.round(done / past * 100)}%</b></td>
@@ -4472,14 +4479,14 @@ function drawPayroll(filter = '') {
       if (!fin || fin <= sum('salary_kop')) return '';
       const left = fin - done;
       return `<tr class="pw-total pw-forecast"><td class="pw-name">К концу месяца</td>
-        <td colspan="10" class="muted small">если доработают по графику: уже подтверждено
+        <td colspan="11" class="muted small">если доработают по графику: уже подтверждено
           <b>${rub(done)}</b> + осталось отработать по плану ${rub(left)}.
           Это прогноз, а не долг — в «Осталось выдать» идёт только подтверждённое</td>
         <td class="num pw-pay fin"><b class="money">${rub(fin)}</b></td>
         <td colspan="10"></td></tr>`;
     })()}
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
-      <td colspan="10" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
+      <td colspan="11" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
       <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td>
       <td colspan="10"></td></tr>` : ''}</tfoot>`;
 
