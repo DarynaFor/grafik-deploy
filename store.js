@@ -105,10 +105,29 @@ const PROD_NORM_2026 = {
 
 const DEMO_SEED = {
   specialties: [
-    { id: 1, name: 'Врач-терапевт', category: 'Врачи' },
-    { id: 2, name: 'Хирург', category: 'Врачи' },
+    { id: 1, name: 'Врач-терапевт', category: 'Стационарные' },
+    { id: 2, name: 'Хирург', category: 'Стационарные' },
     { id: 3, name: 'Медсестра', category: 'Медсестры' },
     { id: 4, name: 'Администратор', category: 'Прочие' },
+  ],
+  // Справочник отделений — дерево в два уровня, как на проде после 123.
+  // Без него демо рисовало бы плоский список, и любая правка группировки
+  // проверялась бы только на живой базе.
+  catOrder: [
+    { category: 'Врачи', sort: 10, parent: null },
+    { category: 'Стационарные', sort: 11, parent: 'Врачи' },
+    { category: 'Амбулаторные основные', sort: 12, parent: 'Врачи' },
+    { category: 'Совместители', sort: 13, parent: 'Врачи' },
+    { category: 'Консультанты', sort: 14, parent: 'Врачи' },
+    { category: 'Психодиагностика', sort: 15, parent: 'Врачи' },
+    { category: 'Администраторы', sort: 20, parent: null },
+    { category: 'Ресепшн', sort: 21, parent: 'Администраторы' },
+    { category: 'Колл-центр', sort: 22, parent: 'Администраторы' },
+    { category: 'Медсестры и санитарки', sort: 30, parent: null },
+    { category: 'Медсестры', sort: 31, parent: 'Медсестры и санитарки' },
+    { category: 'Санитарки', sort: 32, parent: 'Медсестры и санитарки' },
+    { category: 'Администрация клиники', sort: 40, parent: null },
+    { category: 'Прочие', sort: 90, parent: null },
   ],
   employees: [],   // реальные карточки вводит владелица — демо стартует пустым
   journal: [],
@@ -140,6 +159,13 @@ export class MockStore {
   _load() {
     try { this.db = JSON.parse(localStorage.getItem(LS_KEY)) || structuredClone(DEMO_SEED); }
     catch { this.db = structuredClone(DEMO_SEED); }
+    // Ключи, которых в сохранённой базе ещё нет, доливаем из сида. Без этого у
+    // всех, кто открывал демо РАНЬШЕ, не появился бы catOrder — а с ним теперь
+    // строится группировка по отделениям, и без справочника люди пропадают с
+    // экранов. Существующее не трогаем: демо-данные вводили руками.
+    for (const [k, v] of Object.entries(DEMO_SEED)) {
+      if (this.db[k] === undefined) this.db[k] = structuredClone(v);
+    }
   }
   _save() { localStorage.setItem(LS_KEY, JSON.stringify(this.db)); }
   resetDemo() { this.db = structuredClone(DEMO_SEED); this._save(); }
@@ -217,7 +243,10 @@ export class MockStore {
     this.db.catOrder = this.db.catOrder || [];
     for (const r of rows) {
       const cur = this.db.catOrder.find(x => x.category === r.category);
-      if (cur) cur.sort = r.sort; else this.db.catOrder.push({ ...r });
+      // parent приходит не всегда (перестановка шлёт его, а старые вызовы могли и
+      // не слать) — не затираем его undefined'ом, иначе блок молча вылетит из группы.
+      if (cur) { cur.sort = r.sort; if ('parent' in r) cur.parent = r.parent ?? null; }
+      else this.db.catOrder.push({ parent: null, ...r });
     }
     this._save();
   }
@@ -226,16 +255,50 @@ export class MockStore {
     for (const r of rows) { const s = this.db.specialties.find(x => x.id === r.id); if (s) s.sort = r.sort; }
     this._save();
   }
+  /* Зеркало RPC rename_department (миграция 123): переименование или, если имя
+     занято, слияние. Тянет за собой людей, блоки внутри, специальности и правила —
+     ровно как каскады внешних ключей на проде. Возвращает число людей в итоговом
+     отделении. */
   async renameCategory(oldName, newName) {
-    if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять справочник может владелец или директор');
-    const hit = this.db.specialties.filter(x => x.category === oldName);
-    hit.forEach(x => { x.category = newName; });
+    if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Переименовать отделение может владелец или директор');
+    newName = String(newName || '').trim();
+    if (!newName) throw new Error('Название отделения не может быть пустым');
+    if (oldName === newName) return 0;
     this.db.catOrder = this.db.catOrder || [];
     const was = this.db.catOrder.find(o => o.category === oldName);
-    if (was) { this.db.catOrder = this.db.catOrder.filter(o => o.category !== oldName && o.category !== newName);
-               this.db.catOrder.push({ category: newName, sort: was.sort }); }
-    this._log('updated', 'specialty', null, 'отделение', oldName, newName);
-    this._save(); return hit.length;
+    if (!was) throw new Error(`Отделения «${oldName}» нет в справочнике`);
+    const target = this.db.catOrder.find(o => o.category === newName);
+
+    // Сначала ПРОВЕРКИ, только потом правки. RPC на проде выполняется в
+    // транзакции и при отказе не оставляет следов; здесь транзакции нет, и
+    // порядок «сначала переписали, потом отказали» оставил бы демо-базу
+    // переименованной наполовину — её зафиксировал бы первый же _save().
+    if (target?.parent && this.db.catOrder.some(o => o.parent === oldName)) {
+      throw new Error(`В «${oldName}» есть блоки, а «${newName}» само лежит внутри отделения — так объединить нельзя`);
+    }
+
+    this.db.specialties.filter(x => x.category === oldName).forEach(x => { x.category = newName; });
+    this.db.employees.filter(x => x.dept === oldName).forEach(x => { x.dept = newName; });
+    this.db.catOrder.filter(o => o.parent === oldName).forEach(o => { o.parent = newName; });
+    // Суммы за смену: на проде их тянет каскад внешнего ключа, при слиянии —
+    // отдельный UPDATE внутри RPC. Демо обязано делать то же, иначе список сумм
+    // остаётся под отделением, которого больше нет.
+    (this.db.presets || []).filter(p => p.category === oldName).forEach(p => { p.category = newName; });
+    // Норма отделения. При слиянии у цели своя уже может быть — её и оставляем,
+    // а исходную выбрасываем (так же поступает RPC). Иначе получились бы два
+    // правила на одну категорию, и find() взял бы случайное.
+    const rules = this.db.deptRules || [];
+    if (target && rules.some(r => r.category === newName)) {
+      this.db.deptRules = rules.filter(r => r.category !== oldName);
+    } else {
+      rules.filter(r => r.category === oldName).forEach(r => { r.category = newName; });
+    }
+
+    if (target) this.db.catOrder = this.db.catOrder.filter(o => o !== was);
+    else was.category = newName;
+    this._log('updated', 'category_order', 0, 'отделение', oldName, newName);
+    this._save();
+    return this.db.employees.filter(e => e.dept === newName && e.status === 'active').length;
   }
   async setEmployeeHidden(id, hidden) {
     // Текст отказа и красный флаг — слово в слово как в базе (триггеры
@@ -263,11 +326,11 @@ export class MockStore {
   }
 
   async listEmployees() { return structuredClone(this.db.employees); }
-  async createEmployee({ fio, position, phone, specialty_id, specialty_id_2, hired_on, left_on, lines, valid_from }) {
+  async createEmployee({ fio, position, phone, specialty_id, specialty_id_2, dept, hired_on, left_on, lines, valid_from }) {
     const vfrom = valid_from || rateFrom();
     const e = {
       id: this.db.nextId.employee++, fio, position: position || '', phone: phone || '',
-      specialty_id: specialty_id || null, specialty_id_2: specialty_id_2 || null, status: 'active',
+      specialty_id: specialty_id || null, specialty_id_2: specialty_id_2 || null, dept: dept || null, status: 'active',
       hired_on: hired_on || null, left_on: left_on || null,
       created_at: new Date().toISOString(),
       lines: (lines || []).map(l => ({ ...l, id: this.db.nextId.line++, valid_from: vfrom, valid_to: null })),
@@ -279,7 +342,12 @@ export class MockStore {
   async updateEmployee(id, patch, newLines, validFrom) {
     const e = this.db.employees.find(x => x.id === id);
     if (!e) throw new Error('Карточка не найдена');
-    for (const f of ['fio', 'position', 'phone', 'specialty_id', 'status', 'hired_on', 'left_on', 'week_hours']) {
+    // dept — как в базе: отделение меняют владелец и директор (сторож
+    // employee_guard_columns, 123). Демо обязано отказывать теми же словами.
+    if (patch.dept !== undefined && patch.dept !== e.dept && !['owner', 'ceo'].includes(this.user?.role)) {
+      throw new Error('Отделение меняет владелец или директор: по нему группируются график, ведомость и правила');
+    }
+    for (const f of ['fio', 'position', 'phone', 'specialty_id', 'dept', 'status', 'hired_on', 'left_on', 'week_hours']) {
       if (patch[f] !== undefined && patch[f] !== e[f]) {
         this._log('updated', 'employee', id, f, String(e[f] ?? ''), String(patch[f] ?? ''));
         e[f] = patch[f];
@@ -1181,8 +1249,21 @@ export class SupabaseStore {
   /* Порядок отделений и специальностей (088). upsert, а не update: отделение
      могли вписать руками в форме специальности — строки порядка у него ещё нет. */
   async setCategoryOrder(rows) {
-    const { error } = await this.sb.from('category_order').upsert(rows, { onConflict: 'category' });
-    if (error) throw new Error('Менять порядок может владелец или директор');
+    // .select() — как в setSpecialtySort: под RLS запрет на UPDATE не даёт ошибки,
+    // он даёт НОЛЬ изменённых строк, и без этого отказ выглядел бы как успех.
+    const { data, error } = await this.sb.from('category_order')
+      .upsert(rows, { onConflict: 'category' }).select();
+    // Через этот метод идёт не только перестановка, но и ЗАВЕДЕНИЕ отделения
+    // (123), а там база отказывает по делу: третий уровень вложенности, занятое
+    // имя. Глотать её текст и всегда говорить «недостаточно прав» — значит
+    // отправить владельца искать несуществующую проблему с доступом. Про права
+    // говорим только тогда, когда дело правда в них.
+    if (error) {
+      throw new Error(error.code === '42501' || /permission|policy|row-level/i.test(error.message || '')
+        ? 'Менять справочник отделений может владелец или директор'
+        : (error.message || 'Не удалось сохранить справочник отделений'));
+    }
+    if (rows.length && (!data || !data.length)) throw new Error('Менять справочник отделений может владелец или директор');
   }
   async setSpecialtySort(rows) {
     for (const r of rows) {
@@ -1191,22 +1272,19 @@ export class SupabaseStore {
       if (!data || !data.length) throw new Error('Менять справочник может владелец или директор');
     }
   }
-  /* Переименование ОТДЕЛЕНИЯ. Отделение — это текст в каждой специальности, своей
-     строки у него нет: значит переименовать = переписать его у всех специальностей
-     разом и перенести его место в порядке. Если имя занято — отделения сливаются,
-     это законный способ их объединить (форма предупреждает заранее). */
+  /* Переименование ОТДЕЛЕНИЯ — одной транзакцией в базе (RPC, миграция 123).
+     Раньше это делали здесь в четыре запроса подряд: переписать категорию у
+     специальностей → завести новую строку порядка → удалить старую. Транзакции
+     между ними не было, и оборвись связь посередине — отделение осталось бы
+     переименованным наполовину. А с внешними ключами такой порядок и не пройдёт:
+     на строку справочника теперь смотрят люди, норма часов и суммы за смену.
+     Совпало с существующим именем — отделения сливаются, это законный способ их
+     объединить (форма предупреждает заранее). Возвращает число людей в итоговом
+     отделении. */
   async renameCategory(oldName, newName) {
-    const { data, error } = await this.sb.from('specialty')
-      .update({ category: newName }).eq('category', oldName).select();
-    if (error) throw error;
-    if (!data || !data.length) throw new Error('Менять справочник может владелец или директор');
-    const ord = await this.listCategoryOrder().catch(() => []);
-    const was = ord.find(o => o.category === oldName);
-    if (was) {
-      await this.setCategoryOrder([{ category: newName, sort: was.sort }]);
-      await this.sb.from('category_order').delete().eq('category', oldName);
-    }
-    return data.length;
+    const { data, error } = await this.sb.rpc('rename_department', { p_old: oldName, p_new: newName });
+    if (error) throw new Error(error.message || 'Переименовать отделение может владелец или директор');
+    return data ?? 0;
   }
   async updateSpecialty(id, name, category) {
     const { data, error } = await this.sb.from('specialty').update({ name, category }).eq('id', id).select();
@@ -1220,9 +1298,9 @@ export class SupabaseStore {
     if (error) throw error;
     return data.map(e => ({ ...e, lines: e.lines || [] }));
   }
-  async createEmployee({ fio, position, phone, specialty_id, specialty_id_2, hired_on, left_on, lines, valid_from }) {
+  async createEmployee({ fio, position, phone, specialty_id, specialty_id_2, dept, hired_on, left_on, lines, valid_from }) {
     const { data: e, error } = await this.sb.from('employee')
-      .insert({ fio, position, phone, specialty_id, specialty_id_2: specialty_id_2 || null, hired_on: hired_on || null, left_on: left_on || null, created_by: this.user.id }).select().single();
+      .insert({ fio, position, phone, specialty_id, specialty_id_2: specialty_id_2 || null, dept: dept || null, hired_on: hired_on || null, left_on: left_on || null, created_by: this.user.id }).select().single();
     if (error) throw new Error(employeeError(error));
     if (lines?.length) {
       const vfrom = valid_from || rateFrom();

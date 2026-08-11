@@ -153,6 +153,14 @@ body.authed .login-stage{display:none}
 .tag{font-size:11px;font-weight:700;color:var(--ink-2);background:var(--fill-2);padding:4px 11px;border-radius:var(--r-pill)}
 .group-label{display:flex;align-items:center;gap:12px;margin:20px 0 11px}
 .group-label .line{flex:1;height:1px;background:var(--hair)}
+/* Отделения в два уровня (123): «Врачи» — заголовок отделения, «Стационарные» —
+   блок внутри. Блок со сдвигом и мельче, чтобы вложенность читалась без рамок. */
+.group-head{display:flex;align-items:center;gap:9px;font-size:17px;font-weight:800;color:var(--ink);margin:26px 0 4px}
+.group-head:first-child{margin-top:0}
+.group-label.sub{margin:12px 0 9px 18px}
+.group-label.sub .caps{font-size:11.5px;opacity:.85}
+.cselect-opt.lvl2{padding-left:30px}
+.cselect-opt.lvl0{font-weight:700}
 .emp-row{display:grid;grid-template-columns:46px 1.7fr 1.4fr auto;align-items:center;gap:15px;padding:14px 18px;border-radius:20px;background:var(--raise);border:1px solid var(--glass-bd);box-shadow:var(--sh-sm);margin-bottom:9px;cursor:pointer;transition:.14s}
 .emp-row:hover{background:var(--raise-hi);transform:translateY(-1px)}
 .emp-ava{width:46px;height:46px;border-radius:15px;display:grid;place-items:center;font-weight:700;font-size:14px;color:#15140f}
@@ -987,6 +995,10 @@ tr.pw-total.pw-over{z-index:5}
 /* Справочник специальностей: отделения группами, стрелки порядка */
 .sp-cat{display:flex;align-items:center;gap:8px;margin:14px 0 6px;padding:0}
 .sp-cat:first-child{margin-top:0}
+/* Блок внутри отделения — со сдвигом и обычным регистром: заголовки отделений
+   набраны капслоком, и без этого различия дерево читается как плоский список. */
+.sp-cat.sp-sub{margin-left:16px}
+.sp-cat.sp-sub .sp-cat-name{text-transform:none;font-size:13px;letter-spacing:0;font-weight:700}
 .sp-cat-name{font-weight:800;font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-2)}
 /* Имя жмётся, а управление — нет: длинное название («Оператор колл-центра /
    администратор») иначе выдавливало бы стрелки за край карточки. */

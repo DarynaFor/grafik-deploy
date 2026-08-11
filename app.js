@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=182';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=183';
 
 const $ = id => document.getElementById(id);
 
@@ -409,7 +409,7 @@ const NAV = [
   // писать — заперто в RLS money_line (миграция 008); экран лишь показывает то,
   // что роль реально может внести, и то же проверит база. show: canImport.
   { s: 'import', i: 'upload', l: 'Импорт', show: () => canImport() },
-  { s: 'specialties', i: 'tag', l: 'Специальности', staffOnly: true },
+  { s: 'specialties', i: 'tag', l: 'Отделения', staffOnly: true },
   { s: 'rules', i: 'tag', l: 'Правила', staffOnly: true },
   { s: 'journal', i: 'journal', l: 'Журнал', ownerOnly: true },
 ];
@@ -491,6 +491,12 @@ function go(screen, replace) {
   if (typeof syncTopBack === 'function') syncTopBack();
   if (screen === 'patients') renderPatients();
   if (screen === 'import') renderImport();
+  // ⚠ Дефект НЕ этой задачи, он старше — найден при её проверке. renderRules() не
+  // звали ОТСЮДА вообще: экран «Правила» открывался пустым всегда, а рисовался
+  // только после сохранения варианта оплаты — то есть после действия, до которого
+  // с пустого экрана не дойти. Норма отделения и суммы за смену были не видны
+  // никому. Чинится здесь, потому что здесь же рисуются все остальные экраны.
+  if (screen === 'rules') renderRules();
   // «График» — единственный, кого go() сам не рисует (его рисует refresh при
   // входе). Значит перенесённый месяц дорисовываем здесь, иначе сетка осталась бы
   // от прошлого месяца, а cellDate() уже отдавал бы новый.
@@ -916,7 +922,7 @@ function makeDropdown(host, opts, cur, onPick) {
   host.classList.add('cselect');
   host.dataset.value = curOpt.v;
   host.innerHTML = `<button class="cselect-trigger" type="button"><span class="cselect-label">${esc(curLabel)}</span>${ICONS.chevD}</button>
-    <div class="cselect-panel" role="listbox">${opts.map(o => `<div class="cselect-opt${o.v === cur ? ' sel' : ''}" role="option" data-v="${esc(o.v)}">${esc(o.label)}</div>`).join('')}</div>`;
+    <div class="cselect-panel" role="listbox">${opts.map(o => `<div class="cselect-opt${o.v === cur ? ' sel' : ''}${o.cls ? ' ' + o.cls : ''}" role="option" data-v="${esc(o.v)}">${esc(o.label)}</div>`).join('')}</div>`;
   host.querySelector('.cselect-trigger').onclick = e => {
     e.stopPropagation();
     const willOpen = !host.classList.contains('open');
@@ -936,8 +942,10 @@ document.addEventListener('click', () => document.querySelectorAll('.cselect.ope
 // Наполняем дропдауны «Отделение» при загрузке данных (не в рендерах — чтобы не пересобирать
 // на каждый ввод). Выбор сразу перерисовывает через onPick (drawSchedule/renderEmployees).
 function fillCatSelects() {
-  const cats = catsOrdered([...specialties.map(s => s.category), 'Прочие']);
-  const opts = [{ v: '', label: 'Все отделения' }, ...cats.map(c => ({ v: c, label: c }))];
+  // Группа выбирается так же, как блок: выбрал «Врачи» — видно все пять блоков
+  // разом. Блоки со сдвигом, чтобы дерево читалось с одного взгляда.
+  const opts = [{ v: '', label: 'Все отделения' },
+    ...deptsFlat().map(c => ({ v: c, label: c, cls: deptParent(c) ? 'lvl2' : (c === NO_DEPT ? 'lvl0 muted' : 'lvl0') }))];
   const wire = (id, onPick) => { const el = $(id); if (el) makeDropdown(el, opts, el.dataset.value || '', onPick); };
   wire('empCat', () => renderEmployees($('empSearch').value || ''));
   wire('schedCat', () => drawSchedule());
@@ -949,10 +957,13 @@ function fillCatSelects() {
 }
 async function refresh() {
   const [sp, em, co] = await Promise.all([store.listSpecialties(), store.listEmployees(),
-    // Порядок отделений — не критично: экран обязан собраться и без него.
+    // Справочник отделений. Не роняем вход, если он не пришёл: экран обязан
+    // собраться и без него. Но с 123 по нему строится ВСЯ группировка, поэтому
+    // «пустой справочник» — уже не безобидно: страховку от пропажи людей держит
+    // deptsFlat(), она дописывает отделения, которые реально стоят у людей.
     store.listCategoryOrder().catch(e => { console.warn('listCategoryOrder:', e); return []; })]);
   specialties = sp; employees = em;
-  catOrder = new Map((co || []).map(r => [r.category, r.sort]));
+  setDepts(co || []);
   fillCatSelects();
   renderEmployees($('empSearch').value || '');
   renderSpecs();
@@ -963,16 +974,21 @@ async function refresh() {
 /* ── сотрудники ── */
 const specName = id => specialties.find(s => s.id === id)?.name || '—';
 const specCat = id => specialties.find(s => s.id === id)?.category || 'Прочие';
-// Человек может работать у нас на ДВУХ работах (employee.specialty_id_2,
-// миграция 072). Фильтр по отделению обязан находить его по любой из них —
-// иначе дежурант-врач пропадает из «Врачей», когда вторая работа в другой
-// отделения, и наоборот. Группируется он при этом по ОСНОВНОМУ (specCat).
-// picked=true — отделение выбрано явно: ищем по ЛЮБОЙ из работ, чтобы дежурант
-// не пропадал из «Врачей». picked=false — рисуем все отделения подряд, и тогда
-// человек должен попасть РОВНО в одну (свою основную), иначе задвоится в списке.
-const inCat = (e, cat, picked) => picked
-  ? (specCat(e.specialty_id) === cat || (e.specialty_id_2 != null && specCat(e.specialty_id_2) === cat))
-  : specCat(e.specialty_id) === cat;
+/* Отделение человека (миграция 123). Раньше оно бралось из специальности, и
+   этого перестало хватать: блоки «Амбулаторные основные» и «Совместители» делят
+   людей с ОДНОЙ специальностью — все психиатры числятся «Психиатр-психотерапевт».
+   Теперь специальность отвечает, ЧТО человек делает, а отделение — ГДЕ он числится.
+
+   Второй работы это больше не касается. Раньше фильтр искал человека по ОБЕИМ
+   специальностям, иначе дежурант-врач пропадал из «Врачей», когда его вторая
+   работа лежала в другом отделении. Отделение у человека теперь одно на карточке,
+   и по какой бы из двух работ он ни выходил, из своего отделения он не исчезнет. */
+const NO_DEPT = 'Не распределены';
+const empCat = e => e?.dept || NO_DEPT;
+// Выбрана ГРУППА («Врачи») — показываем и её саму, и все её блоки. Выбран блок —
+// только его. Ради этого СЕО и просил «4 отделения, можно с блоками»: смотреть
+// целиком или по частям.
+const inCat = (e, cat) => { const c = empCat(e); return c === cat || deptParent(c) === cat; };
 /* Шапка ЛЮБОГО окна про человека — одна на все окна, чтобы везде было одинаково:
    ФИО ЦЕЛИКОМ (с отчеством) + специальность + строка контекста. «Фамилия Имя»
    не показывает отчества, а однофамильцы различаются только им — в «Расчёте»
@@ -1026,16 +1042,20 @@ function cardGaps(e) {
     // значок пропадал, а СМС ушла бы чужому. См. migrations/023.
     phone: !PHONE_OK.test(normPhone(e.phone)),
     spec: !e.specialty_id,
+    // Без отделения человек не пропадает, но и не попадает ни в одну группу —
+    // висит в «Не распределены». Это тот самый список, который СЕО просил себе
+    // под разбор («я распределю роли»), и он должен быть виден числом.
+    dept: !e.dept,
   };
 }
-const isIncomplete = e => { const g = cardGaps(e); return g.fio || g.rate || g.phone || g.spec; };
+const isIncomplete = e => { const g = cardGaps(e); return g.fio || g.rate || g.phone || g.spec || g.dept; };
 function renderEmployees(filter = '') {
   const f = filter.toLowerCase();
   const all = employees.filter(e => e.status !== 'archived');
   // Панель заполненности + фильтр «только неполные» — владельцу (он заполняет).
   if (isOwner()) {
-    const cnt = { rate: 0, phone: 0, spec: 0, fio: 0 };
-    all.forEach(e => { const g = cardGaps(e); if (g.rate) cnt.rate++; if (g.phone) cnt.phone++; if (g.spec) cnt.spec++; if (g.fio) cnt.fio++; });
+    const cnt = { rate: 0, phone: 0, spec: 0, fio: 0, dept: 0 };
+    all.forEach(e => { const g = cardGaps(e); if (g.rate) cnt.rate++; if (g.phone) cnt.phone++; if (g.spec) cnt.spec++; if (g.fio) cnt.fio++; if (g.dept) cnt.dept++; });
     const done = all.filter(e => !isIncomplete(e)).length;
     const onlyInc = $('empList').dataset.onlyInc === '1';
     if ($('empList').dataset.gap && !cnt[$('empList').dataset.gap]) $('empList').dataset.gap = '';   // активный фильтр опустел → снять (иначе чип исчезнет и не отключить)
@@ -1043,7 +1063,7 @@ function renderEmployees(filter = '') {
     // чипы — фильтры: клик показывает только тех, у кого этот пробел; повторный клик снимает
     const chip = (n, key, label) => n ? `<button class="gap-chip${gapF === key ? ' on' : ''}" data-gap="${key}">${n} ${label}</button>` : '';
     $('roNote').innerHTML = `<div class="fill-stat"><span class="fs-count"><b>${done}</b> из <b>${all.length}</b> заполнены</span>
-      <span class="gap-chips">${chip(cnt.rate, 'rate', 'без ставки')}${chip(cnt.phone, 'phone', 'без телефона')}${chip(cnt.spec, 'spec', 'без спец.')}${chip(cnt.fio, 'fio', 'без фамилии')}</span>
+      <span class="gap-chips">${chip(cnt.dept, 'dept', 'без отделения')}${chip(cnt.rate, 'rate', 'без ставки')}${chip(cnt.phone, 'phone', 'без телефона')}${chip(cnt.spec, 'spec', 'без спец.')}${chip(cnt.fio, 'fio', 'без фамилии')}</span>
       <label class="rt-toggle"><input type="checkbox" id="empOnlyInc" ${onlyInc ? 'checked' : ''}> только неполные</label></div>`;
     $('empOnlyInc').onchange = ev => { $('empList').dataset.onlyInc = ev.target.checked ? '1' : ''; if (ev.target.checked) $('empList').dataset.gap = ''; renderEmployees($('empSearch').value || ''); };
     $('roNote').querySelectorAll('.gap-chip').forEach(b => b.onclick = () => {
@@ -1054,7 +1074,7 @@ function renderEmployees(filter = '') {
   }
   const onlyInc = isOwner() && $('empList').dataset.onlyInc === '1';
   const gapF = isOwner() ? ($('empList').dataset.gap || '') : '';
-  const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
+  const cats = deptsFlat();
   const catF = $('empCat')?.dataset.value || '';   // дропдаун заполняет fillCatSelects при загрузке
   // Убранные (hidden_at, 105) не показываем и здесь. Без этого «убрать» не
   // убирало: на экране «Архив» четыре дубля Лобановой исчезали, а тут же, на
@@ -1064,17 +1084,43 @@ function renderEmployees(filter = '') {
   const arch = canEditCards() ? employees.filter(e => e.status === 'archived' && !e.hidden_at && String(e.fio || '').toLowerCase().includes(f)) : [];   // архив показываем только тем, кто правит карточки
   const showArch = $('empList').dataset.showArch === '1';
   let html = arch.length ? `<div style="margin:0 0 10px"><button class="btn btn-ghost btn-sm" id="archToggle">${showArch ? 'Скрыть архив' : 'Архив · ' + arch.length}</button></div>` : '';
+  // Кого показываем — решаем ОДИН раз, дальше только раскладка по отделениям.
+  // Иначе те же фильтры пришлось бы повторять дважды: для подсчёта в заголовке
+  // группы и для самого списка, — а это два места для одной мысли.
+  let shownList = all.filter(e => String(e.fio || "").toLowerCase().includes(f));
+  if (gapF) shownList = shownList.filter(e => cardGaps(e)[gapF]);
+  else if (onlyInc) shownList = shownList.filter(isIncomplete);
+  const byDept = new Map();
+  for (const e of shownList) {
+    const c = empCat(e);
+    if (!byDept.has(c)) byDept.set(c, []);
+    byDept.get(c).push(e);
+  }
   for (const cat of cats) {
-    if (catF && cat !== catF) continue;
-    let list = all.filter(e => inCat(e, cat, !!catF) && String(e.fio || "").toLowerCase().includes(f));
-    if (gapF) list = list.filter(e => cardGaps(e)[gapF]);
-    else if (onlyInc) list = list.filter(isIncomplete);
+    // Выбрана группа — показываем и её саму, и её блоки.
+    if (catF && !(cat === catF || deptParent(cat) === catF)) continue;
+    const kids = deptKids(cat);
+    const list = byDept.get(cat) || [];
+    // Отделение верхнего уровня — заголовок с общим числом по всем блокам:
+    // СЕО просил «4 отделения», и итог по отделению должен быть виден сразу.
+    if (!deptParent(cat)) {
+      const total = list.length + kids.reduce((s, k) => s + (byDept.get(k) || []).length, 0);
+      if (!total) continue;                       // пустое отделение не рисуем
+      html += `<div class="group-head"><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${total}</div>`;
+    }
     if (!list.length) continue;
-    html += `<div class="group-label"><span class="caps"><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${list.length}</span><span class="line"></span></div>`;
+    // Заголовок блока. У отделения БЕЗ блоков его нет вовсе: заголовок отделения
+    // уже нарисован выше, и второй такой же строкой название задваивалось бы.
+    // «без блока» — люди, попавшие прямо в группу, у которой блоки есть. Так быть
+    // не должно, и молчать об этом нельзя: иначе человек пропадёт из виду.
+    if (deptParent(cat) || kids.length) {
+      const label = deptParent(cat) ? cat : cat + ' · без блока';
+      html += `<div class="group-label${deptParent(cat) ? ' sub' : ''}"><span class="caps"><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(label)} · ${list.length}</span><span class="line"></span></div>`;
+    }
     for (const e of list) {
       const pays = activeLines(e).map(l => `<span class="pill ${l.line_type === 'основной' ? 'o' : 's'}">${esc(lineLabel(l))}</span>`).join(' ') || '<span class="pill k">строк начисления нет</span>';
       const g = cardGaps(e);
-      const gap = isOwner() && isIncomplete(e) ? `<span class="gap-dot" title="Не хватает">⚠ ${[g.rate && 'ставка', g.phone && 'телефон', g.spec && 'спец.', g.fio && 'фамилия'].filter(Boolean).join(', ')}</span>` : '';
+      const gap = isOwner() && isIncomplete(e) ? `<span class="gap-dot" title="Не хватает">⚠ ${[g.dept && 'отделение', g.rate && 'ставка', g.phone && 'телефон', g.spec && 'спец.', g.fio && 'фамилия'].filter(Boolean).join(', ')}</span>` : '';
       html += `<div class="emp-row${isOwner() && isIncomplete(e) ? ' incomplete' : ''}" data-id="${e.id}"><div class="emp-ava" style="background:${catTint(cat)}">${esc(initials(e.fio))}</div><div class="emp-name">${esc(e.fio)}${gap}<div class="sub">${esc(specName(e.specialty_id))}</div></div><div class="emp-pay">${pays}</div><div class="chev">${ICONS.chevR}</div></div>`;
     }
   }
@@ -1309,6 +1355,7 @@ function openCard(id, replace) {
     <div class="grid2">
       <div class="card cardpad"><div class="caps" style="margin-bottom:12px">Строки начисления</div>${lines}${oldLines ? `<div class="caps" style="margin:16px 0 6px">История ставок</div>${oldLines}` : ''}</div>
       <div class="card cardpad">
+        <div class="field"><span class="caps">Отделение</span><span class="val">${e.dept ? esc(catLabel(e.dept)) : '<span class="muted">не указано</span>'}</span></div>
         <div class="field"><span class="caps">Специальность</span><span class="val">${esc(specName(e.specialty_id))}</span></div>
         <div class="field"><span class="caps">Вторая работа</span><span class="val">${e.specialty_id_2 ? esc(specName(e.specialty_id_2)) : '<span class="muted">—</span>'}</span></div>
         <div class="field"><span class="caps">Должность</span><span class="val">${esc(e.position === FIO_SENTINEL ? '—' : (e.position || '—'))}</span></div>
@@ -2148,15 +2195,26 @@ function employeeForm(e) {
       <div class="sp-pick"><select class="input" id="mSpec">${so}</select>
         <button class="btn btn-ghost btn-sm" id="mSpecNew" type="button" title="Завести новую специальность">${ICONS.plus}</button></div></div>
     <div><label class="flbl">Должность</label><input class="input" id="mPos" value="${esc(e?.position === FIO_SENTINEL ? '' : (e?.position || ''))}" placeholder="напр. Заведующий"></div></div>
+    <!-- Отделение — на человеке, а не на специальности (миграция 123). Иначе
+         психиатра-основного и психиатра-совместителя было бы не развести: у них
+         одна специальность на двоих. Меняют владелец и директор — это они и
+         распределяют людей; остальным поле видно, но заперто. -->
+    <label class="flbl">Отделение</label>
+    <select class="input" id="mDept"${canPickDept() ? '' : ' disabled'}>
+      <option value="">— не указано —</option>
+      ${deptsFlat(false).map(c => `<option value="${esc(c)}"${e?.dept === c ? ' selected' : ''}>${esc(catLabel(c))}</option>`).join('')}
+    </select>
+    <div class="msub" style="margin-top:-4px">${canPickDept()
+      ? 'По отделению группируются график, ведомость и отпуска, и к нему привязано правило нормы часов. Смена отделения попадёт в журнал.'
+      : 'Отделение меняют владелец и директор.'}</div>
     <!-- Милена 06.08: «Бухгалтер записан врачом. Я полезла редактировать, а там нет
          возможности добавить название». Справочник правился ТОЛЬКО на отдельном
-         экране «Специальности» — то есть посреди правки карточки надо было уйти,
+         экране «Отделения» — то есть посреди правки карточки надо было уйти,
          завести, вернуться и начать заново. Заводим прямо здесь, без вложенного
          окна: модалка тут уже открыта, вторая поверх неё стёрла бы первую. -->
     <div class="sp-new" id="mSpecNewBox" hidden>
       <input class="input" id="mSpecName" placeholder="название, напр. Бухгалтер">
-      <input class="input" id="mSpecCat" list="catlist2" placeholder="отделение">
-      <datalist id="catlist2">${[...new Set(specialties.map(s => s.category))].map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
+      <select class="input" id="mSpecCat">${deptsFlat(false).map(c => `<option value="${esc(c)}"${c === 'Прочие' ? ' selected' : ''}>${esc(catLabel(c))}</option>`).join('')}</select>
       <button class="btn btn-primary btn-sm" id="mSpecAdd" type="button">Добавить</button>
     </div>
     <label class="flbl">Вторая работа</label><select class="input" id="mSpec2">${so2}</select>
@@ -2193,12 +2251,30 @@ function employeeForm(e) {
         sel.insertAdjacentHTML('beforeend', `<option value="${sp.id}">${esc(sp.name)}</option>`);
       }
       $('mSpec').value = String(sp.id);           // ради чего и заводили — сразу ставим человеку
-      $('mSpecNewBox').hidden = true; $('mSpecName').value = ''; $('mSpecCat').value = '';
+      $('mSpecNewBox').hidden = true; $('mSpecName').value = ''; $('mSpecCat').value = 'Прочие';
       fillCatSelects();                           // фильтры по отделениям на других экранах
       toast(ICONS.check + 'Добавлено: ' + esc(name));
     } catch (err) { toast(err.message || err, true); }
     finally { btn.disabled = false; }
   };
+  // Новая карточка: ВЫБРАЛИ специальность — подставляем её отделение, если такое
+  // отделение в справочнике есть. Это подсказка, а не правило: отделение живёт на
+  // человеке, и «Психиатр-психотерапевт» законно стоит и у основного, и у
+  // совместителя. У существующей карточки не трогаем ничего — там отделение уже
+  // поставлено человеком, и перебивать его сменой специальности нельзя.
+  //
+  // ⚠ Только на onchange, без вызова при открытии. Вызов при открытии подставлял
+  // отделение ПЕРВОЙ специальности списка — а она выбрана браузером, а не
+  // человеком (у новой карточки ни один option не selected). Дальше условие
+  // «поле пустое» навсегда становилось ложным, и настоящий выбор специальности
+  // отделение уже не менял: медсестра молча уезжала в «Стационарные» и при этом
+  // не попадала в «Не распределены», ради которых всё и затевалось.
+  if (!e && canPickDept()) {
+    $('mSpec').onchange = () => {
+      const c = specCat(+$('mSpec').value);
+      if (!$('mDept').value && deptOf.has(c)) $('mDept').value = c;
+    };
+  }
   $('mCancel').onclick = closeModal;
   $('mSave').onclick = async () => {
     const btn = $('mSave'); if (btn.disabled) return; btn.disabled = true;   // защита от двойного клика
@@ -2220,6 +2296,16 @@ function employeeForm(e) {
       }
       const patch = { fio, position: $('mPos').value.trim(), phone: phoneNorm || null,
         specialty_id: +$('mSpec').value || null, specialty_id_2: +$('mSpec2').value || null, hired_on, left_on };
+      // Отделение. Пустая строка — «не распределён», в базе null. Шлём всегда: у
+      // тех, кому поле заперто, значение равно старому, и сторож базы их пропускает.
+      // ⚠ НО: если отделения человека нет среди вариантов (справочник не
+      // догрузился), поле не отправляем вовсе. Иначе select отдал бы пустую
+      // строку, и обычное сохранение карточки МОЛЧА стёрло бы отделение — а
+      // Алёне ещё и отказало бы: сторож не пускает её менять dept.
+      const deptSel = $('mDept');
+      if (!e?.dept || [...deptSel.options].some(o => o.value === e.dept)) {
+        patch.dept = deptSel.value || null;
+      }
       const lines = collectLines(box);
       // Крупная ставка в карточке → тоже переспросить, не опечатка ли.
       const big = bigAmounts(lines);
@@ -2257,12 +2343,63 @@ function employeeForm(e) {
    «Психолог-психотерапевт», которого хотят звать просто «Психолог»).
    Право в базе уже есть (политика spec_update, owner+ceo) — не хватало экрана. */
 function canEditSpecs() { return ['owner', 'ceo'].includes(store.me()?.role); }
+/* Отделение человека правят владелец и директор — как в базе (сторож
+   employee_guard_columns, миграция 123). Алёне карточку править можно, а
+   отделение нет. Сегодня оно денег не двигает: dept_rule к расчёту ещё НЕ
+   подключена (101 отложила это намеренно). Но подключение стоит в очереди, и
+   тогда перенос человека между отделениями станет переносом денег — право
+   сузили заранее, а не после. Показываем «нельзя» сразу, а не отказом базы
+   после сохранения. */
+function canPickDept() { return ['owner', 'ceo'].includes(store.me()?.role); }
 /* Порядок отделений (088). Отделение без строки в справочнике порядка уходит в
    конец — так же, как её отсортировала бы база. */
-let catOrder = new Map();
+/* Справочник отделений — дерево в два уровня: группа → блок (миграция 123).
+   «Врачи» держат пять блоков, «Администрация клиники» — сама себе отделение.
+   Глубже двух уровней база не пускает: экраны третий уровень не рисуют, и
+   отделение вместе с людьми пропало бы из виду. */
+let depts = [];                       // [{category, sort, parent}] в порядке справочника
+let catOrder = new Map();             // название → sort
+let deptOf = new Map();               // название → строка справочника
+function setDepts(rows) {
+  depts = [...(rows || [])].sort((a, b) => (a.sort ?? 9999) - (b.sort ?? 9999)
+    || String(a.category).localeCompare(String(b.category), 'ru'));
+  catOrder = new Map(depts.map(r => [r.category, r.sort]));
+  deptOf = new Map(depts.map(r => [r.category, r]));
+}
+function deptParent(c) { return deptOf.get(c)?.parent || null; }
+function deptKids(c) { return depts.filter(r => r.parent === c).map(r => r.category); }
 function catSort(c) { return catOrder.has(c) ? catOrder.get(c) : 9999; }
 function catsOrdered(list) {
   return [...new Set(list)].sort((a, b) => catSort(a) - catSort(b) || a.localeCompare(b, 'ru'));
+}
+/* Подпись отделения там, где отдельной строки под заголовок группы нет: график,
+   ведомость, отпуска, выпадашки и окна. Группу приписываем к блоку — «Врачи ·
+   Совместители». Настоящие два уровня рисует только экран «Сотрудники»: там
+   места хватает. */
+const catLabel = c => deptParent(c) ? deptParent(c) + ' · ' + c : c;
+/* Все отделения по порядку, «Не распределены» последними. Именно этот список
+   рисуют экраны: отделение без людей на них не появляется, но в справочнике и в
+   выпадашке оно есть — иначе новое отделение некуда было бы наполнять. */
+function deptsFlat(withEmpty = true) {
+  const out = [];
+  for (const r of depts) {
+    if (r.parent) continue;                       // блоки идут следом за своей группой
+    out.push(r.category);
+    for (const k of deptKids(r.category)) out.push(k);
+  }
+  // ⚠ Страховка, без которой люди ПРОПАДАЮТ с экранов. Раньше список отделений
+  // строился из самих людей, и расхождению взяться было неоткуда; теперь он
+  // строится из справочника — а справочник может не догрузиться (интернет в
+  // клинике плохой, и listCategoryOrder намеренно не роняет вход) или разойтись
+  // с данными. Дописываем всё, что реально стоит у людей и у специальностей:
+  // лучше показать отделение не на своём месте, чем спрятать полсотни человек.
+  const add = c => { if (c && !out.includes(c)) out.push(c); };
+  for (const e of employees) add(e?.dept);
+  for (const s of specialties) add(s?.category);
+  // Отделение могут завести и с таким названием — тогда оно уже в списке, и
+  // дописывать второй раз нельзя: человек попал бы в две группы сразу.
+  if (withEmpty) add(NO_DEPT);
+  return out;
 }
 /* Справочник группами: отделение — заголовок, под ним его специальности.
    Стрелками двигаются и отделения, и специальности внутри отделения: Дарина
@@ -2270,25 +2407,39 @@ function catsOrdered(list) {
    очереди, и на экранах они применяются вместе. */
 function renderSpecs() {
   const ed = canEditSpecs();
-  const cats = catsOrdered(specialties.map(s => s.category));
+  // Весь справочник, включая отделения без людей: новое отделение надо где-то
+  // увидеть, прежде чем в него кого-то переставить.
+  const cats = deptsFlat(false);
   const cnt = id => employees.filter(e => e.status !== 'archived' && e.specialty_id === id).length;
+  // Людей в отделении считаем по КАРТОЧКАМ, а не по специальностям: с 123
+  // отделение стоит на человеке, и «сколько тут людей» — это ровно то число,
+  // ради которого СЕО и просил разделы.
+  const people = c => employees.filter(e => e.status !== 'archived' && empCat(e) === c).length;
   const arrow = (dir, kind, key, off) => `<button class="sp-mv" data-mv="${kind}" data-key="${esc(String(key))}" data-d="${dir}"${off ? ' disabled' : ''} title="${dir < 0 ? 'Выше' : 'Ниже'}" type="button">${dir < 0 ? '↑' : '↓'}</button>`;
-  $('specList').innerHTML = cats.map((c, ci) => {
-    const inCat = specialties.filter(s => s.category === c)
+  $('specList').innerHTML = cats.map(c => {
+    // Стрелки двигают отделение среди РАВНЫХ ему: блок внутри своей группы,
+    // группу среди групп. Иначе блок можно было бы вытолкнуть из своей группы
+    // стрелкой, ничего об этом не сказав.
+    const sibs = depts.filter(r => (r.parent || null) === deptParent(c)).map(r => r.category);
+    const si = sibs.indexOf(c);
+    const kids = deptKids(c);
+    // mySpecs, не inCat: так теперь зовётся общая проверка «человек в этом отделении».
+    const mySpecs = specialties.filter(s => s.category === c)
       .sort((a, b) => (a.sort ?? 999) - (b.sort ?? 999) || a.name.localeCompare(b.name, 'ru'));
-    return `<div class="sp-cat">
+    const n = people(c);
+    return `<div class="sp-cat${deptParent(c) ? ' sp-sub' : ''}">
         <span class="sp-cat-name${ed ? ' sp-cat-tap' : ''}"${ed ? ` data-cat="${esc(c)}" title="Переименовать отделение"` : ''}>${esc(c)}${ed ? ` <span class="me-pen">${ICONS.pencil || '✎'}</span>` : ''}</span>
-        <span class="muted small">${inCat.length}</span>
-        ${ed ? `<span class="sp-mvs">${arrow(-1, 'cat', c, ci === 0)}${arrow(1, 'cat', c, ci === cats.length - 1)}</span>` : ''}
+        <span class="muted small">${n ? n + ' чел' : (kids.length ? kids.length + ' ' + plural(kids.length, 'блок', 'блока', 'блоков') : '—')}</span>
+        ${ed ? `<span class="sp-mvs">${arrow(-1, 'cat', c, si <= 0)}${arrow(1, 'cat', c, si === sibs.length - 1)}</span>` : ''}
       </div>` +
       // Карандаш идёт ПЕРЕД стрелками: иначе он оказывается правее стрелок у
       // названия отделения, две колонки не сходятся, и правый край выглядит
       // обрезанным (Дарина 06.08 прислала скриншот именно с этим).
-      inCat.map((s, i) => `<div class="line-row sp-row${ed ? ' sp-tap' : ''}"${ed ? ` data-spec="${s.id}" title="Переименовать или перенести в другое отделение"` : ''}>
+      mySpecs.map((s, i) => `<div class="line-row sp-row${ed ? ' sp-tap' : ''}"${ed ? ` data-spec="${s.id}" title="Переименовать или перенести в другое отделение"` : ''}>
         <div class="sp-name">${esc(s.name)}</div>
         ${cnt(s.id) ? `<span class="muted small sp-cnt">${cnt(s.id)} чел</span>` : ''}
         ${ed ? `<span class="me-pen sp-pen">${ICONS.pencil || '✎'}</span>
-        <span class="sp-mvs">${arrow(-1, 'spec', s.id, i === 0)}${arrow(1, 'spec', s.id, i === inCat.length - 1)}</span>` : ''}</div>`).join('');
+        <span class="sp-mvs">${arrow(-1, 'spec', s.id, i === 0)}${arrow(1, 'spec', s.id, i === mySpecs.length - 1)}</span>` : ''}</div>`).join('');
   }).join('') || '<div class="empty">Справочник пуст</div>';
   applyIcons($('specList'));
   if (!ed) return;
@@ -2308,15 +2459,22 @@ function renderSpecs() {
     catch (err) { toast(err.message || err, true); b.disabled = false; }
   });
 }
-/* Переименование отделения. Своей строки у отделения нет — это текст в каждой
-   специальности, поэтому правка задевает их все разом. Пишем это словами: люди
-   переименовывают «Психологов», не задумываясь, что под ними пять специальностей. */
+/* Переименование отделения. С 123 у отделения ЕСТЬ своя строка (category_order),
+   и на неё смотрят внешними ключами люди, блоки внутри, норма отделения и суммы
+   за смену — переименование тянет их за собой каскадом, одной транзакцией в базе
+   (RPC rename_department). Пишем это словами прямо в окне: человек переименовывает
+   «Психологов», не задумываясь, что вместе с названием переедет полсотни карточек.
+   Совпало с существующим именем — это СЛИЯНИЕ, и предупредить надо до нажатия. */
 function catForm(cat) {
-  const inCat = specialties.filter(s => s.category === cat);
-  const others = [...new Set(specialties.map(s => s.category))].filter(c => c !== cat);
+  // Не inCat: так теперь зовётся общая проверка «человек в этом отделении».
+  const mySpecs = specialties.filter(s => s.category === cat);
+  const nPeople = employees.filter(e => e.status !== 'archived' && empCat(e) === cat).length;
+  const nKids = deptKids(cat).length;
+  const others = deptsFlat(false).filter(c => c !== cat);
   showModal(`<h3>Отделение</h3>
-    <div class="msub">Поменяется у всех специальностей этого отделения — сейчас их ${inCat.length}:
-      ${inCat.map(s => esc(s.name)).join(', ')}</div>
+    <div class="msub">Переедет вместе с новым названием всё, что на него ссылается:
+      <b>${nPeople} чел</b>${nKids ? `, ${nKids} ${plural(nKids, 'блок', 'блока', 'блоков')} внутри` : ''}, норма часов и суммы за смену.
+      ${mySpecs.length ? 'Специальности справочника (' + mySpecs.length + '): ' + mySpecs.map(s => esc(s.name)).join(', ') : 'Своих специальностей в справочнике нет.'}</div>
     <label class="flbl">Название</label><input class="input" id="mCn" value="${esc(cat)}">
     <div class="msub" id="mCnWarn" style="margin-top:8px"></div>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button>
@@ -2324,10 +2482,22 @@ function catForm(cat) {
   const inp = $('mCn');
   // Совпало с существующим — это не ошибка, а слияние отделений. Но сказать надо
   // ДО нажатия: иначе человек нажмёт «Сохранить» и увидит, что отделений стало меньше.
+  //
+  // Точное совпадение и «отличается только регистром» — РАЗНЫЕ случаи, и путать их
+  // нельзя. База сравнивает точно: «МЕДСЕСТРЫ» не сольются с «Медсестры», а встанут
+  // рядом вторым отделением. Заголовки блоков набраны капслоком через CSS — на
+  // экране близнецы неразличимы, и люди окажутся разложены по двум одинаковым с
+  // виду отделениям. Раньше окно на оба случая обещало слияние.
   const warn = () => {
     const v = inp.value.trim();
-    $('mCnWarn').innerHTML = (v && others.some(c => c.toLowerCase() === v.toLowerCase()))
-      ? `<div class="rc-warn">${ICONS.lock} Отделение <b>${esc(v)}</b> уже есть — они <b>объединятся</b> в одно.</div>` : '';
+    const box = $('mCnWarn');
+    if (v && v === NO_DEPT) {
+      box.innerHTML = `<div class="rc-warn">${ICONS.lock} «${esc(NO_DEPT)}» — служебное название, так отделение назвать нельзя.</div>`;
+    } else if (v && others.includes(v)) {
+      box.innerHTML = `<div class="rc-warn">${ICONS.lock} Отделение <b>${esc(v)}</b> уже есть — они <b>объединятся</b> в одно.</div>`;
+    } else if (v && others.some(c => c.toLowerCase() === v.toLowerCase())) {
+      box.innerHTML = `<div class="rc-warn">${ICONS.lock} Уже есть отделение <b>${esc(others.find(c => c.toLowerCase() === v.toLowerCase()))}</b> — отличается только регистром. Появится <b>второе</b>, на экране их будет не различить.</div>`;
+    } else box.innerHTML = '';
   };
   inp.oninput = warn; warn();
   $('mCancel').onclick = closeModal;
@@ -2335,17 +2505,25 @@ function catForm(cat) {
     const btn = $('mSave'); if (btn.disabled) return;
     const v = inp.value.trim(); if (!v) { inp.focus(); return; }
     if (v === cat) { closeModal(); return; }
+    // Тот же запрет, что и при заведении: «Не распределены» — не отделение, а
+    // список тех, кого ещё не разложили. Переименуй в него настоящее отделение —
+    // и оно слилось бы с псевдогруппой. Guard стоял только в форме заведения.
+    if (v === NO_DEPT) { inp.focus(); warn(); return; }
     btn.disabled = true;
-    try { const n = await store.renameCategory(cat, v); closeModal(); toast(ICONS.check + `Отделение переименовано (${n})`); await refresh(); }
+    // esc(v): toast() кладёт текст через innerHTML, а название отделения вводит
+    // человек. Без экранирования «<img src=x onerror=…>» в названии выполнялся бы
+    // как разметка — соседний тост в deptForm экранирует, этот был пропущен.
+    try { const n = await store.renameCategory(cat, v); closeModal(); toast(ICONS.check + `Отделение «${esc(v)}» · ${n} чел`); await refresh(); }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
 }
 /* Перестановка соседей. Меняем не два номера, а переписываем ПОЗИЦИИ всему
    списку. Обмен двух номеров выглядит экономнее, но не работает, когда номера
    равны — а именно так и есть в жизни: у отделений порядка ещё нет вовсе
-   (все 9999), у старых специальностей sort=0 у всех. Тогда «поменять местами»
+   (все 9999 — до 088), у старых специальностей sort=0 у всех. Тогда «поменять местами»
    меняет 0 на 0, и кнопка молча ничего не делает (поймано прогоном).
-   Списки короткие — отделений девять, специальностей в отделении единицы. */
+   Списки короткие — отделений с блоками полтора десятка, специальностей в
+   отделении единицы. */
 async function moveSpec(kind, key, dir) {
   const moved = (arr, i) => {                       // переставить элемент i на i+dir
     const j = i + dir;
@@ -2353,31 +2531,108 @@ async function moveSpec(kind, key, dir) {
     const out = arr.slice(); [out[i], out[j]] = [out[j], out[i]]; return out;
   };
   if (kind === 'cat') {
-    const cats = catsOrdered(specialties.map(s => s.category));
-    const out = moved(cats, cats.indexOf(key));
+    // Переставляем среди РАВНЫХ: блок внутри своей группы, группу среди групп.
+    const parent = deptParent(key);
+    const sibs = depts.filter(r => (r.parent || null) === parent).map(r => r.category);
+    const out = moved(sibs, sibs.indexOf(key));
     if (!out) return;
-    await store.setCategoryOrder(out.map((c, i) => ({ category: c, sort: (i + 1) * 10 })));
+    // Порядок переписываем ВСЕМУ справочнику, а не только соседям: блок обязан
+    // идти сразу за своей группой. Переставь мы одну группу, её блоки остались бы
+    // со старыми номерами — и уехали бы под чужой заголовок.
+    const tops = parent === null ? out : depts.filter(r => !r.parent).map(r => r.category);
+    const order = [];
+    for (const g of tops) {
+      order.push(g);
+      for (const k of (parent === g ? out : deptKids(g))) order.push(k);
+    }
+    await store.setCategoryOrder(order.map((c, i) => ({ category: c, sort: (i + 1) * 10, parent: deptParent(c) })));
   } else {
     const s = specialties.find(x => x.id === +key);
     if (!s) return;
-    const inCat = specialties.filter(x => x.category === s.category)
+    // mySpecs, не inCat: см. выше — глобальная inCat теперь про людей.
+    const mySpecs = specialties.filter(x => x.category === s.category)
       .sort((a, b) => (a.sort ?? 999) - (b.sort ?? 999) || a.name.localeCompare(b.name, 'ru'));
-    const out = moved(inCat, inCat.indexOf(s));
+    const out = moved(mySpecs, mySpecs.indexOf(s));
     if (!out) return;
     await store.setSpecialtySort(out.map((x, i) => ({ id: x.id, sort: i })));
   }
   await refresh();
 }
+/* Новое отделение или блок внутри отделения. Заводить их из формы специальности
+   больше нельзя: там поле было текстовым, и опечатка молча плодила отделение-
+   двойник, на который никто не смотрел. Теперь отделение — строка справочника,
+   на неё ссылаются люди, норма часов и суммы за смену. */
+function deptForm() {
+  // Вложить можно только в отделение БЕЗ родителя: глубина ровно два, третьего
+  // уровня экраны не рисуют (и база его не пустит — триггер category_order_depth).
+  // «Прочие» из родителей убраны намеренно: это не отделение, а хвост справочника
+  // для специальностей, которым отделение не назначили. Блок внутри такого хвоста
+  // означал бы, что людей туда кладут осознанно, — а это ровно наоборот.
+  const tops = depts.filter(r => !r.parent && r.category !== 'Прочие').map(r => r.category);
+  showModal(`<h3>Новое отделение</h3>
+    <div class="msub">Отделение верхнего уровня — или блок внутри уже существующего, как «Совместители» внутри «Врачей».</div>
+    <label class="flbl">Название</label><input class="input" id="mDn" placeholder="напр. Дежуранты" maxlength="60">
+    <label class="flbl">Внутри какого отделения</label>
+    <select class="input" id="mDp"><option value="">— само по себе, верхний уровень —</option>
+      ${tops.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>
+    <div class="msub" id="mDnWarn" style="margin-top:8px"></div>
+    <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button>
+      <button class="btn btn-primary btn-sm" id="mSave">${ICONS.plus}Добавить</button></div>`);
+  const inp = $('mDn');
+  // Имя занято — говорим об этом ДО нажатия: иначе человек получит отказ базы
+  // сырым текстом про нарушение уникальности.
+  const warn = () => {
+    const v = inp.value.trim();
+    $('mDnWarn').innerHTML = (v && deptOf.has(v))
+      ? `<div class="rc-warn">${ICONS.lock} Отделение <b>${esc(v)}</b> уже есть.</div>` : '';
+  };
+  inp.oninput = warn;
+  $('mCancel').onclick = closeModal;
+  $('mSave').onclick = async () => {
+    const btn = $('mSave'); if (btn.disabled) return;
+    const v = inp.value.trim(); if (!v) { inp.focus(); return; }
+    if (deptOf.has(v)) { inp.focus(); warn(); return; }
+    // «Не распределены» — не отделение, а список тех, кого ещё не разложили. Заведи
+    // его строкой справочника — и имя окажется в списке дважды, а каждый
+    // нераспределённый попадёт в ДВЕ группы разом (в графике — двумя строками).
+    if (v === NO_DEPT) { inp.focus(); $('mDnWarn').innerHTML = `<div class="rc-warn">${ICONS.lock} «${esc(NO_DEPT)}» — служебное название, так отделение назвать нельзя.</div>`; return; }
+    btn.disabled = true;
+    try {
+      const parent = $('mDp').value || null;
+      // Ставим сразу за родителем (или в конец верхнего уровня) и переписываем
+      // порядок ВСЕМУ дереву — так же, как перестановка стрелками. Прибавлять к
+      // соседу «+5» нельзя: у «Врачей» между последним блоком (15) и следующей
+      // группой (20) зазора ровно столько, и новый блок получал номер «Администраторов».
+      // «Сотрудники» это переживали (там дерево собирается по parent), а «Расчёт»
+      // и «Отпуска» сортируют по номеру — и блок врачей вставал внутрь администраторов.
+      const order = [];
+      for (const g of depts.filter(r => !r.parent).map(r => r.category)) {
+        order.push(g);
+        for (const k of deptKids(g)) order.push(k);
+        if (parent === g) order.push(v);
+      }
+      if (!parent) order.push(v);
+      await store.setCategoryOrder(order.map((c, i) => ({ category: c, sort: (i + 1) * 10, parent: c === v ? parent : deptParent(c) })));
+      closeModal(); toast(ICONS.check + 'Отделение добавлено: ' + esc(v)); await refresh();
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+  };
+}
 /* Одна форма на «завести» и «переименовать»: поля те же, различие — в заголовке
    и в том, какой метод store зовём. */
 function specForm(s) {
-  const cats = [...new Set(specialties.map(x => x.category))];
+  const cats = deptsFlat(false);
   const used = s ? employees.filter(e => e.status !== 'archived' && e.specialty_id === s.id).length : 0;
   showModal(`<h3>${s ? 'Специальность' : 'Новая специальность'}</h3>
     <div class="msub">${s ? 'Название и отделение поменяются у всех, кому она стоит' + (used ? ` — сейчас это ${used} чел` : '') + '. Изменение попадёт в журнал.'
                         : 'Добавится в справочник и группировку'}</div>
     <label class="flbl">Название</label><input class="input" id="mSn" placeholder="напр. Невролог" value="${esc(s?.name || '')}">
-    <label class="flbl">Отделение</label><input class="input" id="mSc" list="catlist" placeholder="Врачи / Медсестры / своё…" value="${esc(s?.category || '')}"><datalist id="catlist">${cats.map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
+    <!-- Отделение выбираем из справочника, а не вписываем от руки. Раньше поле
+         было текстовым, и опечатка молча заводила новое отделение-двойник. Теперь
+         отделение — строка справочника, на которую ссылаются люди и правила; новые
+         заводят там же, на экране «Отделения». -->
+    <label class="flbl">Отделение специальности</label>
+    <select class="input" id="mSc">${cats.map(c => `<option value="${esc(c)}"${(s?.category || 'Прочие') === c ? ' selected' : ''}>${esc(catLabel(c))}</option>`).join('')}</select>
+    <div class="msub" style="margin-top:-4px">Это только группировка справочника. Отделение самого человека стоит в его карточке — у одной специальности люди могут быть в разных отделениях.</div>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="mCancel">Отмена</button><button class="btn btn-primary btn-sm" id="mSave">${s ? ICONS.check + 'Сохранить' : ICONS.plus + 'Добавить'}</button></div>`);
   $('mCancel').onclick = closeModal;
   $('mSave').onclick = async () => {
@@ -2803,13 +3058,28 @@ const presetLive = x => !x.valid_to || x.valid_to >= (workPeriod || nowPeriod())
 
 function drawRules() {
   const canEdit = isOwner() || store.me()?.role === 'ceo';
-  const cats = catsOrdered([...new Set([...specialties.map(s => s.category), ...ruleNorms.map(r => r.category)])]);
+  // Только настоящие отделения из справочника: норму заводят отделению, а
+  // «Не распределены» — не отделение, а список тех, кого ещё не разложили.
+  //
+  // Группы, у которых есть блоки, тоже пропускаем: люди лежат в блоках, и норма
+  // на пустой группе не сработала бы никогда. Первое, что Милена видела бы здесь
+  // иначе, — четыре строки «Врачи · 0 чел» с предложением задать им норму.
+  // Исключение — если в самой группе кто-то всё же оказался: тогда строку
+  // показываем, иначе задать ему норму было бы негде.
+  const peopleIn = c => employees.filter(e => e.status === 'active' && empCat(e) === c).length;
+  // ⚠ Отделения, которым норма УЖЕ задана, показываем всегда — даже если по
+  // правилам выше их бы скрыли (группа обзавелась блоками) или их вовсе нет в
+  // справочнике. Норма делит оклад; спрятанную норму нельзя ни увидеть, ни снять,
+  // и человек продолжал бы считаться по правилу, которого на экране нет.
+  const cats = catsOrdered([
+    ...deptsFlat(false).filter(c => !deptKids(c).length || peopleIn(c)),
+    ...ruleNorms.map(r => r.category)]);
 
   const normRows = cats.map(c => {
     const r = ruleNorms.find(x => x.category === c);
-    const people = employees.filter(e => e.status === 'active' && specCat(e.specialty_id) === c).length;
+    const people = peopleIn(c);
     return `<div class="rl-row${canEdit ? ' rl-tap' : ''}" data-norm="${esc(c)}">
-      <span class="rl-name"><i class="cat-dot" style="background:${catColor(c)}"></i>${esc(c)}
+      <span class="rl-name"><i class="cat-dot" style="background:${catColor(c)}"></i>${esc(catLabel(c))}
         <span class="muted small"> · ${people} чел</span></span>
       <b class="${r ? '' : 'muted'}">${esc(normLabel(r))}</b>
       ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>`;
@@ -2849,7 +3119,7 @@ function drawRules() {
 async function deptNormDialog(cat) {
   const cur = ruleNorms.find(x => x.category === cat);
   const kind = cur?.fixed_hours ? 'fixed' : cur?.week_hours ? 'week' : '';
-  const who = employees.filter(e => e.status === 'active' && specCat(e.specialty_id) === cat);
+  const who = employees.filter(e => e.status === 'active' && empCat(e) === cat);
   // Сколько человек правило РЕАЛЬНО затронет: у кого нет ни личной нормы месяца,
   // ни своего типа недели. Без этого числа правка выглядит слепой.
   const touched = who.filter(e => !e.week_hours).length;
@@ -2913,7 +3183,12 @@ function presetDelConfirm(x) {
 }
 
 async function presetDialog(x) {
-  const cats = catsOrdered([...new Set(specialties.map(s => s.category))]);
+  // Отделение самого варианта дописываем, если его вдруг нет в списке: иначе
+  // select отдаёт пустую строку, и правка ОДНОЙ ТОЛЬКО СУММЫ молча переводит
+  // вариант в «предлагать всем». Санитаркины 2 300–5 050 ₽ начали бы всплывать
+  // у медсестёр — ровно то, ради чего 123 их и разделяет.
+  const cats = [...deptsFlat(false)];
+  if (x?.category && !cats.includes(x.category)) cats.push(x.category);
   showModal(`<h3>${x ? 'Вариант оплаты' : 'Новый вариант'}</h3>
     ${x ? `<div class="msub">${esc(x.code)} · сейчас <b>${rub(x.amount_kop)} ₽</b> · ${esc(presetTerm(x))}</div>` : ''}
     <label class="flbl" style="margin-top:12px">Короткий код</label>
@@ -2925,7 +3200,7 @@ async function presetDialog(x) {
     <label class="flbl" style="margin-top:10px">Отделение</label>
     <select class="input" id="psCat">
       <option value="">Предлагать всем</option>
-      ${cats.map(c => `<option${x?.category === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+      ${cats.map(c => `<option value="${esc(c)}"${x?.category === c ? ' selected' : ''}>${esc(catLabel(c))}</option>`).join('')}
     </select>
     <label class="flbl" style="margin-top:10px">Действует с (пусто — всегда)</label>
     <input class="input" id="psFrom" type="date" value="${x?.valid_from || ''}">
@@ -3017,7 +3292,7 @@ function drawSchedule() {
   const canEditNorm = ['owner', 'ceo'].includes(meRole);
   const todayD = (nowPeriod() === curPeriod) ? mskNow().getUTCDate() : 0;
   const active = employees.filter(e => e.status !== 'archived');
-  const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
+  const cats = deptsFlat();
 
   // фильтры (селекты заполняет fillCatSelects при загрузке данных — здесь только читаем)
   const f = ($('schedSearch')?.value || '').toLowerCase().trim();
@@ -3073,8 +3348,9 @@ function drawSchedule() {
   // групп решаются в одном месте, а тело строки остаётся единственным.
   const seq = [];
   for (const cat of cats) {
-    if (catF && cat !== catF) continue;
-    const list = active.filter(e => inCat(e, cat, !!catF) && String(e.fio || "").toLowerCase().includes(f));
+    // Выбрана группа — идут и она сама, и все её блоки.
+    if (catF && !(cat === catF || deptParent(cat) === catF)) continue;
+    const list = active.filter(e => empCat(e) === cat && String(e.fio || "").toLowerCase().includes(f));
     for (const e of list) seq.push([e, cat]);
   }
   if (sortAZ) seq.sort((a, b) => byFio(a[0], b[0]));
@@ -3084,14 +3360,15 @@ function drawSchedule() {
     for (const [e, cat] of seq) {
       if (!sortAZ && cat !== curCat) {
         curCat = cat;
-        rows += `<div class="gr-group"><span><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(cat)} · ${inCatCount(cat)}</span></div>`;
+        rows += `<div class="gr-group"><span><i class="cat-dot" style="background:${catColor(cat)}"></i>${esc(catLabel(cat))} · ${inCatCount(cat)}</span></div>`;
       }
       shown++;
       // Специальность второй строкой под фамилией (Дарина 06.08). Заголовок группы
-      // называет только ОТДЕЛЕНИЕ, а в нём десяток специальностей: в «Психиатрах»
-      // 19 человек, и кто из них психиатр, а кто психотерапевт, из графика было не
-      // видно вовсе — приходилось открывать карточку. Пустую специальность не
-      // рисуем: у пятерых её ещё нет, и прочерк только зашумит колонку.
+      // называет только ОТДЕЛЕНИЕ, а в нём десяток специальностей: в бывших
+      // «Психиатрах» было 33 человека, и кто из них психиатр, а кто психотерапевт,
+      // из графика было не видно вовсе — приходилось открывать карточку. Пустую
+      // специальность не рисуем: прочерк только зашумит колонку (сейчас без
+      // специальности активных нет — закрыто 102, но карточку заводят пустой).
       const sp = e.specialty_id ? specName(e.specialty_id) : '';
       rows += `<div class="gr-name${editable ? ' tap' : ''}" data-emp="${e.id}" title="${editable ? 'Шаблон на месяц: ' : ''}${esc(e.fio)}${sp ? ' · ' + esc(sp) : ''}" style="box-shadow:inset 3px 0 0 ${catColor(cat)}"><span class="gr-who"><span class="gr-fio">${esc(e.fio)}</span>${sp ? `<span class="gr-spec">${esc(sp)}</span>` : ''}</span></div>`;
       let planPast = 0, factPast = 0, cnt = 0;
@@ -4011,13 +4288,13 @@ function renderRates(filter = '') {
   $('ratesTools').innerHTML = `<div class="rates-stat card cardpad"><span><b>${withRate}</b> из <b>${active.length}</b> со ставкой · <b style="color:${without ? 'var(--red-d)' : 'var(--green)'}">${without}</b> без ставки</span>
     <label class="rt-toggle"><input type="checkbox" id="rtOnlyEmpty" ${onlyEmpty ? 'checked' : ''}> только без ставки</label></div>`;
   $('rtOnlyEmpty').onchange = ev => { $('ratesTools').dataset.onlyEmpty = ev.target.checked ? '1' : ''; renderRates($('rateSearch').value || ''); };
-  const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
+  const cats = deptsFlat();
   let html = '';
   for (const cat of cats) {
-    let list = active.filter(e => inCat(e, cat, false) && String(e.fio || "").toLowerCase().includes(f));
+    let list = active.filter(e => empCat(e) === cat && String(e.fio || "").toLowerCase().includes(f));
     if (onlyEmpty) list = list.filter(e => !primaryLine(e));
     if (!list.length) continue;
-    html += `<div class="group-label"><span class="caps">${esc(cat)} · ${list.length}</span><span class="line"></span></div>` + list.map(rtRow).join('');
+    html += `<div class="group-label"><span class="caps">${esc(catLabel(cat))} · ${list.length}</span><span class="line"></span></div>` + list.map(rtRow).join('');
   }
   $('ratesList').innerHTML = html || `<div class="empty">${onlyEmpty ? 'Всем в фильтре ставки проставлены 🎉' : 'Никого не найдено'}</div>`;
   applyIcons($('ratesList'));
@@ -4067,7 +4344,9 @@ const J_ENTITY = { employee: 'Карточка', rate_line: 'Ставка', spec
   schedule: 'График', closed_day: 'День', day: 'День', import_batch: 'Импорт',
   // без этих подписей владелец видит сырые имена таблиц вместо человеческой строки
   salary_override: 'Финальная сумма', employee_month_norm: 'Норма часов',
-  doctor_month_revenue: 'Выручка врача', payout: 'Выдача наличных' };
+  doctor_month_revenue: 'Выручка врача', payout: 'Выдача наличных',
+  // 123: переименование отделения и правка справочника отделений
+  category_order: 'Отделение', dept_rule: 'Норма отделения', shift_preset: 'Сумма за смену' };
 /* Имя специальности по номеру — для СТАРЫХ записей журнала (до 091 туда писался
    id). Справочник уже загружен в specialties; если строку удалили или она ещё не
    подтянулась — показываем номер как есть: честнее выдумки. */
@@ -4075,7 +4354,7 @@ const jSpecName = id => {
   const sp = specialties.find(x => x.id === id);
   return sp ? `${sp.name} (${sp.category})` : `№${id}`;
 };
-const J_FIELD = { fio: 'ФИО', position: 'должность', phone: 'телефон', status: 'статус', specialty: 'специальность', specialty_id: 'специальность', norm_hours: 'норма часов', week_hours: 'рабочая неделя', hired_on: 'принят', left_on: 'уволен', 'новая строка': 'новая строка', 'закрыта': 'строка закрыта', 'ставка добавлена': 'ставка добавлена', 'ставка закрыта': 'ставка закрыта' };
+const J_FIELD = { fio: 'ФИО', position: 'должность', phone: 'телефон', status: 'статус', specialty: 'специальность', specialty_id: 'специальность', norm_hours: 'норма часов', week_hours: 'рабочая неделя', hired_on: 'принят', left_on: 'уволен', dept: 'отделение', 'новая строка': 'новая строка', 'закрыта': 'строка закрыта', 'ставка добавлена': 'ставка добавлена', 'ставка закрыта': 'ставка закрыта' };
 // Действия, которые надо ПОКАЗАТЬ, а не проглотить: раньше j.action только
 // сравнивался с 'created' и никогда не выводился — то есть «сторно», единственное
 // слово, отличающее исправление от обычной выплаты, терялось по дороге, и
@@ -4326,7 +4605,7 @@ function drawPayroll(filter = '') {
   // в конце месяца, и раньше его приходилось выискивать глазами по всей ведомости.
   const onlyZero = $('payOnlyZero')?.checked;
   const rows = payrollRows.filter(r => (r.fio || '').toLowerCase().includes(f)
-    && (!cat || specCat(employees.find(e => e.id === r.employee_id)?.specialty_id) === cat)
+    && (!cat || inCat(employees.find(e => e.id === r.employee_id), cat))
     && (!onlyZero || (r.salary_kop || 0) === 0));
   if (!rows.length) {
     $('payrollTable').innerHTML = `<div class="empty">${onlyZero && payrollRows.length ? 'Всем за месяц что-то начислено 🎉'
@@ -4347,7 +4626,7 @@ function drawPayroll(filter = '') {
 
   // Разбивка по специальностям (как в графике): сортируем по отделению,
   // перед каждой группой — строка-заголовок с подытогом «осталось выдать».
-  const catOf = r => specCat(employees.find(e => e.id === r.employee_id)?.specialty_id) || 'Прочие';
+  const catOf = r => empCat(employees.find(e => e.id === r.employee_id));
   if (sortAZ) rows.sort(byFio);
   else rows.sort((a, b) => catSort(catOf(a)) - catSort(catOf(b))
     || catOf(a).localeCompare(catOf(b)) || (a.fio || '').localeCompare(b.fio || ''));
@@ -4356,9 +4635,12 @@ function drawPayroll(filter = '') {
     const cat = catOf(r);
     if (!sortAZ && cat !== curCat) {
       curCat = cat;
-      const inCat = rows.filter(x => catOf(x) === cat);
-      const catDelta = inCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="23"><span>${esc(cat)} · ${inCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      // Не inCat: так теперь называется общая проверка «человек в этом отделении»,
+      // и локальный массив с тем же именем её бы здесь заслонил.
+      // colspan 23, а не 22: в «Расчёте» прибавилась колонка «К концу месяца».
+      const myCat = rows.filter(x => catOf(x) === cat);
+      const catDelta = myCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="23"><span>${esc(catLabel(cat))} · ${myCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
@@ -5481,7 +5763,7 @@ function stickFooterRows(host) {
    Милена заходит периодически и решает, писать человеку сейчас или он уже ушёл. */
 const SCREEN_RU = { overview: 'Обзор', gaps: 'Пробелы', vacation: 'Отпуска', archive: 'Архив', employees: 'Сотрудники', card: 'Карточка',
   schedule: 'График', payroll: 'Расчёт', rates: 'Ставки', patients: 'Оплаты пациентов',
-  import: 'Импорт', specialties: 'Специальности', journal: 'Журнал', soon: '—' };
+  import: 'Импорт', specialties: 'Отделения и специальности', journal: 'Журнал', soon: '—' };
 function agoRu(iso) {
   const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
   if (m < 1) return 'только что';
@@ -5803,7 +6085,7 @@ function drawVacation() {
     const dts = [...dd.paid, ...dd.unpaid];
     const nach = r.otpusk_nach_kop || 0, card = r.otpusk_kop || 0, cash = r.otpusk_cash_kop || 0;
     const o = (other && other.get(id)) || { absent: 0, off: 0 };
-    return { id, fio: e.fio || r.fio || '—', cat: specCat(e.specialty_id), dts,
+    return { id, fio: e.fio || r.fio || '—', cat: empCat(e), dts,
              spans: vacSpans(dd.paid), spansU: vacSpans(dd.unpaid),
              dpaid: dd.paid, dunpaid: dd.unpaid, nach, card, cash, paid: card + cash, other: o,
              noDays: dts.length === 0, noMoney: dts.length > 0 && !nach && !card && !cash };
@@ -5854,7 +6136,7 @@ function drawVacation() {
     const cats = catsOrdered(list.map(x => x.cat));
     for (const cat of cats) {
       const my = list.filter(x => x.cat === cat);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="7"><span>${esc(cat)} · ${my.length}</span></td></tr>`
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="7"><span>${esc(catLabel(cat))} · ${my.length}</span></td></tr>`
         + my.map(row).join('');
     }
   }
@@ -5941,6 +6223,10 @@ const CARD_CHECKS = [
   { t: 'Фамилия не уточнена', d: 'в карточке нет фамилии или стоит заглушка', test: e => cardGaps(e).fio },
   { t: 'Нет телефона', d: 'некуда отправить код подтверждения выдачи', test: e => cardGaps(e).phone },
   { t: 'Не указана специальность', d: 'человек выпадет из разрезов по специальностям', test: e => cardGaps(e).spec },
+  // «Сотрудники» уже считают это пробелом и рисуют чип «N без отделения» — а
+  // «Пробелы» существуют именно как ОДИН список всего, чего не хватает. Без этой
+  // строки нераспределённых пришлось бы искать на другом экране.
+  { t: 'Не указано отделение', d: 'человек висит в «Не распределены» и не попадает ни в одну группу', test: e => cardGaps(e).dept },
 ];
 
 async function renderGaps() {
@@ -6349,7 +6635,14 @@ $('empSearch').oninput = e => renderEmployees(e.target.value);
 { const tb = $('themeBtn'); if (tb) tb.onclick = toggleTheme; paintThemeBtn(); }
 try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (!localStorage.getItem(THEME_KEY)) paintThemeBtn(); }); } catch (e) {}
 $('addEmpBtn').onclick = () => employeeForm(null);
-$('addSpecBtn').onclick = specForm;
+// () => specForm(), а не specForm: обработчику клика приходит событие, и оно
+// уходило первым аргументом. Форма считала MouseEvent «существующей
+// специальностью» — заголовок «Специальность» вместо «Новая», и на сохранении
+// звался updateSpecialty(undefined, …). Кнопка «Специальность» завести
+// специальность не могла вовсе. Дефект НЕ этой задачи, он старше; виден стал
+// оттого, что рядом встала вторая такая же кнопка.
+$('addSpecBtn').onclick = () => specForm();
+$('addDeptBtn').onclick = () => deptForm();
 // replace: кнопка нарисована шевроном «влево» и читается как «назад», поэтому
 // новую запись заводить нельзя — иначе системное «назад» возвращало бы в только
 // что закрытую карточку, и выход из программы шёл пинг-понгом список↔карточка.
