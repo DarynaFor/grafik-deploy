@@ -379,6 +379,9 @@ body.authed .login-stage{display:none}
 .gr-cell.fut{background:var(--fill-1)}
 .gr-cell.addable::after{content:"+";opacity:.16;font-weight:800;font-size:13px;color:var(--ink-3);line-height:1}
 .gr-cell.addable:hover::after{opacity:.5}
+/* В пустой клетке «+» стоит по центру, карандаш — в углу; при наведении
+   показываем только карандаш, иначе два разных приглашения к действию рядом. */
+.gr-cell.addable:hover::after{opacity:0}
 .gr-cell.fut .iv{opacity:.75}
 .gr-cell.f-ok{background:rgba(52,201,124,.13)}
 .gr-cell.f-dev{background:rgba(242,193,78,.2)}

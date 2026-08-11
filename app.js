@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=178';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=179';
 
 const $ = id => document.getElementById(id);
 
@@ -2654,7 +2654,14 @@ function schedCellInner(c, past, pos = 'main') {                   // содер
     const i = SAN_AMOUNTS.indexOf(c.amount_kop);
     return `<span class="amt-v a${i < 0 ? 'x' : i}">${esc(rubShort(c.amount_kop))}</span>`;
   }
-  if (!p && fx === null) return '';
+  /* Пустая клетка тоже получает карандаш — Дарина навела на пустой прошедший
+     день и не нашла, чем его править: «немає ніякого олівця для редагування».
+     Клик по такой клетке открывает окно ФАКТА (там отпуск и замена), а задать
+     смену со временем «с … до …» можно только из окна СМЕНЫ — вот его и даёт
+     карандаш. Для будущих дней он не нужен: там клик и так открывает смену. */
+  if (!p && fx === null) {
+    return past ? '<span class="cell-pen" title="Задать смену">\u270E</span>' : '';
+  }
   if (pos === 'second') {
     const L = SECOND_LETTER[p] || (p ? cellText(c) : '');
     return `<span class="iv mini sec-l${p === 'absent' ? ' miss' : ''}">${esc(L)}</span>`;
