@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=174';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=175';
 
 const $ = id => document.getElementById(id);
 
@@ -337,7 +337,7 @@ const NAV = [
   // ('operator','cashier1','cashier2'))`, миграции 040/041. То есть у Алёны
   // спрятанный человек просто не появится ни в одной денежной группе.
   { s: 'gaps', i: 'alert', l: 'Пробелы', staffOnly: true },
-  { s: 'vacation', i: 'cal', l: 'Отпуска', staffOnly: true },
+  { s: 'vacation', i: 'cal', l: 'Отпуска' },   // видят все, включая кассу (115): суммы отпускных вносит и она
   { s: 'archive', i: 'users', l: 'Архив', ownerOnly: true },
   // isStaff, а не canEditCards: пункт вёл бы бухгалтера на экран, до которого он
   // всё равно не доходит — enter() уводит кассы на заглушку раньше загрузки.
@@ -2436,6 +2436,7 @@ function dayMark(day) {
 let payPeriod = null;
 function shiftPayMonth(delta) { let [y, m] = payPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } payPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = payPeriod; syncHash(false); }
 function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = curPeriod; syncHash(false); renderSchedule(); }
+const SHORT_KIND = { 'отпуск': 'Отп', 'отпуск_бз': 'Б/с', off: 'В', absent: '—' };
 const REST_KINDS = ['off', 'absent', 'отпуск', 'отпуск_бз'];   // 'отпуск_бз' — без сохранения (109)
 const VAC_KINDS = ['отпуск', 'отпуск_бз'];
 const isVac = k => VAC_KINDS.includes(k);   // нерабочие виды: НЕ в норму, НЕ «прогул», без оплаты смены
@@ -2443,7 +2444,10 @@ const isRest = k => REST_KINDS.includes(k);
 function cellText(c) {
   if (!c || !c.plan_kind) return '';
   const k = shiftKinds.find(x => x.code === c.plan_kind), short = k ? (k.short || k.label) : c.plan_kind;
-  if (isRest(c.plan_kind)) return short;
+  /* В клетке 44 пикселя ширины — «Отпуск без сохр.» там обрезается до «От», и два
+     разных вида отпуска выглядят одинаково. Короткие подписи задаём здесь, а не
+     в справочнике: в окнах и списках нужны полные названия. */
+  if (isRest(c.plan_kind)) return SHORT_KIND[c.plan_kind] || short;
   const hh = t => t ? String(t).slice(0, 5).replace(/:00$/, '').replace(/^0(\d)/, '$1') : '';
   const s = hh(c.plan_start), e = hh(c.plan_end);
   if (s && e) return s + '–' + e;   // импортированный график: «9–17»
@@ -5578,7 +5582,10 @@ function vacAddDialog(preId) {
 }
 
 async function renderVacation() {
-  if (!isStaff()) { $('vacBody').innerHTML = ''; return; }
+  // Экран смотрят все вошедшие, включая бухгалтера (115): суммы отпускных
+  // вносит и он, и без списка отпусков ему не видно, кому и за что.
+  // Отметка ДНЕЙ остаётся у owner/operator/ceo — это проверяется в vacAddDialog.
+  if (!store.me()?.role) { $('vacBody').innerHTML = ''; return; }
   if (!vacPeriod) vacPeriod = nowPeriod();
   const want = vacPeriod, seq = ++vacSeq;
   $('vLabel').textContent = periodLabel(want);
