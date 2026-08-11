@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=172';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=173';
 
 const $ = id => document.getElementById(id);
 
@@ -4261,9 +4261,24 @@ function drawPayroll(filter = '') {
       const done = mk.reduce((a, m) => a + (+m.marked_hours || 0), 0);
       const wait = mk.reduce((a, m) => a + (+m.unmarked_days || 0), 0);
       if (!past || !wait) return '';
+      /* Часы и проценты — это из 113. Дарина 11.08 попросила рядом ДЕНЬГИ:
+         «можна десь сіреньким щоб було написано всього за планом, і нормальним
+         шрифтом — всього фактично». Обе суммы даёт 114: salary_kop — по плану
+         (как считалось всегда), salary_marked_kop — только отмеченные дни.
+         В «Осталось выдать» с августа идёт вторая. */
+      const plan = sum('salary_kop'), fakt = sum('salary_marked_kop');
+      // Колонки может не быть вовсе — в демо (MockStore) её никто не считает.
+      // Без этой проверки там показалось бы «всего фактически 0 ₽», то есть
+      // демо врало бы про боевую систему ровно в том месте, ради которого
+      // строка и заведена.
+      const hasMarked = rows.some(r => r.salary_marked_kop != null);
+      const split = hasMarked && fakt !== plan
+        ? `<span class="muted">всего по плану ${rub(plan)}</span> · всего фактически <b>${rub(fakt)}</b> · `
+        : '';
       return `<tr class="pw-total pw-plan"><td class="pw-name">Подтверждено фактом</td>
-        <td colspan="10" class="muted small">отмечено ${fmtH(done)} из ${fmtH(past)} отработанных ·
-          <b>${wait} ${plural(wait, 'день', 'дня', 'дней')}</b> ещё без отметки — они посчитаны по плану</td>
+        <td colspan="10" class="muted small">${split}отмечено ${fmtH(done)} из ${fmtH(past)} отработанных ·
+          <b>${wait} ${plural(wait, 'день', 'дня', 'дней')}</b> ещё без отметки — они посчитаны по плану,
+          в «Осталось выдать» не идут</td>
         <td class="num pw-pay fin"><b class="money">${Math.round(done / past * 100)}%</b></td>
         <td colspan="10"></td></tr>`;
     })()}
