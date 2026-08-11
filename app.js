@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=169';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=170';
 
 const $ = id => document.getElementById(id);
 
@@ -2393,7 +2393,9 @@ function dayMark(day) {
 let payPeriod = null;
 function shiftPayMonth(delta) { let [y, m] = payPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } payPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = payPeriod; syncHash(false); }
 function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = curPeriod; syncHash(false); renderSchedule(); }
-const REST_KINDS = ['off', 'absent', 'отпуск'];   // нерабочие виды: НЕ в норму, НЕ «прогул», без оплаты смены
+const REST_KINDS = ['off', 'absent', 'отпуск', 'отпуск_бз'];   // 'отпуск_бз' — без сохранения (109)
+const VAC_KINDS = ['отпуск', 'отпуск_бз'];
+const isVac = k => VAC_KINDS.includes(k);   // нерабочие виды: НЕ в норму, НЕ «прогул», без оплаты смены
 const isRest = k => REST_KINDS.includes(k);
 function cellText(c) {
   if (!c || !c.plan_kind) return '';
@@ -2984,7 +2986,7 @@ function drawSchedule() {
         const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
         const noKind = !!(c && !c.plan_kind && c.fact != null && c.fact !== '' && c.fact !== 'x');
         const addable = empty && canEditDay(d) && (pst || d === todayD);   // пустая клетка прошлого/сегодня, куда можно ДОБАВИТЬ смену (замена) — подсказка «+»
-        rows += `<div class="gr-cell sc2${bg}${amtRow ? ' amt' : ''}${c && c.plan_kind === 'отпуск' ? ' k-vac' : ''}${addable ? ' addable' : ''}${noKind ? ' no-kind' : ''}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
+        rows += `<div class="gr-cell sc2${bg}${amtRow ? ' amt' : ''}${c && c.plan_kind === 'отпуск' ? ' k-vac' : ''}${c && c.plan_kind === 'отпуск_бз' ? ' k-vacu' : ''}${addable ? ' addable' : ''}${noKind ? ' no-kind' : ''}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
       }
       // numeric из Supabase приходит строкой — parseFloat обязателен
       const nrm = monthNorms.get(e.id), nh = nrm && nrm.hours != null ? parseFloat(nrm.hours) : null;
@@ -3325,15 +3327,23 @@ function vacationDialog(empId, startDay) {
   const e = employees.find(x => x.id === empId); if (!e) return;
   const startDate = cellDate(startDay);
   showModal(`${personHead(e, `с <b>${esc(startDate)}</b> по какое число (включительно)`, 'Отпуск')}
-    <label class="flbl">По дату</label>
+    <label class="flbl">Какой отпуск</label>
+    <select class="input" id="vacKind">
+      <option value="отпуск">Оплачиваемый — отпускные вносятся отдельной суммой</option>
+      <option value="отпуск_бз">Без сохранения — денег за эти дни нет</option>
+    </select>
+    <label class="flbl" style="margin-top:10px">По дату</label>
     <input class="input" id="vacEnd" type="date" value="${esc(startDate)}" min="${esc(startDate)}">
-    <div class="msub" style="margin-top:8px">Все дни периода станут «Отпуск». Зарплата за них не начисляется — отпускные вносятся отдельной суммой. Правка — в журнал.</div>
+    <div class="msub" style="margin-top:8px">Зарплата за дни отпуска не начисляется в обоих случаях —
+      разница в отпускных: за оплачиваемый их вносят отдельно, за «без сохранения» нет.
+      В графике виды показаны разным цветом.</div>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="vacCancel">Отмена</button><button class="btn btn-primary btn-sm" id="vacSave">${ICONS.check}Отметить отпуск</button></div>`);
   $('vacCancel').onclick = closeModal;
   $('vacSave').onclick = async () => {
     const btn = $('vacSave'); if (btn.disabled) return;
     const end = $('vacEnd').value;
     if (!end || end < startDate) return toast('Дата «по» раньше начала', true);
+    const vk = $('vacKind').value || 'отпуск';
     const days = [];
     for (let dt = new Date(startDate + 'T00:00:00Z'); ; dt.setUTCDate(dt.getUTCDate() + 1)) {
       const iso = dt.toISOString().slice(0, 10);
@@ -3343,7 +3353,7 @@ function vacationDialog(empId, startDay) {
     }
     btn.disabled = true;
     try {
-      for (const d of days) await store.setScheduleCell(empId, d, { plan_kind: 'отпуск', plan_start: null, plan_end: null, fact: null });
+      for (const d of days) await store.setScheduleCell(empId, d, { plan_kind: vk, plan_start: null, plan_end: null, fact: null });
       closeModal(); toast(ICONS.check + `Отпуск отмечен · ${days.length} дн`); renderSchedule();
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
@@ -5245,6 +5255,7 @@ let gapsPeriod = null, gapsData = null, gapsSeq = 0;
    в «Расчёте» видны суммы, в «Графике» дни, вместе их никто не сводил.
    Отдельная таблица в базе не нужна — всё считается из того, что уже есть. */
 let vacPeriod = null, vacData = null, vacSeq = 0;
+let vacKindF = '';                     // '' | 'отпуск' | 'отпуск_бз' — фильтр вида отпуска
 
 /* ── АРХИВ ─────────────────────────────────────────────────────────────────
    Архивных 31 человек, и увидеть их можно было только кнопкой «Показать архив»
@@ -5463,13 +5474,19 @@ function drawVacation() {
 
   const list = [...ids].map(id => {
     const e = empOf.get(id) || {}, r = rowOf.get(id) || {};
-    const dts = days.get(id) || [];
+    const dd = days.get(id) || { paid: [], unpaid: [] };
+    const dts = [...dd.paid, ...dd.unpaid];
     const nach = r.otpusk_nach_kop || 0, card = r.otpusk_kop || 0, cash = r.otpusk_cash_kop || 0;
     const o = (other && other.get(id)) || { absent: 0, off: 0 };
     return { id, fio: e.fio || r.fio || '—', cat: specCat(e.specialty_id), dts,
-             spans: vacSpans(dts), nach, card, cash, paid: card + cash, other: o,
+             spans: vacSpans(dd.paid), spansU: vacSpans(dd.unpaid),
+             dpaid: dd.paid, dunpaid: dd.unpaid, nach, card, cash, paid: card + cash, other: o,
              noDays: dts.length === 0, noMoney: dts.length > 0 && !nach && !card && !cash };
   }).filter(x => !f || x.fio.toLowerCase().includes(f))
+    // Фильтр по виду отпуска (109). Пусто — показываем всех, включая тех, у кого
+    // есть отпускные деньги, но нет дней: этих искать и надо.
+    .filter(x => !vacKindF
+      || (vacKindF === 'отпуск' ? x.dpaid.length > 0 : x.dunpaid.length > 0))
     .sort((a, b) => a.fio.localeCompare(b.fio, 'ru'));
 
   const sum = k => list.reduce((s, x) => s + x[k], 0);
@@ -5489,13 +5506,18 @@ function drawVacation() {
     <td class="pw-name"><span class="pw-fio">${esc(x.fio)}</span>${
       x.noDays ? '<span class="mini-chip warn">нет в графике</span>'
       : x.noMoney ? '<span class="mini-chip warn">нет отпускных</span>' : ''}</td>
-    <td>${x.dts.length ? esc(vacSpanLabel(x.spans))
+    <td>${x.dts.length ? (
+        (x.dpaid.length ? `<span class="vac-p">${esc(vacSpanLabel(x.spans))}</span>` : '')
+        + (x.dpaid.length && x.dunpaid.length ? '<br>' : '')
+        + (x.dunpaid.length ? `<span class="vac-u">${esc(vacSpanLabel(x.spansU))} · без сохранения</span>` : ''))
       : (x.other.absent || x.other.off
           ? `<span class="vac-hint">вместо отпуска стоит: ${[
               x.other.absent ? `<b>${x.other.absent} дн «Не вышел»</b>` : '',
               x.other.off ? `${x.other.off} дн «Выходной»` : ''].filter(Boolean).join(', ')}</span>`
           : '<span class="muted">—</span>')}</td>
-    <td class="num">${x.dts.length || '<span class="muted">—</span>'}</td>
+    <td class="num">${x.dts.length
+      ? (x.dunpaid.length ? `${x.dpaid.length}<span class="vac-u"> + ${x.dunpaid.length}</span>` : x.dts.length)
+      : '<span class="muted">—</span>'}</td>
     <td class="num fin">${x.nach ? rub(x.nach) : '<span class="muted">—</span>'}</td>
     <td class="num fin">${x.card ? rub(x.card) : '<span class="muted">—</span>'}</td>
     <td class="num fin">${x.cash ? rub(x.cash) : '<span class="muted">—</span>'}</td>
@@ -5961,6 +5983,12 @@ $('empSearch').oninput = e => renderEmployees(e.target.value);
   if (p) p.onclick = () => shiftVac(-1);
   if (n) n.onclick = () => shiftVac(1); }
 { const vs = $('vacSearch'); if (vs) vs.oninput = () => drawVacation(); }
+{ const vf = $('vacKindF');
+  if (vf) vf.querySelectorAll('.seg-b').forEach(b => b.onclick = () => {
+    vacKindF = b.dataset.vk || '';
+    vf.querySelectorAll('.seg-b').forEach(x => x.classList.toggle('on', x === b));
+    drawVacation();
+  }); }
 { const as = $('arcSearch'); if (as) as.oninput = () => drawArchive(); }
 { const am = $('arcOnlyMoney'); if (am) am.onchange = () => drawArchive(); }
 { const ah = $('arcShowHidden'); if (ah) ah.onchange = () => renderArchive(); }

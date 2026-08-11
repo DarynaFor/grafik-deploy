@@ -385,6 +385,11 @@ body.authed .login-stage{display:none}
 .gr-cell.f-miss{background:rgba(255,107,107,.15)}
 .gr-cell.f-rest{background:var(--fill-2)}
 .gr-cell.k-vac{background:rgba(183,155,255,.22);color:var(--violet-d,#6d5bd0)}
+/* Отпуск без сохранения (109) — тот же смысл «человек в отпуске», но денег за
+   него нет. Поэтому цвет из той же семьи, но приглушённый и штриховкой: с
+   одного взгляда видно, какой отпуск оплачивается, а какой нет. */
+.gr-cell.k-vacu{color:var(--violet-d,#6d5bd0);
+  background:repeating-linear-gradient(135deg,rgba(183,155,255,.20) 0 5px,transparent 5px 10px)}
 .gr-cell.sc2.ro{cursor:default}
 /* сводка справа: Смен · Норма · Факт · Δ */
 .gr-day.sum{font-size:9px;letter-spacing:0}
@@ -1040,3 +1045,16 @@ tr.pw-total.pw-over{z-index:5}
 .gr-cell.no-kind{position:relative;box-shadow:inset 0 0 0 2px var(--red-d,#c0392b)}
 .gr-cell.no-kind::after{content:"?";position:absolute;top:1px;right:3px;font-size:9px;
   font-weight:800;color:var(--red-d,#c0392b);line-height:1}
+
+
+/* Небольшой сегментный фильтр в панели инструментов экрана */
+.seg-sm{gap:0;border:1px solid var(--line);border-radius:11px;overflow:hidden;flex:none}
+.seg-sm .seg-b{flex:none;padding:7px 12px;border:0;border-radius:0;background:transparent;
+  color:var(--ink-2);font-size:12.5px;font-weight:600;cursor:pointer}
+.seg-sm .seg-b + .seg-b{border-left:1px solid var(--line)}
+.seg-sm .seg-b:hover{background:var(--fill-1)}
+.seg-sm .seg-b.on{background:var(--green);color:var(--on-green)}
+/* Два вида отпуска в таблице: оплачиваемый обычным цветом, без сохранения —
+   приглушённо, тем же фиолетовым, что и в графике */
+.vac-p{color:var(--ink-1)}
+.vac-u{color:var(--violet-d,#6d5bd0);opacity:.85;font-size:12px}
