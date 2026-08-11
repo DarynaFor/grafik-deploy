@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=176';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=177';
 
 const $ = id => document.getElementById(id);
 
@@ -5535,10 +5535,15 @@ function vacAddDialog(preId) {
   const opts = act.map(e => `<option value="${e.id}" ${preId === e.id ? 'selected' : ''}>${esc(e.fio)}</option>`).join('');
   const first = (vacPeriod || nowPeriod()) + '-01';
   showModal(`<h3>Отметить отпуск</h3>
-    <div class="msub">Все дни периода станут «Отпуск». Зарплата за них не начисляется —
-      отпускные вносятся отдельно, в «Расчёте».</div>
+    <div class="msub">Зарплата за дни отпуска не начисляется в обоих случаях. Разница
+      в отпускных: за оплачиваемый их вносят отдельной суммой, за «без сохранения» не вносят.</div>
     <label class="flbl">Сотрудник</label>
     <select class="input" id="vaWho">${opts}</select>
+    <label class="flbl" style="margin-top:10px">Какой отпуск</label>
+    <select class="input" id="vaKind">
+      <option value="отпуск">Оплачиваемый — отпускные вносятся отдельной суммой</option>
+      <option value="отпуск_бз">Без сохранения — денег за эти дни нет</option>
+    </select>
     <div class="me-add" style="margin-top:10px">
       <label class="flbl" style="grid-column:1/-1">Период</label>
       <input class="input" type="date" id="vaFrom" value="${first}">
@@ -5575,7 +5580,8 @@ function vacAddDialog(preId) {
     const id = +$('vaWho').value;
     b.disabled = true; b.textContent = 'Отмечаю…';
     try {
-      for (const day of d) await store.setScheduleCell(id, day, { plan_kind: 'отпуск', plan_start: null, plan_end: null, fact: null });
+      const kind = $('vaKind').value || 'отпуск';
+      for (const day of d) await store.setScheduleCell(id, day, { plan_kind: kind, plan_start: null, plan_end: null, fact: null });
       closeModal(); toast(ICONS.check + `Отпуск отмечен · ${d.length} дн`); await renderVacation();
     } catch (e) { b.disabled = false; b.textContent = 'Отметить'; toast(e.message || e, true); }
   };
@@ -5655,7 +5661,7 @@ function drawVacation() {
     + `<span class="mini-chip neutral">выдано ${rub(tot.paid)} ₽</span>`
     + (tot.noDays ? `<span class="mini-chip">деньги без графика: ${tot.noDays}</span>` : '')
     + (tot.noMoney ? `<span class="mini-chip">график без денег: ${tot.noMoney}</span>` : '')
-    + `<button class="btn btn-ghost btn-sm" id="vacAdd" style="margin-left:8px">Отметить отпуск</button>`;
+    + (isStaff() ? `<button class="btn btn-primary btn-sm" id="vacAdd" style="margin-left:8px">${ICONS.plus || '+'}Отметить отпуск</button>` : '');
 
   const row = x => `<tr class="vac-row${x.noDays ? ' vac-bad' : ''}${x.noMoney ? ' vac-warn' : ''}" data-id="${x.id}">
     <td class="pw-name"><span class="pw-fio">${esc(x.fio)}</span>${
