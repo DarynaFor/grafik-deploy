@@ -756,6 +756,12 @@ body.authed .login-stage{display:none}
 .pw-total.pw-forecast td{border-top:1px dashed var(--glass-bd)}
 .pw-total.pw-forecast .pw-name{color:var(--ink-2);font-weight:600}
 .pw-total.pw-forecast .money{color:var(--ink-2)}
+/* У этих двух строк не число, а ОБЪЯСНЕНИЕ на полторы фразы, и читать его будут
+   глазами. У .pw td стоит white-space:nowrap (для колонок с суммами это верно),
+   и объяснение уезжало одной длинной строкой под липкую колонку «к выдаче» —
+   увидела на снимке экрана, до этого не догадывалась. Здесь разрешаем перенос. */
+.pw-total.pw-plan td.small,
+.pw-total.pw-forecast td.small{white-space:normal;line-height:1.45;padding-top:8px;padding-bottom:8px}
 .money.neg{color:var(--red-d)}
 /* Имя не должно распирать колонку: длинное ФИО обрезаем, чипы уходят на 2-ю
    строку. Иначе у человека с 3–4 флагами имя занимало почти весь экран — чем
