@@ -474,6 +474,11 @@ body.authed .login-stage{display:none}
    физически нечему оказаться. Окнам без кнопок padding оставляем. */
 .modal:has(.modal-foot){padding-bottom:0}
 .modal h3{font-size:20px;font-weight:700;letter-spacing:-.02em}
+/* Заголовок окна графика + кнопка «Карточка» справа. wrap, а не nowrap: на
+   телефоне длинное ФИО должно перенести кнопку вниз, а не ужать заголовок. */
+.ph-head{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
+.ph-head h3{flex:1 1 auto;min-width:0}
+.ph-head .ph-card{flex:0 0 auto;margin-top:1px}
 .modal .msub{color:var(--ink-2);font-size:13px;margin-top:3px}
 /* ⚠ bottom НЕ 0, а минус нижний padding .modal (26 на десктопе, 22 на телефоне).
    При bottom:0 липкая полоса вставала по краю ВНУТРЕННЕЙ области, и под ней

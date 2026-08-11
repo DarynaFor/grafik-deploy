@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=170';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=171';
 
 const $ = id => document.getElementById(id);
 
@@ -339,7 +339,9 @@ const NAV = [
   { s: 'gaps', i: 'alert', l: 'Пробелы', staffOnly: true },
   { s: 'vacation', i: 'cal', l: 'Отпуска', staffOnly: true },
   { s: 'archive', i: 'users', l: 'Архив', ownerOnly: true },
-  { s: 'employees', i: 'users', l: 'Сотрудники', show: () => canEditCards() || isStaff() },
+  // isStaff, а не canEditCards: пункт вёл бы бухгалтера на экран, до которого он
+  // всё равно не доходит — enter() уводит кассы на заглушку раньше загрузки.
+  { s: 'employees', i: 'users', l: 'Сотрудники', show: () => isStaff() },
   { s: 'schedule', i: 'cal', l: 'График', staffOnly: true },
   { s: 'payroll', i: 'coin', l: 'Расчёт', staffOnly: true },
   { s: 'rates', i: 'coin', l: 'Ставки', ownerOnly: true },
@@ -373,10 +375,13 @@ const IMPORT_KIND_META = {
   cash:        { label: 'Наличные',            hint: 'выданные наличными' },
   premia:      { label: 'Премия',              hint: 'разовая премия, попадёт в журнал' },
 };
-// ⚠ Только owner+operator: сопоставление ФИО идёт на КЛИЕНТЕ по всему ростеру,
-// а читать employee (emp_select) могут лишь owner и operator. Бух (cashier1/2)
-// не видит даже имён — это НАМЕРЕННАЯ граница (миграция 024: «Расширять
-// emp_select НЕЛЬЗЯ»). Поэтому карту-реестр (аванс/1С) сейчас грузит владелец
+// ⚠ Сопоставление ФИО идёт на КЛИЕНТЕ по всему ростеру, а читать employee
+// (emp_select) могут лишь owner, operator и ceo. Бух (cashier1/2) не видит даже
+// имён — это НАМЕРЕННАЯ граница (миграция 024: «Расширять emp_select НЕЛЬЗЯ»).
+// ⚠ Граница один раз уже падала: 105 открыла emp_select бухгалтеру, и этот
+// абзац десять часов был неправдой. Вернула 111. Если снова понадобится дать
+// кассе карточки — сначала перечитать 024 §6 и ОТВЕТИТЬ на её довод, а не
+// молча его отменить. Поэтому карту-реестр (аванс/1С) сейчас грузит владелец
 // (у него есть и ростер, и право писать card_*). Когда появится логин Бух 2,
 // его импорт карты сделаем через СЕРВЕРНЫЙ матч-RPC (SECURITY DEFINER вернёт
 // employee_id по списку, не раскрывая ростер) — тогда добавится cashier2.
@@ -781,13 +786,22 @@ const canPayOut = () => ['owner', 'operator', 'ceo', 'cashier1', 'cashier2'].inc
 // поправить как надзор (решение Дарины 27.07: раньше владелец был только-просмотр).
 // СЕО ведёт график в этом месяце (Алёна в отпуске); все его правки — в журнал Милене.
 const canEditSchedule = () => ['operator', 'owner', 'ceo'].includes(store.me()?.role);
-// Создание/правка карточек и ставок — владелец и СЕО (RLS emp_insert/update,
-// rate_insert/update, reconcile = owner,ceo; миграция 035). У остальных — просмотр.
-/* Кто правит карточку. Ровно те же роли, что пускает политика emp_update (105).
-   Дарина 07.08: «редагувати та в архів кидати можуть і інші акаунти, і альона, і
-   бухгалтер». Расходиться с базой нельзя: разойдётся — человек увидит кнопку и
-   получит отказ, либо наоборот не увидит того, что ему разрешено. */
-const canEditCards = () => ['owner', 'ceo', 'operator', 'cashier1'].includes(store.me()?.role);
+/* Права на карточку РАЗНЫЕ на трёх уровнях, и это не описка, а три отдельные
+   политики базы. Один хелпер на все три уже привёл к беде: кнопку «Карточка»
+   показали Алёне, а emp_insert ей не открывали — она бы жала и получала отказ.
+     · правка полей и архив — owner, ceo, operator (emp_update). Дарина 07.08:
+       «редагувати та в архів кидати можуть і інші акаунти, і альона, і
+       бухгалтер» — бухгалтера (cashier1) 105 добавила, а 111 убрала обратно до
+       появления окна кассы: экрана у него нет, справочники закрыты, а телефоны
+       всех он бы уже видел (024 §6). Дарина 10.08: «прибрати поки, зробимо з
+       касою»;
+     · ЗАВЕДЕНИЕ карточки — owner, ceo (emp_insert, 035). Заводить не просили;
+     · СТАВКИ — owner, ceo (reconcile_employee_rates, 081): деньги.
+   Расходиться с базой нельзя ни в одну сторону: разойдётся — человек увидит
+   кнопку и получит отказ, либо не увидит того, что ему разрешено. */
+const canEditCards   = () => ['owner', 'ceo', 'operator'].includes(store.me()?.role);
+const canCreateCards = () => ['owner', 'ceo'].includes(store.me()?.role);
+const canEditRates   = () => ['owner', 'ceo'].includes(store.me()?.role);
 async function enter() {
   const me = store.me(); if (!me) return;
   document.body.classList.add('authed');
@@ -808,8 +822,11 @@ async function enter() {
     go('soon');
     return;
   }
-  $('addEmpBtn').style.display = canEditCards() ? '' : 'none';
-  $('roNote').innerHTML = canEditCards() ? '' : `<div class="readonly-note">${ICONS.lock} Карточки, телефоны и ставки заводит и меняет владелец — у вас просмотр.</div>`;
+  $('addEmpBtn').style.display = canCreateCards() ? '' : 'none';
+  // Алёне карточку править можно, а ЗАВОДИТЬ и трогать ставки — нет. Сказать это
+  // заранее честнее, чем дать нажать и показать отказ: она правит отчества после
+  // импорта, и ей важно понимать, где граница.
+  $('roNote').innerHTML = canEditRates() ? '' : `<div class="readonly-note">${ICONS.lock} Карточку можно править и отправлять в архив. Заводить новые и менять ставки — у владельца.</div>`;
   // Адрес разбираем ДО refresh(): месяц из ссылки попадает в curPeriod раньше,
   // чем refresh() нарисует график, — иначе он сначала грузил бы текущий месяц, а
   // потом перерисовывался бы на нужный (два запроса и мигание чужого месяца).
@@ -906,9 +923,19 @@ const inCat = (e, cat, picked) => picked
    sub — ГОТОВЫЙ html (даты, <b>), экранирует его вызывающий; title — слово
    перед именем («Отпуск · …»). Специальности нет → specName даёт «—», такую
    строку не рисуем совсем, чтобы не занимать место прочерком. */
+/* Шапка человека в окнах графика. Кнопка «Карточка» живёт ЗДЕСЬ, а не в одном
+   диалоге, потому что personHead общий для всех окон графика (смена, факт, сумма
+   за смену, отпуск, закрытый день, шаблон на месяц) — а вопрос «почему у него
+   такая сумма» возникает из любого из них, и ответ всегда в карточке: там ставка.
+   Дарина 10.08: «натискаючи на людину з графіку — у мене немає кнопок щоб перейти
+   в картку співробітника». Раньше клик по имени открывал только шаблон на месяц,
+   и до ставки из графика было не дойти вообще — приходилось идти на «Сотрудники»
+   и искать человека заново. */
 function personHead(e, sub, title = '') {
   const spec = e ? specName(e.specialty_id) : '—';
-  return `<h3>${title ? esc(title) + ' · ' : ''}${esc((e && e.fio) || '')}</h3>
+  const card = e && e.id && allowedScreen('card')
+    ? `<button class="btn btn-ghost btn-sm ph-card" data-emp="${e.id}" title="Открыть карточку: ставка, телефон, специальность">Карточка →</button>` : '';
+  return `<div class="ph-head"><h3>${title ? esc(title) + ' · ' : ''}${esc((e && e.fio) || '')}</h3>${card}</div>
     ${spec !== '—' ? `<div class="msub">${esc(spec)}</div>` : ''}
     ${sub ? `<div class="msub">${sub}</div>` : ''}`;
 }
@@ -972,7 +999,12 @@ function renderEmployees(filter = '') {
   const gapF = isOwner() ? ($('empList').dataset.gap || '') : '';
   const cats = [...new Set([...specialties.map(s => s.category), 'Прочие'])];
   const catF = $('empCat')?.dataset.value || '';   // дропдаун заполняет fillCatSelects при загрузке
-  const arch = canEditCards() ? employees.filter(e => e.status === 'archived' && String(e.fio || '').toLowerCase().includes(f)) : [];   // архив показываем только тем, кто правит карточки
+  // Убранные (hidden_at, 105) не показываем и здесь. Без этого «убрать» не
+  // убирало: на экране «Архив» четыре дубля Лобановой исчезали, а тут же, на
+  // «Сотрудниках», группа «В архиве · 4» показывала их снова — и уже не одному
+  // владельцу, а всем, кто правит карточки. Вернуть их можно там же, где убрали:
+  // на «Архиве» галочкой «показать убранные».
+  const arch = canEditCards() ? employees.filter(e => e.status === 'archived' && !e.hidden_at && String(e.fio || '').toLowerCase().includes(f)) : [];   // архив показываем только тем, кто правит карточки
   const showArch = $('empList').dataset.showArch === '1';
   let html = arch.length ? `<div style="margin:0 0 10px"><button class="btn btn-ghost btn-sm" id="archToggle">${showArch ? 'Скрыть архив' : 'Архив · ' + arch.length}</button></div>` : '';
   for (const cat of cats) {
@@ -2138,12 +2170,23 @@ function employeeForm(e) {
       // Существующие (_keep) не трогаем: у них своя дата начала.
       const fresh = (lines || []).filter(l => !l._keep);
       const removed = e ? activeLines(e).length - (lines || []).filter(l => l._keep).length : 0;
+      // Ставки трогали или нет. Правка ЛЮБОГО поля в блоке ставки снимает
+      // data-keep (см. renderLineFields), поэтому «ни одной новой и ни одной
+      // убранной» = набор не тронут вовсе.
+      const ratesTouched = fresh.length > 0 || removed > 0;
       let vfrom = null;
-      if (fresh.length || removed > 0) {
+      if (ratesTouched) {
         vfrom = await rateStartDialog(fresh, removed);
         if (!vfrom) { btn.disabled = false; return; }
       }
-      if (e) { await store.updateEmployee(e.id, patch, lines, vfrom); toast(ICONS.check + 'Карточка обновлена — изменения в журнале'); }
+      // Реконсайл ставок зовём ТОЛЬКО когда ставки правда меняли. Раньше звали
+      // всегда: collectLines никогда не возвращает пустое (бросает на нуле строк),
+      // значит newLines всегда истинно и RPC уходил на каждом сохранении. Владельцу
+      // это стоило лишнего запроса, а Алёне ломало всё: PATCH карточки проходил
+      // первым и сохранялся, RPC падал вторым с «Ставки заводит и меняет только
+      // владелец» — она видела красную ошибку над уже применённой правкой и жала
+      // снова. Транзакции между двумя запросами нет и быть не может.
+      if (e) { await store.updateEmployee(e.id, patch, ratesTouched ? lines : null, vfrom); toast(ICONS.check + 'Карточка обновлена — изменения в журнале'); }
       else { await store.createEmployee({ ...patch, lines, valid_from: vfrom }); toast(ICONS.check + 'Карточка создана: ' + esc(fio.split(' ')[0])); }
       closeModal(); await refresh(); if (e) openCard(e.id);
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
@@ -5276,9 +5319,12 @@ async function renderArchive() {
   if (seq !== arcSeq) return;
   const money = new Map(pay.map(r => [r.employee_id, r]));
   // hidden_at — карточка убрана владельцем «с глаз»: из списка уходит, запись и
-  // журнал остаются (105). Переключатель ниже показывает их обратно.
-  const showHidden = !!$('arcShowHidden')?.checked;
-  arcRows = emps.filter(e => e.status === 'archived' && (showHidden || !e.hidden_at)).map(e => {
+  // журнал остаются (105). В arcRows держим ВСЕХ архивных, включая убранных, —
+  // отсев делает drawArchive по галочке. Иначе переключение галочки лезло бы в
+  // сеть за полным списком (listEmployees + listPayroll), тогда как соседние
+  // «поиск» и «только с деньгами» рисуются по памяти. При клиничном интернете
+  // (800 КБ холодный заход, всегда инкогнито) это заметная разница.
+  arcRows = emps.filter(e => e.status === 'archived').map(e => {
     const r = money.get(e.id) || {};
     return { id: e.id, fio: e.fio || '—', spec: specName(e.specialty_id),
              hidden: !!e.hidden_at,
@@ -5290,12 +5336,21 @@ async function renderArchive() {
 function drawArchive() {
   const f = ($('arcSearch')?.value || '').trim().toLowerCase();
   const onlyMoney = !!$('arcOnlyMoney')?.checked;
-  const list = arcRows.filter(x => (!f || x.fio.toLowerCase().includes(f)) && (!onlyMoney || x.delta));
-  const withMoney = arcRows.filter(x => x.delta).length;
-  const noLeft = arcRows.filter(x => !x.left_on).length;
-  $('arcStat').innerHTML = `<span class="mini-chip neutral">${arcRows.length} чел</span>`
+  const showHidden = !!$('arcShowHidden')?.checked;
+  // Считаем по видимым — но про убранных обязательно говорим вслух. Экран
+  // существует ради вопроса «не осталось ли за человеком долга» (так нашёлся
+  // Частухин с 27 000 ₽), и молча занижать его счётчики нельзя: владелец не
+  // догадается, что надо поставить галочку.
+  const shown = arcRows.filter(x => showHidden || !x.hidden);
+  const hiddenN = arcRows.filter(x => x.hidden).length;
+  const list = shown.filter(x => (!f || x.fio.toLowerCase().includes(f)) && (!onlyMoney || x.delta));
+  const withMoney = shown.filter(x => x.delta).length;
+  const noLeft = shown.filter(x => !x.left_on).length;
+  const hiddenMoney = arcRows.filter(x => x.hidden && x.delta).length;
+  $('arcStat').innerHTML = `<span class="mini-chip neutral">${shown.length} чел</span>`
     + (withMoney ? `<span class="mini-chip">с деньгами: ${withMoney}</span>` : '')
-    + (noLeft ? `<span class="mini-chip neutral">без даты увольнения: ${noLeft}</span>` : '');
+    + (noLeft ? `<span class="mini-chip neutral">без даты увольнения: ${noLeft}</span>` : '')
+    + (!showHidden && hiddenN ? `<span class="mini-chip neutral">убрано: ${hiddenN}${hiddenMoney ? `, из них с деньгами ${hiddenMoney}` : ''}</span>` : '');
 
   $('arcBody').innerHTML = list.length ? `<div class="gridwrap"><table class="pw arc"><thead><tr>
       <th class="pw-name">Сотрудник</th><th>Специальность</th><th>Дата увольнения</th>
@@ -5313,13 +5368,28 @@ function drawArchive() {
             title="${x.hidden ? 'Вернуть в список архива' : 'Убрать из списка. Карточка и её история останутся'}"
             >${x.hidden ? 'Показать' : 'Убрать'}</button>` : ''}</td></tr>`).join('')
     }</tbody></table></div>`
-    : `<div class="empty">${arcRows.length ? 'Никого не нашлось по этому условию.' : 'Архив пуст.'}</div>`;
+    // «Архив пуст» при непустом архиве — прямая неправда: если все убраны,
+    // человек должен узнать об этом, а не искать пропажу.
+    : `<div class="empty">${shown.length ? 'Никого не нашлось по этому условию.'
+        : hiddenN ? `Все ${hiddenN} ${plural(hiddenN, 'карточка убрана', 'карточки убраны', 'карточек убраны')} из списка — поставьте «показать убранные».`
+        : 'Архив пуст.'}</div>`;
 
   // «Убрать из архива» — только владелец. Правило держит триггер в базе
   // (employee_a_hide_guard, 105); кнопка лишь повторяет его глазами, чтобы
   // остальные не жали то, что им откажут.
   $('arcBody').querySelectorAll('.arc-hide').forEach(b => b.onclick = async () => {
-    if (b.disabled) return; b.disabled = true;
+    if (b.disabled) return;
+    // Переспрашиваем только при УБИРАНИИ. Объяснение раньше жило в title, а на
+    // телефоне тултипов нет — выходило наоборот: безобидное «Вернуть» спрашивало,
+    // а «Убрать» срабатывало от первого касания и молча. Слово «Убрать» рядом с
+    // «История» легко прочесть как «удалить», а Дарина просила прямо: «не
+    // потрібно видаляти, хай історія буде». Одна фраза снимает этот страх.
+    // Строку берём с запасным вариантом: писать `x && await confirm(x)` нельзя —
+    // если строка вдруг не нашлась, всё условие становится ложным и убирание
+    // проходит БЕЗ вопроса. Спрашивать надо всегда, даже когда сказать нечего.
+    const x = list.find(y => y.id === +b.dataset.id) || { fio: '', delta: 0 };
+    if (b.dataset.h !== '1' && !(await confirmHide(x))) return;
+    b.disabled = true;
     try { await store.setEmployeeHidden(+b.dataset.id, b.dataset.h !== '1');
           toast(ICONS.check + (b.dataset.h === '1' ? 'Возвращено в список' : 'Убрано из списка'));
           await renderArchive(); }
@@ -5337,7 +5407,12 @@ function drawArchive() {
     const x = list.find(y => y.id === +b.dataset.id); if (!x) return;
     if (!(await confirmBack(x))) return;
     b.disabled = true;
-    try { await store.updateEmployee(x.id, { status: 'active' });
+    // hidden_at снимаем вместе с возвратом. Иначе он переживал возврат молча:
+    // человек снова активен и всюду виден, а метка «убран» на нём висит — и
+    // когда его через месяц опять отправят в архив (это теперь может и Алёна),
+    // он исчезнет с экрана «Архив» сразу и БЕЗ записи в журнале, потому что
+    // hidden_at не менялся. На вопрос «куда делась карточка» ответить нечем.
+    try { await store.updateEmployee(x.id, x.hidden ? { status: 'active', hidden_at: null } : { status: 'active' });
       toast(ICONS.check + 'Вернули в активные'); await refresh(); await renderArchive(); }
     catch (e) { b.disabled = false; toast(e.message || e, true); }
   });
@@ -5354,6 +5429,25 @@ function confirmBack(x) {
     modalOnClose = () => resolve(false);
     $('abNo').onclick = () => { resolve(false); closeModal(); };
     $('abYes').onclick = () => { resolve(true); closeModal(); };
+  });
+}
+
+/* Убирание — не удаление, и сказать это надо ровно в тот момент, когда human
+   заносит палец над кнопкой. Отдельно предупреждаем про долг: убрать человека,
+   за которым остались деньги, — это спрятать с глаз незакрытый вопрос. */
+function confirmHide(x) {
+  return new Promise(resolve => {
+    showModal(`<h3>Убрать из списка?</h3>
+      <div class="msub">${esc(x.fio)}</div>
+      <div class="msub" style="margin-top:8px">Карточка и вся её история останутся —
+        она просто уйдёт из списка «Архив». Вернуть можно галочкой «показать убранные».</div>
+      ${x.delta ? `<div class="msub sc-warn" style="margin-top:8px">За ним остаётся
+        <b>${rub(x.delta)} ₽</b> — вопрос закроется из виду вместе с карточкой.</div>` : ''}
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="ahNo">Отмена</button>
+        <button class="btn btn-primary btn-sm" id="ahYes">Убрать</button></div>`);
+    modalOnClose = () => resolve(false);
+    $('ahNo').onclick = () => { resolve(false); closeModal(); };
+    $('ahYes').onclick = () => { resolve(true); closeModal(); };
   });
 }
 
@@ -5972,6 +6066,15 @@ $('modalOv').onclick = e => { if (e.target.id === 'modalOv' && !$('modalBox').da
 /* Крестик закрывает и защищённые окна тоже: это осознанное нажатие, а не
    случайный клик мимо, — ровно как кнопка «Отмена», которая там уже есть. */
 $('modalBox').addEventListener('click', e => { if (e.target.closest('.modal-x')) closeModal(); });
+// «Карточка» из любого окна графика. Делегируем, потому что showModal каждый раз
+// переписывает innerHTML — вешать обработчик в семи местах после каждого показа
+// значит однажды забыть в одном из них.
+$('modalBox').addEventListener('click', e => {
+  const b = e.target.closest('.ph-card'); if (!b) return;
+  const id = +b.dataset.emp;
+  closeModal();                       // иначе карточка откроется ПОД текущим окном
+  go('employees'); openCard(id);
+});
 $('modalBox2').addEventListener('click', e => { if (e.target.closest('.modal-x')) closeModal2(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('modalBox').dataset.guard) closeModal(); });
 $('empSearch').oninput = e => renderEmployees(e.target.value);
@@ -5991,7 +6094,7 @@ $('empSearch').oninput = e => renderEmployees(e.target.value);
   }); }
 { const as = $('arcSearch'); if (as) as.oninput = () => drawArchive(); }
 { const am = $('arcOnlyMoney'); if (am) am.onchange = () => drawArchive(); }
-{ const ah = $('arcShowHidden'); if (ah) ah.onchange = () => renderArchive(); }
+{ const ah = $('arcShowHidden'); if (ah) ah.onchange = () => drawArchive(); }   // по памяти, как соседние фильтры: в сеть не лезем
 { const vf = $('vacFlat'); if (vf) vf.onchange = () => drawVacation(); }
 { const mp = $('mPrev'), mn = $('mNext'); if (mp) mp.onclick = () => shiftMonth(-1); if (mn) mn.onclick = () => shiftMonth(1); }
 { const ss = $('schedSearch'); if (ss) ss.oninput = () => drawSchedule(); }

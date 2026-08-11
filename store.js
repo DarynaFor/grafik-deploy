@@ -237,12 +237,16 @@ export class MockStore {
     this._save(); return hit.length;
   }
   async setEmployeeHidden(id, hidden) {
-    if (this.user?.role !== 'owner') throw new Error('Убирать из архива может только владелец');
+    // Текст отказа и красный флаг — слово в слово как в базе (триггеры
+    // employee_guard_columns и log_employee_hide). Демо для Дарины и Мілєни —
+    // способ посмотреть, как оно себя поведёт, и расхождение здесь означало бы,
+    // что демо врёт про боевую систему.
+    if (this.user?.role !== 'owner') throw new Error('Убирать из архива и возвращать может только владелец');
     const e = this.db.employees.find(x => x.id === id);
     if (!e) throw new Error('Карточка не найдена');
     e.hidden_at = hidden ? new Date().toISOString() : null;
     this._log('updated', 'employee', id, 'архив', hidden ? 'в списке' : 'убрана',
-              hidden ? 'убрана из списка' : 'возвращена в список');
+              hidden ? 'убрана из списка' : 'возвращена в список', true);
     this._save(); return e;
   }
   async updateSpecialty(id, name, category) {
@@ -279,6 +283,17 @@ export class MockStore {
         this._log('updated', 'employee', id, f, String(e[f] ?? ''), String(patch[f] ?? ''));
         e[f] = patch[f];
       }
+    }
+    // hidden_at отдельно от списка выше: у него человеческая подпись в журнале и
+    // красный флаг — как у триггера log_employee_hide в базе. Через общий цикл
+    // получилось бы «hidden_at: 2026-08-09T10:00:00Z → », что не читается.
+    // В боевом хранилище patch уходит в UPDATE целиком, и «Вернуть» снимает
+    // пометку; демо обязано вести себя так же, иначе оно врёт про боевую систему.
+    if (patch.hidden_at !== undefined && patch.hidden_at !== e.hidden_at) {
+      this._log('updated', 'employee', id, 'архив',
+                e.hidden_at ? 'убрана' : 'в списке',
+                patch.hidden_at ? 'убрана из списка' : 'возвращена в список', true);
+      e.hidden_at = patch.hidden_at;
     }
     if (newLines) {
       const vfrom = validFrom || rateFrom();
@@ -953,7 +968,10 @@ const EMPLOYEE_ERRORS = [
   ['phone_fmt_chk',          'Проверьте телефон: нужен российский мобильный, например +7 921 554-12-31'],
   ['employee_hire_leave_chk','Дата увольнения не может быть раньше даты приёма'],
   ['employee_status_check',  'Недопустимый статус карточки'],
-  ['violates row-level security', 'Недостаточно прав: карточки заводит и меняет только владелец'],
+  // Заводит — владелец и СЕО (emp_insert), правит — ещё Алёна и бухгалтер
+  // (emp_update, 105). Общий текст «только владелец» после 105 стал неправдой и
+  // сбивал бы с толку именно тех, кому правку как раз открыли.
+  ['violates row-level security', 'Недостаточно прав на эту карточку'],
 ];
 export function employeeError(err) {
   const raw = (err && (err.message || err.details || String(err))) || 'Неизвестная ошибка';
