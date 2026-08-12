@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=183';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=186';
 
 const $ = id => document.getElementById(id);
 
@@ -4443,10 +4443,19 @@ function rateFormula(l, r, nh, emp) {
    намеренно не выглядит как итог. Когда месяц дожит, salary_plan сравнивается с
    salary_kop и строка исчезает сама. Ручная сумма перекрывает и прогноз тоже —
    тогда сравнивать не с чем, и строки тоже нет. */
-function forecastCell(r) {
-  const fin = +r.salary_plan_kop || 0;
-  if (!fin || fin <= (+r.salary_kop || 0)) return '<span class="muted">—</span>';
-  return `<b>${rub(fin)}</b>`;
+/* «Осталось выдать», пересчитанное на ДРУГУЮ зарплату — по плану или по прогнозу.
+   delta = зарплата + прочие начисления − всё выданное. Меняется только слагаемое
+   «зарплата», поэтому поправляем разницу, а не собираем формулу заново: собери её
+   здесь второй раз — и она разойдётся с базой при первой же правке v_month_total.
+   Дарина 12.08: «щоб одразу було видно: план сірим, до видачі зараз зеленим,
+   фіолетовим прогнозована сума до кінця місяця». */
+function deltaAs(r, salaryKop) {
+  return (+r.delta_kop || 0) + ((+salaryKop || 0) - (+r.salary_marked_kop || 0));
+}
+function deltaCell(r, salaryKop) {
+  const v = deltaAs(r, salaryKop);
+  if (v === (+r.delta_kop || 0)) return '<span class="muted">—</span>';
+  return `<b class="money${v < 0 ? ' neg' : ''}">${rub(v)}</b>`;
 }
 function forecastRow(r) {
   const fin = +r.salary_plan_kop || 0;
@@ -4621,7 +4630,7 @@ function drawPayroll(filter = '') {
   // не входит (migrations/046).
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
-    <th class="num sep">Зарплата</th><th class="num pw-earned">Всего заработано</th><th class="num pw-fcast" title="Сколько выйдет к концу месяца, если человек доработает по графику. Прогноз, а не долг">К концу месяца</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-pay">Осталось выдать</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
+    <th class="num sep">Зарплата</th><th class="num pw-earned">Всего заработано</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-byplan" title="Сколько пришлось бы выдать, если бы все дни по графику зачлись как отработанные. Для сравнения — платить по этой сумме нельзя">По плану</th><th class="num pw-pay">Осталось выдать</th><th class="num pw-fcast" title="Сколько выйдет к концу месяца: подтверждённые выходы + оставшиеся дни по графику">К концу месяца</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
     <th class="num">Отпуск. начисл.</th><th class="num">Отпуск. карта</th><th class="num">Отпуск. нал.</th><th class="num">Премия</th><th class="num">Больн. начисл.</th><th class="num" title="Нестандартное: свои начисления, удержания и выплаты. Нажмите на число — покажет, на что именно">Прочее</th><th class="num">Больн. карта</th></tr></thead>`;
 
   // Разбивка по специальностям (как в графике): сортируем по отделению,
@@ -4640,7 +4649,7 @@ function drawPayroll(filter = '') {
       // colspan 23, а не 22: в «Расчёте» прибавилась колонка «К концу месяца».
       const myCat = rows.filter(x => catOf(x) === cat);
       const catDelta = myCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="23"><span>${esc(catLabel(cat))} · ${myCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="24"><span>${esc(catLabel(cat))} · ${myCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
@@ -4649,13 +4658,14 @@ function drawPayroll(filter = '') {
     const right = `
       <td class="num sep fin"><b>${rub(r.salary_kop)}</b></td>
       <td class="num fin pw-earned"><b>${rub(earned(r))}</b></td>
-      <td class="num fin pw-fcast">${forecastCell(r)}</td>
       <td class="num fin">${rub(r.card_avans_kop)}</td>
       <td class="num fin">${rub(r.card_rasch_kop)}</td>
       <td class="num fin pw-cardtot"><b>${rub(cardTotal(r))}</b></td>
       <td class="num fin pw-carry${isStaff() ? ' pw-tap' : ''}" data-carry="${r.employee_id}"${isStaff() ? ' title="Изменить или убрать перенос"' : ''}>${
         r.carry_kop ? `<b class="money${r.carry_kop < 0 ? ' neg' : ''}">${rub(r.carry_kop)}</b>` : '<span class="muted">—</span>'}</td>
+      <td class="num fin pw-byplan">${deltaCell(r, r.salary_kop)}</td>
       <td class="num pw-pay fin"><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)}</b></td>
+      <td class="num fin pw-fcast">${deltaCell(r, r.salary_plan_kop)}</td>
       <td class="num fin">${rub(r.card_uvol_kop)}</td>
       <td class="num fin">${rub(r.cash_avans_kop)}</td>
       <td class="num fin">${rub(r.cash_kop)}</td>
@@ -4695,11 +4705,12 @@ function drawPayroll(filter = '') {
     <td></td><td></td><td></td>
     <td class="num sep fin"><b>${rub(sum('salary_kop'))}</b></td>
     <td class="num fin pw-earned"><b>${rub(rows.reduce((s2, r) => s2 + earned(r), 0))}</b></td>
-    <td class="num fin pw-fcast"><b>${sum('salary_plan_kop') > sum('salary_kop') ? rub(sum('salary_plan_kop')) : '—'}</b></td>
     <td class="num fin">${rub(sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('card_rasch_kop'))}</td>
     <td class="num fin pw-cardtot"><b>${rub(sum('card_rasch_kop') + sum('card_avans_kop') + sum('otpusk_kop') + sum('bolnich_kop'))}</b></td>
     <td class="num fin pw-carry"><b class="money${sum('carry_kop') < 0 ? ' neg' : ''}">${sum('carry_kop') ? rub(sum('carry_kop')) : '—'}</b></td>
+    <td class="num fin pw-byplan"><b>${rub(rows.reduce((a, r) => a + deltaAs(r, r.salary_kop), 0))}</b></td>
     <td class="num pw-pay fin"><b class="money">${rub(toGive)}</b></td>
+    <td class="num fin pw-fcast"><b>${rub(rows.reduce((a, r) => a + deltaAs(r, r.salary_plan_kop), 0))}</b></td>
     <td class="num fin">${rub(sum('card_uvol_kop'))}</td>
     <td class="num fin">${rub(sum('cash_avans_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
@@ -4709,14 +4720,14 @@ function drawPayroll(filter = '') {
     <td class="num fin">${rub(sum('bolnich_kop'))}</td>
 </tr>
     <tr class="pw-total pw-accrued"><td class="pw-name">Всего начислено</td>
-      <td colspan="9" class="muted small">зарплата ${rub(sum('salary_kop'))}${
+      <td colspan="8" class="muted small">зарплата ${rub(sum('salary_kop'))}${
         sum('premia_kop') ? ' + премии ' + rub(sum('premia_kop')) : ''}${
         sum('otpusk_nach_kop') ? ' + отпускные ' + rub(sum('otpusk_nach_kop')) : ''}${
         sum('bolnich_nach_kop') ? ' + больничные ' + rub(sum('bolnich_nach_kop')) : ''}${
         sum('nach_other_kop') ? ' + прочие начисления ' + rub(sum('nach_other_kop')) : ''}${
         sum('uderz_other_kop') ? ' − удержания ' + rub(sum('uderz_other_kop')) : ''}</td>
       <td class="num pw-cardtot"></td><td class="num pw-carry"></td>
-      <td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop') + sum('nach_other_kop') - sum('uderz_other_kop'))}</b></td>
+      <td class="num pw-byplan"></td><td class="num pw-pay fin"><b class="money">${rub(sum('salary_kop') + sum('premia_kop') + sum('otpusk_nach_kop') + sum('bolnich_nach_kop') + sum('nach_other_kop') - sum('uderz_other_kop'))}</b></td><td class="num pw-fcast"></td>
       <td colspan="10"></td></tr>
     ${(() => {
       /* Подтверждено фактом (113). Дарина: «поки план не проставлен — зп не
@@ -4744,10 +4755,10 @@ function drawPayroll(filter = '') {
         ? `<span class="muted">всего по плану ${rub(plan)}</span> · всего фактически <b>${rub(fakt)}</b> · `
         : '';
       return `<tr class="pw-total pw-plan"><td class="pw-name">Подтверждено фактом</td>
-        <td colspan="11" class="muted small">${split}отмечено ${fmtH(done)} из ${fmtH(past)} отработанных ·
+        <td colspan="10" class="muted small">${split}отмечено ${fmtH(done)} из ${fmtH(past)} отработанных ·
           <b>${wait} ${plural(wait, 'день', 'дня', 'дней')}</b> ещё без отметки — они посчитаны по плану,
           в «Осталось выдать» не идут</td>
-        <td class="num pw-pay fin"><b class="money">${Math.round(done / past * 100)}%</b></td>
+        <td class="num pw-byplan"></td><td class="num pw-pay fin"><b class="money">${Math.round(done / past * 100)}%</b></td><td class="num pw-fcast"></td>
         <td colspan="10"></td></tr>`;
     })()}
     ${(() => {
@@ -4761,15 +4772,15 @@ function drawPayroll(filter = '') {
       if (!fin || fin <= sum('salary_kop')) return '';
       const left = fin - done;
       return `<tr class="pw-total pw-forecast"><td class="pw-name">К концу месяца</td>
-        <td colspan="11" class="muted small">если доработают по графику: уже подтверждено
+        <td colspan="10" class="muted small">если доработают по графику: уже подтверждено
           <b>${rub(done)}</b> + осталось отработать по плану ${rub(left)}.
           Это прогноз, а не долг — в «Осталось выдать» идёт только подтверждённое</td>
-        <td class="num pw-pay fin"><b class="money">${rub(fin)}</b></td>
+        <td class="num pw-byplan"></td><td class="num pw-pay fin"><b class="money">${rub(fin)}</b></td><td class="num pw-fcast"></td>
         <td colspan="10"></td></tr>`;
     })()}
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
-      <td colspan="11" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
-      <td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td>
+      <td colspan="10" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
+      <td class="num pw-byplan"></td><td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td><td class="num pw-fcast"></td>
       <td colspan="10"></td></tr>` : ''}</tfoot>`;
 
   $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
