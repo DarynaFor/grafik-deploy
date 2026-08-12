@@ -1114,3 +1114,48 @@ tr.pw-total.pw-over{z-index:5}
    это не деньги к выдаче, и стоять рядом с ними она должна тише их. */
 .pw .pw-fcast{color:var(--ink-2)}
 .pw td.pw-fcast b{font-weight:600;color:var(--ink-2)}
+
+/* ── Календарь выбора периода (rangePicker) ───────────────────────────────
+   ⚠ ЭТИХ СТИЛЕЙ НЕ БЫЛО ВООБЩЕ — ни одного правила на `rp-`. Календарь
+   написали, а оформление к нему не добавили, и он выводился строкой слипшихся
+   чисел: «ПнВтСрЧтПтСбВс» и следом «12345678910111213…» без переносов.
+   Дарина 12.08 прислала снимок: «подивись, що тут зайве видає». Лишнего он
+   ничего не выдавал — это был календарь без сетки.
+   Ломались ОБА места, где он используется: «Отметить отпуск» с экрана отпусков
+   и такой же выбор дат в карточке. */
+.rp{user-select:none}
+.rp-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.rp-m{font-weight:650;font-size:14px;color:var(--ink)}
+/* capitalize здесь НЕЛЬЗЯ: он поднимает каждое слово, и «август 2026 г.»
+   превращается в «Август 2026 Г.». Поднимаем только первую букву. */
+.rp-m::first-letter{text-transform:uppercase}
+.rp-nav{width:30px;height:30px;flex:none;display:grid;place-items:center;border-radius:9px;
+  border:1px solid var(--glass-bd);background:var(--fill-2);color:var(--ink-2);
+  font-size:17px;line-height:1;cursor:pointer;transition:.12s}
+.rp-nav:hover{background:var(--fill-1);color:var(--ink)}
+
+/* Семь колонок — и у шапки дней недели, и у самой сетки. Ровно из-за
+   отсутствия этих двух строк всё и слипалось в одну строку. */
+.rp-wd,.rp-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.rp-wd{margin-bottom:6px}
+.rp-wd span{text-align:center;font-size:10.5px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-3)}
+
+.rp-d{aspect-ratio:1;min-height:34px;display:grid;place-items:center;border:1px solid transparent;
+  border-radius:9px;background:var(--fill-2);color:var(--ink);font-size:13px;font-weight:600;
+  font-variant-numeric:tabular-nums;cursor:pointer;transition:.12s;padding:0}
+.rp-d:hover{background:var(--fill-1);border-color:var(--glass-bd)}
+.rp-w{color:var(--ink-3)}                    /* выходные — тише будних */
+.rp-out{background:none;border:0;cursor:default;pointer-events:none}
+
+/* Выбранный отрезок: концы залиты, середина подсвечена. Так видно и границы,
+   и всё, что между ними, — а это и есть отпуск. */
+.rp-in{background:rgba(52,201,124,.16);color:var(--ink);border-color:transparent}
+.rp-a,.rp-b{background:var(--green);color:var(--on-green);border-color:var(--green)}
+.rp-a:hover,.rp-b:hover{background:var(--green-d);border-color:var(--green-d)}
+.rp-a{border-top-right-radius:4px;border-bottom-right-radius:4px}
+.rp-b{border-top-left-radius:4px;border-bottom-left-radius:4px}
+.rp-a.rp-b{border-radius:9px}                /* один день — снова со всех сторон */
+
+.rp-sum{margin-top:10px;font-size:13px;color:var(--ink-2)}
+.rp-sum b{color:var(--ink);font-variant-numeric:tabular-nums}
