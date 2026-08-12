@@ -6053,9 +6053,16 @@ async function renderVacation() {
   if (seq !== vacSeq) return;
   const byEmp = new Map(), other = new Map();
   for (const c of (cells || [])) {
-    if (c.plan_kind === 'отпуск') {
-      if (!byEmp.has(c.employee_id)) byEmp.set(c.employee_id, []);
-      byEmp.get(c.employee_id).push(c.work_date);
+    // ⚠ ДВА ВИДА ОТПУСКА, И ОНИ ДОЛЖНЫ ЛЕЖАТЬ ПОРОЗНЬ. Ниже, в drawVacation,
+    // ждут объект {paid, unpaid} — под фильтр «Оплачиваемые / Без сохранения».
+    // Раньше здесь клали ПРОСТО СПИСОК дат, и у него нет .paid: на первом же
+    // человеке с отпуском экран падал целиком с «Spread syntax requires
+    // ...iterable not be null», причём молча — пустая страница без ошибки.
+    // Так и было 12.08 у владелицы: в августе отпуска есть, значит не
+    // открывалось никогда. Половину фильтра добавили, вторую не поправили.
+    if (c.plan_kind === 'отпуск' || c.plan_kind === 'отпуск_бз') {
+      if (!byEmp.has(c.employee_id)) byEmp.set(c.employee_id, { paid: [], unpaid: [] });
+      byEmp.get(c.employee_id)[c.plan_kind === 'отпуск' ? 'paid' : 'unpaid'].push(c.work_date);
     } else if (c.plan_kind === 'absent' || c.plan_kind === 'off') {
       // «Не вышел» и «Выходной» — то, чем отпуск отмечают вместо самого отпуска
       const m = other.get(c.employee_id) || { absent: 0, off: 0 };
@@ -6081,7 +6088,11 @@ function drawVacation() {
 
   const list = [...ids].map(id => {
     const e = empOf.get(id) || {}, r = rowOf.get(id) || {};
-    const dd = days.get(id) || { paid: [], unpaid: [] };
+    // Второй рубеж: разойдись форма ещё раз — потеряем строку, а не весь экран.
+    // Пустая страница без единого слова хуже любой неполной: человек не знает
+    // даже, что сломалось, и ждёт. Проверено 12.08 — так и было.
+    const d0 = days.get(id);
+    const dd = { paid: (d0 && d0.paid) || [], unpaid: (d0 && d0.unpaid) || [] };
     const dts = [...dd.paid, ...dd.unpaid];
     const nach = r.otpusk_nach_kop || 0, card = r.otpusk_kop || 0, cash = r.otpusk_cash_kop || 0;
     const o = (other && other.get(id)) || { absent: 0, off: 0 };
