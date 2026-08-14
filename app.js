@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=191';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=196';
 
 const $ = id => document.getElementById(id);
 
@@ -336,7 +336,7 @@ function renderLogin() {
   if (store.mode === 'demo') {
     $('loginSub').textContent = 'Демо-режим: данные хранятся только в этом браузере.';
     body.innerHTML = `<div class="demo-badge">${ICONS.lock} демо · без сервера</div><div style="height:14px"></div>` +
-      store.demoUsers().map(u => `<button class="userbtn" data-uid="${esc(u.id)}"><span class="emp-ava" style="width:40px;height:40px;border-radius:13px;background:${palette[u.id.length % palette.length]}">${esc(initials(u.name))}</span><b>${esc(u.name)}</b><span class="role">${u.role === 'owner' ? 'владелец' : 'оператор'}</span></button>`).join('');
+      store.demoUsers().map(u => `<button class="userbtn" data-uid="${esc(u.id)}"><span class="emp-ava" style="width:40px;height:40px;border-radius:13px;background:${palette[u.id.length % palette.length]}">${esc(initials(u.name))}</span><b>${esc(u.name)}</b><span class="role">${esc(ROLE_LABELS[u.role] || u.role)}</span></button>`).join('');
     body.querySelectorAll('.userbtn').forEach(b => b.onclick = async () => { try { await store.loginDemo(b.dataset.uid); await enter(); } catch (e) { toast('Не удалось войти: ' + (e.message || e), true); } });
     foot.innerHTML = 'После подключения базы здесь будет вход по почте и паролю. <button id="resetDemo" style="color:var(--ink-2);text-decoration:underline">Сбросить демо-данные</button>';
     const rd = $('resetDemo'); if (rd) rd.onclick = () => { store.resetDemo(); toast('Демо-данные сброшены'); };
@@ -426,6 +426,7 @@ const IMPORT_KIND_META = {
   otpusk_cash: { label: 'Отпускные наличными', hint: 'отпускные, которые выдаём из кассы — идут в «к выдаче»' },
   otpusk_nach: { label: 'Отпускные начислено', hint: 'НЕ выплата: сколько начислили. Справочно — ни в «к выдаче», ни в остаток не входит' },
   card_avans:  { label: 'Аванс на карту',      hint: 'реестр аванса (ТКБ), официальная часть' },
+  bolnich:     { label: 'Больничные на карту', hint: 'больничные, перечисленные на карту — официальная часть' },
   card_rasch:  { label: 'ЗП на карту',         hint: 'ежемесячная зарплата на карту по 1С' },
   card_uvol:   { label: 'Расчёт на карту',     hint: 'окончательный расчёт при увольнении' },
   cash_avans:  { label: 'Аванс наличными',     hint: 'выданный наличными аванс' },
@@ -903,7 +904,14 @@ async function enter() {
   // Алёне карточку править можно, а ЗАВОДИТЬ и трогать ставки — нет. Сказать это
   // заранее честнее, чем дать нажать и показать отказ: она правит отчества после
   // импорта, и ей важно понимать, где граница.
-  $('roNote').innerHTML = canEditRates() ? '' : `<div class="readonly-note">${ICONS.lock} Карточку можно править и отправлять в архив. Заводить новые и менять ставки — у владельца.</div>`;
+  // ⚠ Подсказка обязана совпадать с тем, что человеку РЕАЛЬНО можно. Первая
+  //    редакция говорила «карточку можно править» всем, у кого нет прав на
+  //    ставки, — и бухгалтеру, которая править не может, тоже. Увидела, открыв
+  //    её экран глазами: текст обещал то, чего база не даст.
+  $('roNote').innerHTML =
+    canEditRates() ? ''
+    : canEditCards() ? `<div class="readonly-note">${ICONS.lock} Карточку можно править и отправлять в архив. Заводить новые и менять ставки — у владельца.</div>`
+    : `<div class="readonly-note">${ICONS.lock} Карточки только для просмотра — вы ведёте выплаты на карту. Править их может владелец, СЕО и Алёна.</div>`;
   // Адрес разбираем ДО refresh(): месяц из ссылки попадает в curPeriod раньше,
   // чем refresh() нарисует график, — иначе он сначала грузил бы текущий месяц, а
   // потом перерисовывался бы на нужный (два запроса и мигание чужого месяца).
@@ -1965,7 +1973,7 @@ function renderImport() {
     <div class="card cardpad imp-setup">
       <div class="imp-field">
         <label>Что вносим</label>
-        <div class="imp-kinds">${kinds.map(k => `<button class="imp-kind${k === importState.kind ? ' on' : ''}" data-ik="${k}">${esc(IMPORT_KIND_META[k].label)}</button>`).join('')}</div>
+        <div class="imp-kinds">${kinds.map(k => `<button class="imp-kind${k === importState.kind ? ' on' : ''}" data-ik="${k}">${esc(IMPORT_KIND_META[k]?.label || k)}</button>`).join('')}</div>
         <div class="imp-hint">${esc(meta.hint || '')}</div>
       </div>
       <div class="imp-field imp-month">
