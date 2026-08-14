@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=201';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=202';
 
 const $ = id => document.getElementById(id);
 
@@ -1289,6 +1289,7 @@ async function loadCardPanel(id) {
       ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
       ${payRow('Своё начисление', r.nach_other_kop, 'nach_other', canEdit, oNotes.nach_other)}
       <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
+      ${markedRow(r)}
       ${forecastRow(r)}
       ${cardBlock(r) ? '<div class="me-cap">На карту</div>' : ''}
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
@@ -4556,6 +4557,28 @@ function forecastRow(r) {
   if (!fin || fin <= (+r.salary_kop || 0)) return '';
   return `<div class="me-row me-forecast"><span class="muted">К концу месяца, если доработает по графику</span><b>${rub(fin)} ₽</b></div>`;
 }
+/* Сколько из заработка ПОДТВЕРЖДЕНО отметкой факта — и почему это важно видеть.
+   С августа в «Осталось выдать» идёт только подтверждённое (решение Дарины:
+   «поки план не проставлен — зп не рахуємо по цьому»). А в окне рядом стоит
+   «Всего заработано» — сумма ПО ПЛАНУ, и обе цифры выглядели одинаково зелёными.
+   Дарина 12.08: «сума виглядає зеленим як суми в расчетах зелені які вже
+   підтверджені до видачі».
+
+   Отсюда путаница вида «заработала 47 857, минус аванс 10 000 — почему −7 026?»:
+   в формулу шли не 47 857, а 5 000 подтверждённых (фикс платится целиком, а
+   оклад ждёт отметок). Теперь между ними есть строка, и правило то же, что в
+   графике: серое — назначено, цветное — подтверждено. */
+function markedRow(r) {
+  const mk = +r.salary_marked_kop, plan = +r.salary_kop || 0;
+  if (r.salary_marked_kop == null) return '';          // месяц до августа — правило не действует
+  if (mk >= plan) return '';                           // всё подтверждено, лишней строки не нужно
+  const wait = plan - mk;
+  return `<div class="me-row me-sum me-marked"><span>Подтверждено фактом</span>
+      <b class="money">${rub(mk)} ₽</b></div>
+    <div class="me-row"><span class="muted small">Ещё ${rub(wait)} ₽ ждут отметок в графике —
+      в «Осталось выдать» они пока не входят.</span></div>`;
+}
+
 /* «Всего заработано» — весь заработок человека за месяц из ВСЕХ источников, одним
    числом. Просьба Виталия 03.08: «мне нужно понимать сколько суммарно будет у
    человека заработка… сделать ещё одну колонку с одной цифрой, из которой потом
@@ -5419,6 +5442,7 @@ async function payrollDialog(empId) {
       ${payRow('Больничные начислено', r.bolnich_nach_kop, 'bolnich_nach', canEdit)}
       ${payRow('Своё начисление', r.nach_other_kop, 'nach_other', canEdit, oNotes.nach_other)}
       <div class="me-row me-sum me-earned"><span>Всего заработано</span><b class="money">${rub(earned(r))} ₽</b></div>
+      ${markedRow(r)}
       ${forecastRow(r)}
       ${cardBlock(r) ? '<div class="me-cap">На карту</div>' : ''}
       ${payRow('Аванс на карту', r.card_avans_kop, 'card_avans', canEdit)}
@@ -5438,7 +5462,7 @@ async function payrollDialog(empId) {
         <span class="muted">С прошлого месяца</span><b class="money${(r.carry_kop || 0) < 0 ? ' neg' : ''}">${r.carry_kop ? rub(r.carry_kop) + ' ₽' : '—'}</b>
         ${canEdit ? '<span class="me-pen">\u270E</span>' : ''}</div>` : ''}
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
-      <div class="me-row"><span class="muted small"><b>Заработано</b> − <b>на карту</b> − <b>дополнительные поступления</b> + перенос с прошлого месяца. Столько ещё раздать наличными.<br>Начисленные отпускные и больничные входят в заработок, а выплаченные — вычитаются: если начислили и выплатили поровну, на разницу они не влияют. Удержания (алименты и прочее) стоят в блоке «На карту» — они тоже уменьшают выдачу.</span></div>
+      <div class="me-row"><span class="muted small">${r.salary_marked_kop != null && +r.salary_marked_kop < (+r.salary_kop || 0) ? '<b>Подтверждено фактом</b>' : '<b>Заработано</b>'} − <b>на карту</b> − <b>дополнительные поступления</b> + перенос с прошлого месяца. Столько ещё раздать наличными.<br>Начисленные отпускные и больничные <b>входят</b> в заработок, а выплаченные — вычитаются: если начислили и выплатили поровну, на разницу они не влияют. Удержания (алименты и прочее) стоят в блоке «На карту» — они тоже уменьшают выдачу.</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
     ${pctLine && canEdit ? `<label class="flbl">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё</label>
       <div class="me-add">

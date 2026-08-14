@@ -567,7 +567,14 @@ body.authed .login-stage{display:none}
 .pw-cardtot{background:linear-gradient(var(--fill-1),var(--fill-1)),var(--surface)}
 .pw-cardtot b{color:var(--blue-d,#2b6cb0)}
 .me-card b{color:var(--blue-d,#2b6cb0)}
-.me-earned b{color:var(--violet-d,#6b46c1)}
+/* Правило цвета одно на всю программу: серое — назначено (план), цветное —
+   подтверждено фактом. «Всего заработано» — сумма ПО ПЛАНУ, поэтому она больше
+   не зелёная: зелёным человек читал «эти деньги уже подтверждены к выдаче».
+   Дарина 12.08: «сума виглядає зеленим як суми в расчетах зелені які вже
+   підтверджені до видачі». */
+.me-earned b{color:var(--ink-2);font-weight:700}
+.me-marked b{color:var(--green-d)}
+.me-marked{border-top:1px dashed var(--line)}
 
 /* «с какого числа» рядом со ставкой — тише самой ставки, но читаемо:
    это ответ на вопрос «почему оно ещё считается», а не украшение */
