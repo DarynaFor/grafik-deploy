@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=197';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=198';
 
 const $ = id => document.getElementById(id);
 
@@ -2815,6 +2815,15 @@ let payPeriod = null;
 function shiftPayMonth(delta) { let [y, m] = payPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } payPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = payPeriod; syncHash(false); }
 function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = curPeriod; syncHash(false); renderSchedule(); }
 const SHORT_KIND = { 'отпуск': 'Отп', 'отпуск_бз': 'Б/с', off: 'В', absent: '—' };
+/* Какие виды смен предлагаем ЭТОМУ человеку. У вида может стоять отделение
+   (store.js, SHIFT_KINDS.dept) — тогда он виден только своим: шестичасовая смена
+   бывает только у процедурных медсестёр, и показывать её врачу значит однажды
+   получить её у врача. Вид без отделения виден всем, таких большинство.
+
+   ⚠ cur — вид, который в клетке УЖЕ стоит; его оставляем в списке всегда, даже
+   если он чужой. Иначе <select> не нашёл бы выбранный option, показал бы первый
+   и на сохранении молча подменил вид смены — а вид смены это часы, то есть деньги. */
+const kindsFor = (e, cur) => shiftKinds.filter(k => !k.dept || k.dept === empCat(e) || k.code === cur);
 const REST_KINDS = ['off', 'absent', 'отпуск', 'отпуск_бз'];   // 'отпуск_бз' — без сохранения (109)
 const VAC_KINDS = ['отпуск', 'отпуск_бз'];
 const isVac = k => VAC_KINDS.includes(k);   // нерабочие виды: НЕ в норму, НЕ «прогул», без оплаты смены
@@ -3710,7 +3719,7 @@ function scheduleCellPopup(empId, day, pos = 'main') {
   setEditing('sched:' + empId + ':' + cellDate(day));
   const e = employees.find(x => x.id === empId); if (!e) return;
   const date = cellDate(day), c = cellOf(empId, day, pos);
-  const opts = shiftKinds.filter(k => k.code !== 'custom').map(k => `<option value="${k.code}" ${c && c.plan_kind === k.code ? 'selected' : ''}>${esc(k.label)}</option>`).join('');   // custom без конца смены = 0ч → исключаем (как в шаблоне)
+  const opts = kindsFor(e, c?.plan_kind).filter(k => k.code !== 'custom').map(k => `<option value="${k.code}" ${c && c.plan_kind === k.code ? 'selected' : ''}>${esc(k.label)}</option>`).join('');   // custom без конца смены = 0ч → исключаем (как в шаблоне)
   /* Смена задаётся ДИАПАЗОНОМ «с… до…», а не одним временем начала.
      Раньше поле было одно, и Алёна, перенося из графика клиники «08-20»,
      вписывала его в «Время начала» — база понимала это как 8 часов 20 минут,
@@ -3924,7 +3933,7 @@ function scheduleFactPopup(empId, day, pos = 'main') {
     + ` <button class="lnk-inline" id="fcEditPlan">изменить</button>`;
   const now = cur === 'x' ? 'не вышел' : (cur != null && cur !== '' ? fmtH(parseFloat(cur)) : (isWork ? 'по плану' : '—'));
   const hVal = (cur != null && cur !== '' && cur !== 'x') ? esc(String(cur)) : '';
-  const workKinds = shiftKinds.filter(k => !isRest(k.code) && k.code !== 'custom');   // смены-замены: только рабочие типы
+  const workKinds = kindsFor(e, c?.plan_kind).filter(k => !isRest(k.code) && k.code !== 'custom');   // смены-замены: только рабочие типы
   const kindOpts = workKinds.map(k => `<option value="${k.code}">${esc(k.label)}</option>`).join('');
   showModal(`${personHead(e, `${day} ${esc(periodLabel(curPeriod))} · факт · ${planLine}`)}
     <div class="fact-opts">
@@ -4111,7 +4120,7 @@ function scheduleTemplateDialog(empId) {
   const nd = daysInMonth(curPeriod);
   // Сколько дней месяца уже прошло: их шаблон трогает только по явной галочке.
   const pastN = (() => { let n = 0; for (let d = 1; d <= nd; d++) if (cellDate(d) < mskTodayISO()) n++; return n; })();
-  const kinds = shiftKinds.filter(k => !isRest(k.code) && k.code !== 'custom');
+  const kinds = kindsFor(e).filter(k => !isRest(k.code) && k.code !== 'custom');
   const kopts = kinds.map(k => `<option value="${k.code}"${k.code === 'day' ? ' selected' : ''}>${esc(k.label)}</option>`).join('');
   const pats = [['5/2', '5/2 — Пн-Пт работа, Сб-Вс выходные'], ['2/2', '2/2 — два через два'], ['3/3', '3/3 — три через три'], ['sutki3', 'Сутки/3 — сутки, потом 3 выходных'], ['every', 'Каждый день одинаково']];
   showModal(`${personHead(e, `Заполнить весь ${esc(periodLabel(curPeriod))} по шаблону · потом можно поправить руками`)}
