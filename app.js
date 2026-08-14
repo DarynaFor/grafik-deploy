@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=189';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=190';
 
 const $ = id => document.getElementById(id);
 
@@ -398,9 +398,9 @@ const NAV = [
   { s: 'archive', i: 'users', l: 'Архив', ownerOnly: true },
   // isStaff, а не canEditCards: пункт вёл бы бухгалтера на экран, до которого он
   // всё равно не доходит — enter() уводит кассы на заглушку раньше загрузки.
-  { s: 'employees', i: 'users', l: 'Сотрудники', show: () => isStaff() },
-  { s: 'schedule', i: 'cal', l: 'График', staffOnly: true },
-  { s: 'payroll', i: 'coin', l: 'Расчёт', staffOnly: true },
+  { s: 'employees', i: 'users', l: 'Сотрудники', show: () => worksWithPayroll() },   // бухгалтер смотрит, править не может (127)
+  { s: 'schedule', i: 'cal', l: 'График', show: () => worksWithPayroll() },
+  { s: 'payroll', i: 'coin', l: 'Расчёт', show: () => worksWithPayroll() },
   { s: 'rates', i: 'coin', l: 'Ставки', ownerOnly: true },
   // Только owner+operator: RLS на patient_payment (pp_sel) пускает именно их,
   // касса оплаты пациентов не видит — это не её участок.
@@ -446,6 +446,7 @@ const IMPORT_KINDS_BY_ROLE = {
   owner:    ['otpusk', 'otpusk_cash', 'otpusk_nach', 'card_avans', 'card_rasch', 'card_uvol', 'cash_avans', 'cash', 'premia'],
   operator: ['otpusk', 'otpusk_cash', 'otpusk_nach', 'cash_avans', 'cash'],
   ceo:      ['otpusk', 'otpusk_cash', 'otpusk_nach', 'card_avans', 'card_rasch', 'card_uvol', 'cash_avans', 'cash', 'premia'],
+  cashier1: ['card_avans', 'card_rasch', 'card_uvol', 'bolnich', 'otpusk', 'otpusk_nach'],   // бухгалтер: только на карту (127)
 };
 // СИНОНИМИЧНЫЕ виды: один и тот же документ можно залить дважды под разными
 // видами, и дедуп базы этого НЕ поймает — он ключуется по виду (migrations/046 §6).
@@ -637,8 +638,8 @@ function parseHash() {
 // Карточка в меню не значится — её пускаем тем же условием, что и список
 // сотрудников. Заглушка «скоро» — наоборот, только тем, у кого нет экранов.
 function allowedScreen(s) {
-  if (s === 'card') return isStaff();
-  if (s === 'soon') return !isStaff();
+  if (s === 'card') return worksWithPayroll();
+  if (s === 'soon') return !worksWithPayroll();
   return navItems().some(n => n.s === s);
 }
 function hashFor(screen) {
@@ -833,7 +834,7 @@ async function loadPresence() {
   try { presenceRows = await store.listPresence(); } catch (e) { presenceRows = []; }
   return presenceRows;
 }
-const ROLE_LABELS = { owner: 'владелец', operator: 'оператор', cashier1: 'касса · Бух 1', cashier2: 'карта / 1С · Бух 2', ceo: 'директор' };
+const ROLE_LABELS = { owner: 'владелец', operator: 'оператор', cashier1: 'бухгалтер', cashier2: 'карта / 1С · Бух 2', ceo: 'директор' };
 const isStaff = () => ['owner', 'operator', 'ceo'].includes(store.me()?.role);   // кто работает с карточками
 /* Кто выдаёт наличные из рук в руки (085). Кассы (cashier1/2) в списке есть, но
    СЕГОДНЯ до окна не доходят: «Расчёт» — staffOnly, а v_month_total им отдаёт
@@ -843,7 +844,10 @@ const isStaff = () => ['owner', 'operator', 'ceo'].includes(store.me()?.role);  
    знает; но человека, которого роли не видно, нет и в payrollRows, а окно
    открывается только оттуда. Последнее слово за базой: payout_give спрашивает
    can_pay_out и откажет, что бы ни решил экран. */
-const canPayOut = () => ['owner', 'operator', 'ceo', 'cashier1', 'cashier2'].includes(store.me()?.role);
+/* Кто выдаёт наличные из рук в руки (085). Бухгалтера тут НЕТ: Дарина 12.08 —
+   «вона не каса, не буде видавати, тому цей механізм у неї можна прибрати».
+   Она ведёт только официальные выплаты НА КАРТУ; наличные ей и в базе не видны. */
+const canPayOut = () => ['owner', 'operator', 'ceo'].includes(store.me()?.role);
 // График ведёт оператор (Алёна) с переданных головами отделений листов. Владелец
 // (Милена) тоже может править — чтобы протестировать и объяснить Алёне, а также
 // поправить как надзор (решение Дарины 27.07: раньше владелец был только-просмотр).
@@ -865,6 +869,13 @@ const canEditSchedule = () => ['operator', 'owner', 'ceo'].includes(store.me()?.
 const canEditCards   = () => ['owner', 'ceo', 'operator'].includes(store.me()?.role);
 const canCreateCards = () => ['owner', 'ceo'].includes(store.me()?.role);
 const canEditRates   = () => ['owner', 'ceo'].includes(store.me()?.role);
+/* Бухгалтер: официальные выплаты НА КАРТУ (127). Видит людей, график, расчёт и
+   заработок — но правит только свои карточные суммы. Отдельный предикат, а не
+   isStaff: у неё другой набор экранов, и складывать их в одну кучу — верный
+   способ однажды открыть ей лишнее. */
+const isBuh = () => store.me()?.role === 'cashier1';
+/* Кто вообще работает с расчётом и графиком (смотрит или правит). */
+const worksWithPayroll = () => isStaff() || isBuh();
 async function enter() {
   const me = store.me(); if (!me) return;
   document.body.classList.add('authed');
@@ -873,7 +884,10 @@ async function enter() {
   $('whoRole').className = 'rolepill ' + me.role;
   $('modeTag').textContent = store.mode === 'demo' ? 'демо · этот браузер' : 'спринт 1';
   // Кассиры (Бух 1/2): их раздел (касса / карта-1С) — следующий спринт. Показываем понятную заглушку.
-  if (!isStaff()) {
+  // Бухгалтер (127) идёт дальше вместе со staff: у неё есть свои экраны — график,
+  // расчёт, отпуска, импорт. Заглушка остаётся только для cashier2: его окно
+  // ещё не сделано.
+  if (!worksWithPayroll()) {
     renderNav();
     $('soonIc').innerHTML = ICONS.lock ? `<svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="7" width="18" height="13" rx="3"/><path d="M3 11h18M8 3.5V7"/></svg>` : '';
     const cash = me.role === 'cashier1';
@@ -4537,9 +4551,14 @@ const moneyKindLabel = k => (MONEY_KINDS.find(x => x[0] === k) || [k, k])[1];
 // которую она сама же и выдаёт (себе в том числе).
 // СЕО (035) вправе вносить всё, включая премию, — раньше он проваливался в
 // `return []` и получал ПУСТОЙ список видов при видимой форме «Внести деньги».
+/* Бухгалтеру — ровно карточные виды, те же, что пускает ml_ins (127). Список
+   держим в согласии с базой: разойдётся — она увидит вид в списке и получит
+   отказ при сохранении. */
+const BUH_KINDS = ['card_avans', 'card_rasch', 'card_uvol', 'bolnich', 'otpusk', 'otpusk_nach'];
 function moneyKindsFor(role) {
   if (role === 'owner' || role === 'ceo') return MONEY_KINDS;
   if (role === 'operator') return MONEY_KINDS.filter(k => k[0] !== 'premia');
+  if (role === 'cashier1') return MONEY_KINDS.filter(k => BUH_KINDS.includes(k[0]));
   return [];
 }
 const rub = kop => fmt(Math.round((kop || 0) / 100));
@@ -4666,6 +4685,18 @@ function drawPayroll(filter = '') {
   // карта → наличка → отпускные → премия → остаток.
   // «Отпуск. начисл.» — НЕ выплата, а начисление: справочно, ни в одну сумму
   // не входит (migrations/046).
+  // Бухгалтеру объясняем границу прямо на экране: она видит официальную часть,
+  // а «Осталось выдать» без наличных посчитать нельзя — иначе она бы гадала,
+  // почему там прочерк.
+  /* Дарина 12.08: «нехай бачить повні розрахунки з готівкою, щоб вона не
+     переплатила на карту і не створила компанії мінус». Видит всё, как все;
+     правит только карточные виды. Говорим это на экране, чтобы граница была
+     понятна с первого взгляда, а не выяснялась отказом при сохранении. */
+  const buhNote = isBuh()
+    ? `<div class="readonly-note" style="margin-bottom:12px">${ICONS.lock} Вы видите расчёт целиком — включая наличные,
+        чтобы не переплатить на карту. Вносить и править можете только выплаты <b>на карту</b>:
+        аванс, расчёт, отпускные, больничные. Каждая правка идёт в журнал.</div>`
+    : '';
   const head = `<thead><tr>
     <th class="pw-name">Сотрудник</th><th>Начисление</th><th class="num">Норма</th><th class="num">Факт</th><th class="num">Сумма</th>
     <th class="num sep">Зарплата</th><th class="num pw-earned">Всего заработано</th><th class="num">Аванс на карту</th><th class="num">ЗП на карту</th><th class="num pw-cardtot">Всего на карту</th><th class="num pw-carry">С прошлого мес.</th><th class="num pw-byplan" title="Сколько пришлось бы выдать, если бы все дни по графику зачлись как отработанные. Для сравнения — платить по этой сумме нельзя">По плану</th><th class="num pw-pay">Осталось выдать</th><th class="num pw-fcast" title="Сколько выйдет к концу месяца: подтверждённые выходы + оставшиеся дни по графику">К концу месяца</th><th class="num">Расчёт на карту</th><th class="num">Аванс нал.</th><th class="num">Наличка</th>
@@ -4821,7 +4852,7 @@ function drawPayroll(filter = '') {
       <td class="num pw-byplan"></td><td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td><td class="num pw-fcast"></td>
       <td colspan="10"></td></tr>` : ''}</tfoot>`;
 
-  $('payrollTable').innerHTML = `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
+  $('payrollTable').innerHTML = buhNote + `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
   stickFooterRows($('payrollTable'));
   $('payrollTable').querySelectorAll('.pw-row').forEach(tr => {
     tr.onclick = () => payrollDialog(+tr.dataset.id);
