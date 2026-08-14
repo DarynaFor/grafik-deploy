@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=196';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=197';
 
 const $ = id => document.getElementById(id);
 
@@ -883,7 +883,12 @@ async function enter() {
   $('whoName').textContent = me.name;
   $('whoRole').textContent = ROLE_LABELS[me.role] || me.role;
   $('whoRole').className = 'rolepill ' + me.role;
-  $('modeTag').textContent = store.mode === 'demo' ? 'демо · этот браузер' : 'спринт 1';
+  // На проде плашки нет вовсе: «спринт 1» ничего не говорило людям и только
+  // занимало место в шапке (Дарина 12.08: «прибрати усюди в усіх акаунтах»).
+  // В демо она ОБЯЗАНА остаться: спутать демо-браузер с боевой базой — дорого.
+  const md = $('modeTag');
+  md.textContent = store.mode === 'demo' ? 'демо · этот браузер' : '';
+  md.hidden = store.mode !== 'demo';
   // Кассиры (Бух 1/2): их раздел (касса / карта-1С) — следующий спринт. Показываем понятную заглушку.
   // Бухгалтер (127) идёт дальше вместе со staff: у неё есть свои экраны — график,
   // расчёт, отпуска, импорт. Заглушка остаётся только для cashier2: его окно

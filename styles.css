@@ -86,7 +86,7 @@ body.authed .app{display:grid}
 body.authed .login-stage{display:none}
 .topbar{grid-area:top;display:flex;align-items:center;gap:14px;padding:0 20px;background:var(--bar);backdrop-filter:var(--blur);border-bottom:1px solid var(--glass-bd);z-index:20}
 .logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:17px;letter-spacing:-.02em}
-.logo .mark{width:26px;height:26px;border-radius:9px;background:linear-gradient(140deg,var(--teal),var(--green));display:grid;place-items:center;color:#0e1a12;font-weight:800;font-size:14px}
+.logo .mark{width:26px;height:26px;border-radius:9px;background:linear-gradient(140deg,var(--teal),var(--green));display:grid;place-items:center;flex:0 0 auto;color:#0e1a12;font-weight:800;font-size:14px}
 .logo small{font-size:9px;letter-spacing:.12em;color:var(--ink-3);text-transform:uppercase;font-weight:700;padding:3px 8px;border:1px solid var(--hair);border-radius:var(--r-pill)}
 .top-spacer{flex:1}
 .whoami{display:flex;align-items:center;gap:10px;font-size:13.5px;font-weight:600}
