@@ -1273,3 +1273,24 @@ tr.pw-total.pw-over{z-index:5}
      шапку. */
   .logo small{white-space:nowrap;font-size:9.5px;max-width:84px;overflow:hidden;text-overflow:ellipsis}
 }
+
+/* ── Свой выбор месяца (вместо <input type="month">) ─────────────────────────
+   Родное поле показывало «August 2026»: язык оно берёт из настроек телефона.
+   Кнопка + всплывающая панель с годом и двенадцатью месяцами по-русски. */
+.monthpick{text-align:left;cursor:pointer;font-weight:600}
+.imp-month{position:relative}
+.mp-pop{position:absolute;z-index:40;top:calc(100% + 6px);left:0;min-width:270px;
+  background:var(--surf-2);border:1px solid var(--glass-bd);border-radius:var(--r-ctl);
+  box-shadow:0 18px 40px -14px rgba(0,0,0,.35);padding:12px}
+.mp-year{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-size:15px}
+.mp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.mp-m{padding:10px 6px;border-radius:10px;border:1px solid transparent;background:var(--fill-2);
+  color:var(--ink);font:inherit;font-size:13px;cursor:pointer;transition:.12s}
+.mp-m:hover{background:var(--fill-hi)}
+.mp-m.on{background:var(--green);color:var(--on-green);font-weight:700}
+/* На телефоне панель во всю ширину поля и с крупными кнопками — месяц выбирают
+   пальцем, а не мышью. */
+@media (max-width:767px){
+  .mp-pop{left:0;right:0;min-width:0}
+  .mp-m{padding:13px 6px;font-size:14px}
+}

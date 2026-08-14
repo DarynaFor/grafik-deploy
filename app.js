@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=188';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=189';
 
 const $ = id => document.getElementById(id);
 
@@ -1956,7 +1956,8 @@ function renderImport() {
       </div>
       <div class="imp-field imp-month">
         <label>За месяц</label>
-        <input type="month" id="impMonth" value="${importState.period}">
+        <button class="input monthpick" id="impMonth" type="button" aria-haspopup="true">${esc(periodLabel(importState.period))}</button>
+        <div class="mp-pop" id="impMonthPop" hidden></div>
       </div>
       <div class="imp-field">
         <label>Список из документа — вставьте текстом или загрузите файл</label>
@@ -1975,7 +1976,11 @@ function renderImport() {
   $('importBody').querySelectorAll('[data-ik]').forEach(b => b.onclick = () => {
     importState.kind = b.dataset.ik; importState.parsed = false; importState.rows = []; renderImport();
   });
-  $('impMonth').onchange = e => { importState.period = e.target.value; if (importState.parsed) importLoadExisting().then(renderImportPreview); };
+  monthPicker($('impMonth'), $('impMonthPop'), importState.period, per => {
+    importState.period = per;
+    $('impMonth').textContent = periodLabel(per);
+    if (importState.parsed) importLoadExisting().then(renderImportPreview);
+  });
   $('impParse').onclick = async () => { parseImport(); await importLoadExisting(); renderImportPreview(); };
   $('impFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; importFromFile(f); };   // value='' → тот же файл повторно перечитается
   applyIcons($('importBody'));
@@ -2705,6 +2710,39 @@ function plural(n, one, few, many) {
 // на неожиданном входе возвращаем как есть, а не режем строку вслепую.
 const dm = d => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || '')); return m ? `${m[3]}.${m[2]}.${m[1].slice(2)}` : String(d || ''); };
 const periodLabel = p => { const [y, m] = p.split('-').map(Number); return MONTHS_RU[m] + ' ' + y; };
+/* СВОЙ выбор месяца вместо <input type="month">.
+   Дарина 12.08: «зроби свій вибір місяця». Родное поле берёт язык из настроек
+   ТЕЛЕФОНА, а не страницы: на телефонах клиники месяц показывался как
+   «August 2026». Ни lang у страницы, ни locale на него не влияют — чинится
+   только заменой элемента.
+   Наружу отдаём тот же 'YYYY-MM', чтобы ничего вокруг не переписывать. Названия
+   берём из MONTHS_RU — из того же массива, что и весь остальной интерфейс,
+   иначе однажды разъедутся. */
+function monthPicker(btn, pop, initial, onPick) {
+  let cur = initial, year = +initial.split('-')[0];
+  const close = () => { pop.hidden = true; document.removeEventListener('click', away, true); };
+  const away = e => { if (!pop.contains(e.target) && e.target !== btn) close(); };
+  const draw = () => {
+    pop.innerHTML = `<div class="mp-year">
+        <button class="mn-btn" type="button" data-y="-1" aria-label="Год назад">‹</button>
+        <b>${year}</b>
+        <button class="mn-btn" type="button" data-y="1" aria-label="Год вперёд">›</button>
+      </div>
+      <div class="mp-grid">${MONTHS_RU.slice(1).map((n, i) => {
+        const per = year + '-' + String(i + 1).padStart(2, '0');
+        return `<button class="mp-m${per === cur ? ' on' : ''}" type="button" data-p="${per}">${esc(n)}</button>`;
+      }).join('')}</div>`;
+    pop.querySelectorAll('[data-y]').forEach(b => b.onclick = () => { year += +b.dataset.y; draw(); });
+    pop.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { cur = b.dataset.p; close(); onPick(cur); });
+  };
+  btn.onclick = () => {
+    if (!pop.hidden) return close();
+    year = +cur.split('-')[0];
+    draw(); pop.hidden = false;
+    document.addEventListener('click', away, true);
+  };
+}
+
 const daysInMonth = p => { const [y, m] = p.split('-').map(Number); return new Date(y, m, 0).getDate(); };
 // 1-е число СЛЕДУЮЩЕГО месяца, 'YYYY-MM-DD'. Нужен, чтобы сравнивать период со
 // ставками так же, как это делает база: `valid_from < period + interval '1 mon'`.
