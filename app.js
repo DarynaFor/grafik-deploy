@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=190';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=191';
 
 const $ = id => document.getElementById(id);
 
@@ -1174,7 +1174,7 @@ function partialMonthNote(e) {
    Правки — те же функции, что и в окне «Расчёта» (editPayout/editSalary), а не
    их копии: две реализации правки денег разошлись бы на первой же доработке. */
 async function loadCardPanel(id) {
-  const box = $('cardPanel'); if (!box || !isStaff()) return;
+  const box = $('cardPanel'); if (!box || !worksWithPayroll()) return;
   const per = payPeriod || nowPeriod();
   box.innerHTML = `<div class="card cardpad" style="margin-top:16px"><span class="muted small">загружаем расчёт…</span></div>`;
   let r, lines, norms, sched;
@@ -1429,7 +1429,7 @@ async function loadCardNotes(id) {
    показывали разное. Ошибку не выводим: деньги здесь — дополнение к карточке,
    а не её смысл; если не загрузились, карточка должна остаться рабочей. */
 async function loadCardMoney(id) {
-  const box = $('cardMoney'); if (!box || !isStaff()) return;
+  const box = $('cardMoney'); if (!box || !worksWithPayroll()) return;
   const per = payPeriod || nowPeriod();
   try {
     const r = await store.getPayrollRow(id, per);
@@ -3284,7 +3284,7 @@ async function presetDialog(x) {
 }
 
 async function renderSchedule() {
-  if (!isStaff() || !$('scheduleGrid')) return;
+  if (!worksWithPayroll() || !$('scheduleGrid')) return;
   if (!curPeriod) curPeriod = nowPeriod();
   // Гасим сетку при СМЕНЕ месяца. Пока грузится новый, на экране висели клетки
   // старого — а cellDate() и pastDay() уже отдают НОВЫЙ месяц, и тап по такой
@@ -3321,7 +3321,7 @@ async function renderSchedule() {
 }
 function drawSchedule() {
   paintMonthNav();
-  if (!isStaff() || !$('scheduleGrid')) return;
+  if (!worksWithPayroll() || !$('scheduleGrid')) return;
   // Тот же замок, что у drawPayroll: в scheduleRows лежит месяц schedShown. Пока
   // грузится ДРУГОЙ — рисовать нечем, и без этой строки поиск, выбор отделения или
   // галочка сортировки нарисовали бы клетки старого месяца под шапкой нового, а
@@ -4579,7 +4579,7 @@ let payrollMarked = [];   // сводка «подтверждено факто�
 let payrollNorms = new Map();
 
 async function renderPayroll(filter = '') {
-  if (!isStaff()) { $('payrollTable').innerHTML = ''; return; }
+  if (!worksWithPayroll()) { $('payrollTable').innerHTML = ''; return; }
   if (!payPeriod) payPeriod = nowPeriod();
   $('pLabel').textContent = periodLabel(payPeriod);
   const seq = ++payrollSeq;
@@ -5303,7 +5303,9 @@ async function payrollDialog(empId) {
   // вопрос «откуда взялась эта сумма» не отвечала. Один источник — модалка и
   // ведомость больше не могут разойтись.
   const my = linesFor(r);
-  const canEdit = isStaff();
+  // Бухгалтеру правка денег НУЖНА — она вносит и исправляет свои карточные суммы.
+  // Какие именно виды ей доступны, решает moneyKindsFor (127), а не этот флаг.
+  const canEdit = worksWithPayroll();
   // Ставки берём ПО ПЕРИОДУ ведомости, а не «действующие сейчас»: база в
   // v_month_salary (036 §pctr) спрашивает перекрытие с месяцем. Иначе у врача с
   // закрытой процентной строкой выручку за прошлый месяц было бы не ввести, хотя
