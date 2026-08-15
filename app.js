@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=202';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=203';
 
 const $ = id => document.getElementById(id);
 
@@ -964,12 +964,16 @@ async function enter() {
 // Кастомный дропдаун «в нашем стиле»: нативный <select> нельзя стилизовать — попап с
 // опциями рисует ОС (белый, чужой теме). host — div.cselect; opts — [{v,label}]; onPick(v).
 function makeDropdown(host, opts, cur, onPick) {
-  const curOpt = opts.find(o => o.v === cur) || opts[0];   // если сохранённого значения нет в опциях — дефолт (метка и value не разойдутся)
+  // head:true — заголовок группы, а не вариант: он не выбирается и не может стать
+  // текущим. Без этой оговорки первый заголовок молча становился бы значением.
+  const curOpt = opts.find(o => !o.head && o.v === cur) || opts.find(o => !o.head) || opts[0];
   const curLabel = curOpt.label;
   host.classList.add('cselect');
   host.dataset.value = curOpt.v;
   host.innerHTML = `<button class="cselect-trigger" type="button"><span class="cselect-label">${esc(curLabel)}</span>${ICONS.chevD}</button>
-    <div class="cselect-panel" role="listbox">${opts.map(o => `<div class="cselect-opt${o.v === cur ? ' sel' : ''}${o.cls ? ' ' + o.cls : ''}" role="option" data-v="${esc(o.v)}">${esc(o.label)}</div>`).join('')}</div>`;
+    <div class="cselect-panel" role="listbox">${opts.map(o => o.head
+      ? `<div class="cselect-head">${esc(o.label)}</div>`
+      : `<div class="cselect-opt${o.v === cur ? ' sel' : ''}${o.cls ? ' ' + o.cls : ''}" role="option" data-v="${esc(o.v)}">${esc(o.label)}</div>`).join('')}</div>`;
   host.querySelector('.cselect-trigger').onclick = e => {
     e.stopPropagation();
     const willOpen = !host.classList.contains('open');
@@ -1398,6 +1402,12 @@ function openCard(id, replace) {
       <div style="flex:1;min-width:200px"><h1 style="font-size:23px;font-weight:700">${esc(e.fio)}</h1><p class="muted" style="margin-top:2px">${esc(specName(e.specialty_id))}</p></div>
       <div id="cardMoney" class="card-money"></div>
       ${isStaff() ? `<button class="btn btn-ghost btn-sm" id="cardToPay">Расчёт</button><button class="btn btn-ghost btn-sm" id="cardToSched">График</button>` : ''}
+      <!-- «История» — тот же журнал, сразу отфильтрованный по этому человеку.
+           Дарина 14.08: «і в історії розрахунків окремої людини видно ж буде ці
+           зміни? чому була одна сума а потім змінилась?» Данные для ответа были
+           всегда (каждая запись журнала несёт employee_id), не хватало дороги:
+           такая кнопка стояла только на «Архиве». -->
+      ${isOwner() ? `<button class="btn btn-ghost btn-sm" id="cardHist" title="Кто и когда менял этого человека — ставки, график, деньги, переносы">История</button>` : ''}
       ${canEditCards() ? `<button class="btn btn-ghost btn-sm" id="editEmpBtn">${ICONS.edit}Редактировать</button><button class="btn btn-ghost btn-sm" id="archiveEmpBtn">${e.status === 'active' ? 'В архив' : 'Из архива'}</button>` : `<span class="tag">${ICONS.lock} правит владелец</span>`}
     </div></div>
     <div class="grid2">
@@ -1422,6 +1432,8 @@ function openCard(id, replace) {
         <button class="btn btn-primary btn-sm" id="noteAdd">${ICONS.plus}Добавить</button>
       </div>` : ''}
     </div>`;
+  { const h = $('cardHist');
+    if (h) h.onclick = () => { jWho = (String(e.fio || '').split(' ')[0] || '').trim(); jAct = jFrom = jTo = ''; journalFilter = 'all'; go('journal'); renderJournal(true); }; }
   $('cardBody').dataset.emp = id;      // чья карточка сейчас открыта — чтобы
   applyIcons($('cardBody'));           // поздний ответ по деньгам не лёг в чужую
   const eb = $('editEmpBtn'); if (eb) eb.onclick = () => employeeForm(e);
@@ -4608,6 +4620,32 @@ const MONEY_KINDS = [
   ['pay_other', 'Прочая выплата (алименты, займ…)'],
 ];
 const moneyKindLabel = k => (MONEY_KINDS.find(x => x[0] === k) || [k, k])[1];
+/* Виды денег ГРУППАМИ — Дарина 14.08: «наведи тут порядок, бо зараз дуже все в
+   перемішку, не логічно».
+   Группы и порядок внутри — РОВНО те же, что у строк расчёта прямо над этим
+   полем («Заработано» → «На карту» → «Дополнительные поступления»). Раньше
+   список шёл сплошняком в третьем, ни на что не похожем порядке: наличные,
+   аванс наличными, отпускные наличными, премия, аванс на карту… Человек читает
+   расчёт сверху вниз, а потом ищет тот же вид в списке, устроенном иначе. */
+const MONEY_GROUPS = [
+  ['Заработано — увеличивает к выдаче', ['premia', 'otpusk_nach', 'bolnich_nach', 'nach_other']],
+  ['На карту и удержания — уменьшает',  ['card_avans', 'card_rasch', 'card_uvol', 'otpusk', 'bolnich', 'uderz_other', 'pay_other']],
+  ['Наличными — уменьшает',             ['cash_avans', 'cash', 'otpusk_cash']],
+];
+/* Опции для выпадашки: заголовок группы + её виды, но только те, что роли
+   реально разрешены (moneyKindsFor). Пустая группа не рисуется вовсе — иначе у
+   Алёны висел бы заголовок «Заработано» без единой строки под ним. */
+function moneyKindOpts(role) {
+  const allow = new Map(moneyKindsFor(role));
+  const out = [];
+  for (const [title, keys] of MONEY_GROUPS) {
+    const mine = keys.filter(k => allow.has(k));
+    if (!mine.length) continue;
+    out.push({ head: true, label: title, v: '' });
+    for (const k of mine) out.push({ v: k, label: allow.get(k) });
+  }
+  return out;
+}
 // Показываем только то, что роль реально может записать: политика ml_ins
 // запрещает оператору премию — кто считает, тот не премирует. Раньше список
 // предлагал все шесть, и Алёна упиралась в отказ базы после ввода.
@@ -4636,6 +4674,8 @@ const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.car
 // считается ВЫДАННОЕ безналом, включая отпускные и больничные.
 const cardDelta = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
 let payrollRows = [], payrollLines = [], payrollSeq = 0, payrollShown = null;
+// Остаток прошлого месяца — чтобы кнопка переноса знала про устаревшие ещё до нажатия.
+let payrollPrev = null;
 let payrollMarked = [];   // сводка «подтверждено фактом» по месяцу (113)
 // Норма часов месяца на «Расчёте» — та же v_month_norm, что и в графике.
 // Нужна, чтобы шапка окна человека говорила часами, а не днями: оклад теперь
@@ -4666,11 +4706,16 @@ async function renderPayroll(filter = '') {
   // в него, а ввод суммы записался бы туда же.
   let rows, lines;
   let norms = [], marked = [];
-  try { [rows, lines, norms, marked] = await Promise.all([store.listPayroll(payPeriod), store.listPayrollLines(payPeriod),
+  // Остаток прошлого месяца грузим ВМЕСТЕ с ведомостью, чтобы кнопка «С прошлого
+  // месяца» могла сразу сказать, есть ли устаревшие переносы. Без этого узнать
+  // об этом можно было только нажав кнопку — то есть случайно.
+  let prevRem = null;
+  try { [rows, lines, norms, marked, prevRem] = await Promise.all([store.listPayroll(payPeriod), store.listPayrollLines(payPeriod),
     store.listMonthNorms(payPeriod).catch(e => { console.warn('listMonthNorms:', e); return []; }),
     // Сколько уже подтверждено отметкой факта (113). Не критично: справочная
     // строка под итогом, ведомость без неё работает.
-    store.listMonthMarked(payPeriod).catch(e => { console.warn('listMonthMarked:', e); return []; })]); }   // норма не критична: ведомость должна открыться и без неё
+    store.listMonthMarked(payPeriod).catch(e => { console.warn('listMonthMarked:', e); return []; }),
+    store.listPrevRemainder(payPeriod).catch(e => { console.warn('listPrevRemainder:', e); return null; })]); }   // норма не критична: ведомость должна открыться и без неё
   // Месяц не загрузился — откатываем payPeriod к тому, что РЕАЛЬНО лежит в
   // payrollRows (они при ошибке не обновились). Без отката любой следующий
   // drawPayroll — а его зовёт просто ввод в поиске и смена отделения — нарисовал
@@ -4693,6 +4738,7 @@ async function renderPayroll(filter = '') {
   payrollMarked = marked || [];
   payrollRows = rows; payrollLines = lines;
   payrollNorms = new Map((norms || []).map(n => [n.employee_id, n]));
+  payrollPrev = prevRem;
   drawPayroll(filter);
   if (wrap) { wrap.scrollTop = keepTop; wrap.scrollLeft = keepLeft; }
 }
@@ -4928,6 +4974,15 @@ function drawPayroll(filter = '') {
     const cb = $('carryPrev');
     if (cb) {
       cb.hidden = !isStaff();
+      // Подпись говорит, ЧТО не так, ещё до нажатия. Иначе про устаревший перенос
+      // можно было узнать только нажав кнопку — то есть случайно.
+      if (payrollPrev) {
+        const st = carryState(payrollPrev.all || payrollPrev.rows);
+        const n = st.stale.length + st.extra.length;
+        cb.textContent = n ? `С прошлого месяца · ${n} ${plural(n, 'устарел', 'устарели', 'устарели')}` : 'С прошлого месяца';
+        cb.classList.toggle('cp-stale', n > 0);
+        cb.title = n ? 'Прошлый месяц поправили после переноса — суммы разошлись' : 'Перенести остатки прошлого месяца';
+      }
       cb.onclick = () => carryFromPrev(payPeriod, () => renderPayroll($('payrollSearch')?.value || ''));
     }
   }
@@ -5205,30 +5260,71 @@ async function undoAllPayouts(empId, per, onDone) {
    Дарина как раз вписывала суммы, пока я работал, — и записанный заранее перенос
    молча устарел бы. Кнопка даёт момент, когда человек решает «прошлый месяц
    готов». Уже проставленные вручную переносы не трогаем. */
+/* Что кнопка «С прошлого месяца» должна сделать ПРЯМО СЕЙЧАС. Три случая, а не
+   один — Дарина 14.08: «якщо перенесли мінуса раніше, а потім ще щось виправили
+   і цифра змінилась за минулий місяць? треба щоб був такий механізм».
+
+   Перенос — это СНИМОК: сумма берётся в момент нажатия и дальше живёт сама.
+   Поправят прошлый месяц задним числом — снимок разойдётся с правдой, и раньше
+   этого не видел никто: кнопка брала только тех, у кого переноса ещё нет, и на
+   второе нажатие честно отвечала «все переносы уже проставлены».
+
+     новые     — в минусе, переноса нет            → поставить
+     устарели  — перенос есть, но сумма другая     → обновить
+     лишние    — перенос есть, а минуса больше нет → снять
+
+   Считаем по `all` (все люди прошлого месяца), а не по `rows` (только должники):
+   человек, вышедший из минуса, в rows не попадёт вовсе — а его перенос как раз и
+   надо снять. */
+function carryState(prevAll) {
+  const prev = new Map((prevAll || []).map(x => [x.employee_id, x]));
+  const fresh = [], stale = [], extra = [];
+  for (const x of (prevAll || [])) {
+    const cur = payrollRows.find(p => p.employee_id === x.employee_id)?.carry_kop || 0;
+    if (x.delta_kop < 0 && !cur) fresh.push({ ...x, was: 0 });
+    else if (cur && x.delta_kop < 0 && cur !== x.delta_kop) stale.push({ ...x, was: cur });
+  }
+  // Лишние ищем от ПЕРЕНОСОВ, а не от прошлого месяца: у человека может вообще
+  // не быть строки в прошлом месяце (уволен, заведён позже), а перенос стоять.
+  for (const p of payrollRows) {
+    if (!p.carry_kop) continue;
+    const x = prev.get(p.employee_id);
+    if (!x || x.delta_kop >= 0) extra.push({ employee_id: p.employee_id, fio: p.fio, delta_kop: 0, was: p.carry_kop });
+  }
+  return { fresh, stale, extra };
+}
 async function carryFromPrev(per, onDone) {
   let r;
   try { r = await store.listPrevRemainder(per); }
   catch (e) { toast(e.message || e, true); return; }
-  const have = new Set(payrollRows.filter(x => x.carry_kop).map(x => x.employee_id));
-  const fresh = r.rows.filter(x => !have.has(x.employee_id));
+  const { fresh, stale, extra } = carryState(r.all || r.rows);
   const sum = fresh.reduce((a, x) => a + x.delta_kop, 0);
-  if (!r.rows.length) { toast(`За ${periodLabel(r.prev)} переплат нет — переносить нечего`); return; }
-  if (!fresh.length) { toast('Все переносы за этот месяц уже проставлены'); return; }
-  const list = fresh.slice(0, 12).map(x =>
-    `<div class="me-row"><span class="muted">${esc(x.fio)}</span><b class="money neg">${rub(x.delta_kop)} ₽</b></div>`).join('');
-  showModal2(`<h3>Перенести остатки за ${esc(periodLabel(r.prev))}?</h3>
-    <div class="msub">${fresh.length} чел на <b>${rub(Math.abs(sum))} ₽</b> — эта сумма уменьшит «Осталось выдать»
-      за ${esc(periodLabel(per))}${have.size ? `. Уже проставленные вручную (${have.size}) не трогаем` : ''}.</div>
-    <div class="rc-diff" style="max-height:220px;overflow:auto">${list}${
-      fresh.length > 12 ? `<div class="muted small">…и ещё ${fresh.length - 12}</div>` : ''}</div>
+  if (!r.rows.length && !stale.length && !extra.length) { toast(`За ${periodLabel(r.prev)} переплат нет — переносить нечего`); return; }
+  if (!fresh.length && !stale.length && !extra.length) { toast('Все переносы за этот месяц уже проставлены и совпадают'); return; }
+  const row = (fio, txt, cls) => `<div class="me-row"><span class="muted">${esc(fio)}</span><b class="money${cls}">${txt}</b></div>`;
+  const block = (title, arr, fn) => arr.length
+    ? `<div class="me-cap" style="margin-top:10px">${title} · ${arr.length}</div>`
+      + arr.slice(0, 10).map(fn).join('')
+      + (arr.length > 10 ? `<div class="muted small">…и ещё ${arr.length - 10}</div>` : '') : '';
+  showModal2(`<h3>Перенос остатков за ${esc(periodLabel(r.prev))}</h3>
+    <div class="msub">${fresh.length ? `Новых: <b>${fresh.length}</b> на ${rub(Math.abs(sum))} ₽. ` : ''}${
+      stale.length ? `<b class="money neg">Устарели: ${stale.length}</b> — прошлый месяц поправили после переноса. ` : ''}${
+      extra.length ? `<b class="money neg">Лишних: ${extra.length}</b> — человек больше не в минусе. ` : ''}</div>
+    <div class="rc-diff" style="max-height:260px;overflow:auto">
+      ${block('Поставить', fresh, x => row(x.fio, rub(x.delta_kop) + ' ₽', ' neg'))}
+      ${block('Обновить', stale, x => row(x.fio, `${rub(x.was)} → ${rub(x.delta_kop)} ₽`, ' neg'))}
+      ${block('Снять', extra, x => row(x.fio, `${rub(x.was)} → —`, ''))}
+    </div>
+    <div class="msub" style="margin-top:8px">Правка и снятие уже учтённого переноса пишутся в журнал <b>красным</b>.</div>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="cpNo">Отмена</button>
-      <button class="btn btn-primary btn-sm" id="cpYes">${ICONS.check}Перенести</button></div>`);
+      <button class="btn btn-primary btn-sm" id="cpYes">${ICONS.check}Применить</button></div>`);
   modalOnClose2 = () => {};
   $('cpNo').onclick = closeModal2;
   $('cpYes').onclick = async () => {
     const b = $('cpYes'); if (b.disabled) return; b.disabled = true;
-    b.textContent = 'Переношу…';
+    b.textContent = 'Применяю…';
     let done = 0;
+    const total = fresh.length + stale.length + extra.length;
     try {
       // по одному, а не пачкой: у каждой записи свой журнальный след, и если
       // на середине что-то отвалится, уже перенесённое останется на месте
@@ -5236,10 +5332,18 @@ async function carryFromPrev(per, onDone) {
         await store.setCarry(x.employee_id, per, x.delta_kop, `остаток за ${periodLabel(r.prev)}`);
         done++;
       }
-      closeModal2(); toast(ICONS.check + `Перенесено: ${done} чел`); if (onDone) await onDone();
+      for (const x of stale) {
+        await store.setCarry(x.employee_id, per, x.delta_kop, `пересчитан: ${periodLabel(r.prev)} изменился`);
+        done++;
+      }
+      for (const x of extra) {
+        await store.setCarry(x.employee_id, per, null);   // null убирает перенос
+        done++;
+      }
+      closeModal2(); toast(ICONS.check + `Готово: ${done} из ${total}`); if (onDone) await onDone();
     } catch (err) {
       closeModal2();
-      toast(`Перенесено ${done} из ${fresh.length}, дальше ошибка: ${err.message || err}`, true);
+      toast(`Успели ${done} из ${total}, дальше ошибка: ${err.message || err}`, true);
       if (onDone) await onDone();
     }
   };
@@ -5480,7 +5584,7 @@ async function payrollDialog(empId) {
       <div class="msub">${piece ? 'У этого человека вид оплаты «сдельно» — сумму за месяц называют готовым числом, это штатный путь, а не исключение. ' : 'Для людей без графика: '}Итоговая зарплата за месяц одной суммой. Заменяет расчёт → «осталось» = эта сумма − выданное на карту/наличными. Причина и каждое изменение видны владельцу — в журнале и в «Требует внимания».</div>` : ''}
     ${canEdit ? `<label class="flbl">Внести деньги</label>
       <div class="me-add">
-        <select class="input" id="pmKind">${moneyKindsFor(store.me()?.role).map(k => `<option value="${k[0]}">${k[1]}</option>`).join('')}</select>
+        <div class="cselect pm-kind" id="pmKind"></div>
         <input class="input" id="pmSum" placeholder="сумма ₽" autocomplete="off">
         <button class="btn btn-primary btn-sm" id="pmAdd">${ICONS.plus}Внести</button>
       </div>
@@ -5500,6 +5604,12 @@ async function payrollDialog(empId) {
   $('modalBox').querySelectorAll('.me-row.me-tap[data-kind]').forEach(el => el.onclick = () => editPayout(empId, per, el.dataset.kind, reopen));
   $('modalBox').querySelectorAll('.cp-carry.me-tap').forEach(el => el.onclick = () => editCarry(empId, per, reopen, r));
   if ($('pmSalaryRow')) $('pmSalaryRow').onclick = () => editSalary(empId, per, r, reopen);
+  // Выпадашка видов денег — своя, как на остальных экранах: у родного <select>
+  // список рисует ОС, и на телефоне он выглядит чужеродно, а заголовки групп в
+  // нём не сделать вовсе.
+  { const kb = $('pmKind');
+    if (kb) { const o = moneyKindOpts(store.me()?.role);
+      makeDropdown(kb, o, (o.find(x => !x.head) || {}).v || '', () => {}); } }
   if ($('pmUndoAll')) $('pmUndoAll').onclick = () => undoAllPayouts(empId, per, reopen);
   if ($('pmToCard')) $('pmToCard').onclick = () => focusOn('employees', empId) || openCard(empId);
   if ($('pmToSched')) $('pmToSched').onclick = () => focusOn('schedule', empId);
@@ -5646,7 +5756,7 @@ async function payrollDialog(empId) {
     btn.disabled = true;
     try {
       await store.addMoneyLine({ employee_id: empId, period: per,
-        kind: $('pmKind').value, amount_kop: Math.round(sum * 100) });
+        kind: $('pmKind').dataset.value, amount_kop: Math.round(sum * 100) });
       $('pmSum').value = '';
       await renderPayroll($('payrollSearch')?.value || '');
       const fresh = payrollRows.find(x => x.employee_id === empId);

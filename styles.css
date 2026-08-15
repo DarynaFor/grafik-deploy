@@ -1301,3 +1301,18 @@ tr.pw-total.pw-over{z-index:5}
   .mp-pop{left:0;right:0;min-width:0}
   .mp-m{padding:13px 6px;font-size:14px}
 }
+
+/* Кнопка «С прошлого месяца», когда снимок разошёлся с прошлым месяцем: правка
+   задним числом уже случилась, и молчать об этом нельзя. Не красная кнопка, а
+   подсветка — это приглашение посмотреть, а не отказ (миграция 134). */
+.btn.cp-stale{border-color:var(--red-d);color:var(--red-d)}
+.btn.cp-stale:hover{background:var(--red-l)}
+
+/* Заголовок группы в выпадашке. Не вариант: не кликается и не подсвечивается —
+   иначе его однажды выберут вместо суммы. */
+.cselect-head{padding:9px 14px 4px;font-size:11px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--ink-3,var(--ink-2));opacity:.75;pointer-events:none}
+.cselect-head:first-child{padding-top:6px}
+.cselect-panel .cselect-head + .cselect-opt{padding-top:6px}
+/* Поле вида денег стоит в одной строке с суммой и кнопкой — тянется, как select */
+.me-add .pm-kind{flex:1 1 190px;min-width:150px}

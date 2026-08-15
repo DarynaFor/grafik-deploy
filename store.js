@@ -92,7 +92,7 @@ const DEMO_USERS = [
    відпрацювати більше і тоді будуть якісь їй надбавки». Денег вид не двигает —
    медсестре платят суммой за смену из клетки, — но часы идут в переработку, а
    значит в надбавки. До этого такие дни лежали как «День», то есть 8 часов
-   вместо 6 (миграция 131). */
+   вместо 6 (миграция 135). */
 export const SHIFT_KINDS = [
   { code: 'day',     label: 'День',      short: 'Д',  hours: 8 },
   { code: 'day6',    label: '6ч',        short: '6',  hours: 6, dept: 'Медсестры' },
@@ -620,10 +620,10 @@ export class MockStore {
   async listPrevRemainder(period) {
     const [y, m] = period.split('-').map(Number);
     const pm = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
-    const rows = (await this.listPayroll(pm)).filter(r => (r.delta_kop || 0) < 0)
-      .map(r => ({ employee_id: r.employee_id, fio: r.fio, delta_kop: r.delta_kop }))
+    const all = (await this.listPayroll(pm))
+      .map(r => ({ employee_id: r.employee_id, fio: r.fio, delta_kop: r.delta_kop || 0 }))
       .sort((a, b) => a.delta_kop - b.delta_kop);
-    return { prev: pm, rows };
+    return { prev: pm, rows: all.filter(r => r.delta_kop < 0), all };
   }
   async setCarry(employee_id, period, amount_kop, note) {
     this.db.carry = this.db.carry || [];
@@ -1805,13 +1805,22 @@ export class SupabaseStore {
   /* Кто ушёл в минус в предыдущем месяце — кандидаты на перенос. Считаем на
      лету, а не храним: пока месяц не закрыт, его цифры ещё двигаются, и
      заранее записанный перенос устарел бы молча. */
+  /* Остаток прошлого месяца. rows — только должники (их переносим), all — ВСЕ,
+     включая вышедших в плюс.
+     `all` нужен, чтобы поймать два случая, которых раньше не видел никто:
+       • перенос УСТАРЕЛ — прошлый месяц потом поправили, и снимок разошёлся;
+       • перенос ЛИШНИЙ — человек больше не в минусе, а перенос ему всё ещё
+         уменьшает выдачу.
+     Оба возможны только у того, у кого перенос УЖЕ стоит, — а таких прежняя
+     кнопка пропускала молча («уже проставленные не трогаем»). */
   async listPrevRemainder(period) {
     const [y, m] = period.split('-').map(Number);
     const pm = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
     const { data, error } = await this.sb.from('v_month_total')
-      .select('employee_id, fio, delta_kop').eq('period', pm + '-01').lt('delta_kop', 0).order('delta_kop');
+      .select('employee_id, fio, delta_kop').eq('period', pm + '-01').order('delta_kop');
     if (error) throw error;
-    return { prev: pm, rows: data || [] };
+    const all = data || [];
+    return { prev: pm, rows: all.filter(r => (r.delta_kop || 0) < 0), all };
   }
   /* Перенос остатка с прошлого месяца (миграция 067). Сумма СО ЗНАКОМ:
      минус — переплатили вперёд, плюс — недоплатили. null убирает перенос. */
