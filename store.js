@@ -101,6 +101,12 @@ export const SHIFT_KINDS = [
   { code: 'day24',   label: 'Сутки',     short: 'С',  hours: 24 },
   { code: 'off',     label: 'Выходной',  short: 'В',  hours: 0 },
   { code: 'отпуск',  label: 'Отпуск',    short: 'Отп', hours: 0 },
+  // ⚠ Был в базе (109), но НЕ в этом списке — гэп с самой 109, нашёлся при
+  // разборе переносов. Последствие тихое и дорогое: открыть будущий день с
+  // таким видом → нужного <option> в списке нет → браузер показывает первый,
+  // «— пусто —» → «Сохранить» без единой правки шлёт plan_kind=null, и отметка
+  // отпуска ИСЧЕЗАЕТ. Не выстрелило только потому, что таких дней сейчас ноль.
+  { code: 'отпуск_бз', label: 'Отпуск без сохр.', short: 'Отп·бз', hours: 0 },
   { code: 'absent',  label: 'Не вышел',  short: '—',  hours: 0 },
   { code: 'custom',  label: 'Своё время', short: '·', hours: null },
 ];
@@ -625,16 +631,32 @@ export class MockStore {
       .sort((a, b) => a.delta_kop - b.delta_kop);
     return { prev: pm, rows: all.filter(r => r.delta_kop < 0), all };
   }
+  async listCarries(period) {
+    return (this.db.carry || []).filter(x => x.period === period)
+      .map(x => ({ employee_id: x.employee_id, amount_kop: x.amount_kop, note: x.note || null }));
+  }
+  /* Зеркало log_month_carry (миграция 134). Демо обязано красить журнал ТАК ЖЕ,
+     как бой: правка и снятие уже учтённого переноса — КРАСНЫМ, создание — нет.
+     Иначе на демо нельзя проверить именно то, ради чего 134 и написана, а окно
+     при этом обещает «пишутся в журнал красным». */
   async setCarry(employee_id, period, amount_kop, note) {
     this.db.carry = this.db.carry || [];
     const i = this.db.carry.findIndex(x => x.employee_id === employee_id && x.period === period);
+    const было = i >= 0 ? this.db.carry[i].amount_kop : null;
     if (amount_kop == null) {
-      if (i >= 0) { this.db.carry.splice(i, 1); this._log('updated', 'month_carry', employee_id, 'с прошлого месяца', null, '(убран)'); }
+      if (i >= 0) {
+        this.db.carry.splice(i, 1);
+        this._log('deleted', 'month_carry', employee_id, 'с прошлого месяца',
+                  period + ': ' + (было / 100) + ' ₽ (убран)', null, true);
+      }
       this._save(); return null;
     }
     const row = { employee_id, period, amount_kop, note: note || null };
     if (i >= 0) this.db.carry[i] = row; else this.db.carry.push(row);
-    this._log('updated', 'month_carry', employee_id, 'с прошлого месяца', null, (amount_kop / 100) + ' ₽');
+    this._log(i >= 0 ? 'updated' : 'created', 'month_carry', employee_id, 'с прошлого месяца',
+              i >= 0 ? period + ': ' + (было / 100) + ' ₽' : null,
+              period + ': ' + (amount_kop / 100) + ' ₽' + (note ? ' · ' + note : ''),
+              i >= 0);
     this._save(); return row;
   }
   async setSalaryOverride(employee_id, period, amount_kop, note) {
@@ -1822,13 +1844,31 @@ export class SupabaseStore {
     const all = data || [];
     return { prev: pm, rows: all.filter(r => (r.delta_kop || 0) < 0), all };
   }
+  /* Сами строки переносов за месяц — ради ПРИМЕЧАНИЯ. В v_month_total лежит
+     только сумма (carry_kop), а пересчёту нужно знать, кто её поставил: свою
+     запись он подписывает сам («остаток за …», «пересчитан: …»), и трогать
+     можно только такие. Ручную — чужое решение — переписывать нельзя.
+     Отдельным запросом, а не колонкой во вьюхе: это деньги 100 человек, и
+     трогать их вьюху ради подписи не стоит. */
+  async listCarries(period) {
+    const { data, error } = await this.sb.from('month_carry')
+      .select('employee_id, amount_kop, note').eq('period', period + '-01');
+    if (error) throw error;
+    return data || [];
+  }
   /* Перенос остатка с прошлого месяца (миграция 067). Сумма СО ЗНАКОМ:
      минус — переплатили вперёд, плюс — недоплатили. null убирает перенос. */
   async setCarry(employee_id, period, amount_kop, note) {
     if (amount_kop == null) {
-      const { error } = await this.sb.from('month_carry')
-        .delete().eq('employee_id', employee_id).eq('period', period + '-01');
+      // .select() обязателен: под RLS запрет на DELETE не даёт ошибки — он даёт
+      // НОЛЬ удалённых строк и 204. Без этого Алёне (её роль писать переносы не
+      // может) показывался тост «Перенос убран», а перенос оставался на месте и
+      // в журнале не было ни строчки. В пакетном пути это «Готово: 5 из 5» при
+      // нуле сделанного. Тот же путь у любого, чья сессия протухла.
+      const { data, error } = await this.sb.from('month_carry')
+        .delete().eq('employee_id', employee_id).eq('period', period + '-01').select();
       if (error) throw new Error(moneyError(error));
+      if (!data || !data.length) throw new Error('Убрать перенос может владелец или директор');
       return null;
     }
     const { data, error } = await this.sb.from('month_carry')

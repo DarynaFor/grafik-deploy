@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=206';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=208';
 
 const $ = id => document.getElementById(id);
 
@@ -2423,6 +2423,10 @@ function canEditSpecs() { return ['owner', 'ceo'].includes(store.me()?.role); }
    сузили заранее, а не после. Показываем «нельзя» сразу, а не отказом базы
    после сохранения. */
 function canPickDept() { return ['owner', 'ceo'].includes(store.me()?.role); }
+/* Перенос с прошлого месяца — деньги: в базе его правят только владелец и
+   директор (mc_ins/mc_upd/mc_del, миграции 069/071). Раньше интерфейс показывал
+   это Алёне по isStaff(), и её «Убрать» тихо не срабатывало. */
+function canEditCarry() { return ['owner', 'ceo'].includes(store.me()?.role); }
 /* Порядок отделений (088). Отделение без строки в справочнике порядка уходит в
    конец — так же, как её отсортировала бы база. */
 /* Справочник отделений — дерево в два уровня: группа → блок (миграция 123).
@@ -4682,7 +4686,7 @@ const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.car
 const cardDelta = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
 let payrollRows = [], payrollLines = [], payrollSeq = 0, payrollShown = null;
 // Остаток прошлого месяца — чтобы кнопка переноса знала про устаревшие ещё до нажатия.
-let payrollPrev = null;
+let payrollPrev = null, payrollCarryNotes = new Map();
 let payrollMarked = [];   // сводка «подтверждено фактом» по месяцу (113)
 // Норма часов месяца на «Расчёте» — та же v_month_norm, что и в графике.
 // Нужна, чтобы шапка окна человека говорила часами, а не днями: оклад теперь
@@ -4716,13 +4720,14 @@ async function renderPayroll(filter = '') {
   // Остаток прошлого месяца грузим ВМЕСТЕ с ведомостью, чтобы кнопка «С прошлого
   // месяца» могла сразу сказать, есть ли устаревшие переносы. Без этого узнать
   // об этом можно было только нажав кнопку — то есть случайно.
-  let prevRem = null;
-  try { [rows, lines, norms, marked, prevRem] = await Promise.all([store.listPayroll(payPeriod), store.listPayrollLines(payPeriod),
+  let prevRem = null, carries = [];
+  try { [rows, lines, norms, marked, prevRem, carries] = await Promise.all([store.listPayroll(payPeriod), store.listPayrollLines(payPeriod),
     store.listMonthNorms(payPeriod).catch(e => { console.warn('listMonthNorms:', e); return []; }),
     // Сколько уже подтверждено отметкой факта (113). Не критично: справочная
     // строка под итогом, ведомость без неё работает.
     store.listMonthMarked(payPeriod).catch(e => { console.warn('listMonthMarked:', e); return []; }),
-    store.listPrevRemainder(payPeriod).catch(e => { console.warn('listPrevRemainder:', e); return null; })]); }   // норма не критична: ведомость должна открыться и без неё
+    store.listPrevRemainder(payPeriod).catch(e => { console.warn('listPrevRemainder:', e); return null; }),
+    store.listCarries(payPeriod).catch(e => { console.warn('listCarries:', e); return []; })]); }   // норма не критична: ведомость должна открыться и без неё
   // Месяц не загрузился — откатываем payPeriod к тому, что РЕАЛЬНО лежит в
   // payrollRows (они при ошибке не обновились). Без отката любой следующий
   // drawPayroll — а его зовёт просто ввод в поиске и смена отделения — нарисовал
@@ -4746,6 +4751,8 @@ async function renderPayroll(filter = '') {
   payrollRows = rows; payrollLines = lines;
   payrollNorms = new Map((norms || []).map(n => [n.employee_id, n]));
   payrollPrev = prevRem;
+  // Примечания переносов: по ним пересчёт отличает свою запись от ручной.
+  payrollCarryNotes = new Map((carries || []).map(c => [c.employee_id, c.note]));
   drawPayroll(filter);
   if (wrap) { wrap.scrollTop = keepTop; wrap.scrollLeft = keepLeft; }
 }
@@ -4848,7 +4855,7 @@ function drawPayroll(filter = '') {
       <td class="num fin">${rub(r.card_avans_kop)}</td>
       <td class="num fin">${rub(r.card_rasch_kop)}</td>
       <td class="num fin pw-cardtot"><b>${rub(cardTotal(r))}</b></td>
-      <td class="num fin pw-carry${isStaff() ? ' pw-tap' : ''}" data-carry="${r.employee_id}"${isStaff() ? ' title="Изменить или убрать перенос"' : ''}>${
+      <td class="num fin pw-carry${canEditCarry() ? ' pw-tap' : ''}" data-carry="${r.employee_id}"${canEditCarry() ? ' title="Изменить или убрать перенос"' : ''}>${
         r.carry_kop ? `<b class="money${r.carry_kop < 0 ? ' neg' : ''}">${rub(r.carry_kop)}</b>` : '<span class="muted">—</span>'}</td>
       <td class="num fin pw-byplan">${deltaCell(r, r.salary_kop)}</td>
       <td class="num pw-pay fin"><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)}</b></td>
@@ -4980,15 +4987,28 @@ function drawPayroll(filter = '') {
   {
     const cb = $('carryPrev');
     if (cb) {
-      cb.hidden = !isStaff();
+      // Не isStaff(): переносы в базе разрешены только owner и ceo
+      // (mc_ins/mc_upd/mc_del). Алёне кнопка показывалась, INSERT падал с
+      // видимой ошибкой, а DELETE проходил МОЛЧА — «Перенос убран» при нуле
+      // сделанного. Показываем ровно тем, кого пустит база.
+      cb.hidden = !canEditCarry();
       // Подпись говорит, ЧТО не так, ещё до нажатия. Иначе про устаревший перенос
       // можно было узнать только нажав кнопку — то есть случайно.
-      if (payrollPrev) {
-        const st = carryState(payrollPrev.all || payrollPrev.rows);
+      // ⚠ else обязателен: кнопка — статический элемент, она переживает смену
+      // месяца. Без сброса подпись «3 устарели» от июля висела бы над августом,
+      // а при сетевом сбое (интернет в клинике плохой) кнопка молчала бы там,
+      // где устаревшие есть. Индикатор, который врёт, хуже отсутствующего.
+      const havePrev = payrollPrev && ((payrollPrev.all || []).length || (payrollPrev.rows || []).length);
+      if (havePrev) {
+        const st = carryState(payrollPrev.all || payrollPrev.rows, payrollCarryNotes);
         const n = st.stale.length + st.extra.length;
         cb.textContent = n ? `С прошлого месяца · ${n} ${plural(n, 'устарел', 'устарели', 'устарели')}` : 'С прошлого месяца';
         cb.classList.toggle('cp-stale', n > 0);
         cb.title = n ? 'Прошлый месяц поправили после переноса — суммы разошлись' : 'Перенести остатки прошлого месяца';
+      } else {
+        cb.textContent = 'С прошлого месяца';
+        cb.classList.remove('cp-stale');
+        cb.title = payrollPrev ? 'За прошлый месяц расчёта нет' : 'Прошлый месяц не загрузился — нажмите, чтобы проверить';
       }
       cb.onclick = () => carryFromPrev(payPeriod, () => renderPayroll($('payrollSearch')?.value || ''));
     }
@@ -5283,50 +5303,107 @@ async function undoAllPayouts(empId, per, onDone) {
    Считаем по `all` (все люди прошлого месяца), а не по `rows` (только должники):
    человек, вышедший из минуса, в rows не попадёт вовсе — а его перенос как раз и
    надо снять. */
-function carryState(prevAll) {
+/* Пересчёт трогает ТОЛЬКО то, что поставил сам. Перенос, заведённый человеком
+   руками, — это решение («договорились удерживать по частям»), и переписывать
+   его формулой нельзя: у Дарины стояло −5 000 с причиной, июльская дельта была
+   −20 000, и пересчёт молча заменил бы сумму и стёр причину — человеку удержали
+   бы на 15 000 больше. Отличаем по note: свои записи мы подписываем сами, всё
+   остальное считаем ручным и не трогаем.
+   ⚠ Пустой note тоже ручной: старые записи (069) и правки через клетку идут без
+   подписи, и «не узнал — значит можно» здесь стоит слишком дорого. */
+const CARRY_AUTO = /^(остаток за |пересчитан:)/;
+const isAutoCarry = note => CARRY_AUTO.test(String(note || ''));
+// notes — Map(employee_id → примечание переноса) за ТЕКУЩИЙ месяц.
+function carryState(prevAll, notes) {
+  const note = id => (notes instanceof Map ? notes.get(id) : null);
   const prev = new Map((prevAll || []).map(x => [x.employee_id, x]));
   const fresh = [], stale = [], extra = [];
+  // Ручные собираем через Set: человек проходит по обоим циклам (по прошлому
+  // месяцу и по переносам), и без этого плюсовой перенос показывался ДВАЖДЫ.
+  const manual = [], manualSeen = new Set();
+  const addManual = x => { if (!manualSeen.has(x.employee_id)) { manualSeen.add(x.employee_id); manual.push(x); } };
   for (const x of (prevAll || [])) {
-    const cur = payrollRows.find(p => p.employee_id === x.employee_id)?.carry_kop || 0;
+    const row = payrollRows.find(p => p.employee_id === x.employee_id);
+    const cur = row?.carry_kop || 0;
     if (x.delta_kop < 0 && !cur) fresh.push({ ...x, was: 0 });
-    else if (cur && x.delta_kop < 0 && cur !== x.delta_kop) stale.push({ ...x, was: cur });
+    else if (cur && cur !== x.delta_kop) {
+      // Плюсовой перенос — это ДОЛГ КЛИНИКИ человеку (069: «плюс = недоплатили»).
+      // Разворачивать его в минус по дельте нельзя ни при каких данных.
+      if (!isAutoCarry(note(x.employee_id)) || cur > 0) addManual({ ...x, was: cur, note: note(x.employee_id) || '' });
+      else if (x.delta_kop < 0) stale.push({ ...x, was: cur });
+    }
   }
-  // Лишние ищем от ПЕРЕНОСОВ, а не от прошлого месяца: у человека может вообще
-  // не быть строки в прошлом месяце (уволен, заведён позже), а перенос стоять.
+  /* ⚠ «Лишний» — это только ПОЛОЖИТЕЛЬНОЕ знание: человека ВИДНО в прошлом
+     месяце, и он там НЕ в минусе. Отсутствие строки не значит ничего.
+     Первая редакция считала иначе (`!x || x.delta_kop >= 0`) — и это была
+     ошибка ценой в 270 729 ₽. Учёт начат с июля, июня в системе нет вовсе:
+     на ИЮЛЬСКОМ экране прошлый месяц отдавал ноль строк, все 21 июльских
+     переноса становились «лишними», и одно нажатие подняло бы «Осталось
+     выдать» подтверждённого июля с 2 085 962 до 2 356 691 ₽ — этим людям
+     заплатили бы переплату второй раз. Найдено адверсарным разбором.
+     Отсутствовать человек может по стольким причинам, что снимать по этому
+     признаку нельзя вообще: месяца нет в системе, строку не отдала роль
+     (скрытая зарплата), человек заведён позже, запрос не догрузился. */
   for (const p of payrollRows) {
     if (!p.carry_kop) continue;
     const x = prev.get(p.employee_id);
-    if (!x || x.delta_kop >= 0) extra.push({ employee_id: p.employee_id, fio: p.fio, delta_kop: 0, was: p.carry_kop });
+    if (!x || x.delta_kop < 0) continue;
+    // Ручной и плюсовой не снимаем: первый — чужое решение, второй — долг клиники.
+    if (!isAutoCarry(note(p.employee_id)) || p.carry_kop > 0) addManual({ employee_id: p.employee_id, fio: p.fio, delta_kop: x.delta_kop, was: p.carry_kop, note: note(p.employee_id) || '' });
+    else extra.push({ employee_id: p.employee_id, fio: p.fio, delta_kop: 0, was: p.carry_kop });
   }
-  return { fresh, stale, extra };
+  return { fresh, stale, extra, manual };
 }
 async function carryFromPrev(per, onDone) {
+  /* ⚠ payrollRows до конца загрузки держит ПРЕДЫДУЩИЙ месяц, а `per` уже новый:
+     кнопка лежит вне таблицы и остаётся нажимаемой, пока в ней «Загружаем
+     расчёт…». Считать в этот момент — значит сверять переносы одного месяца с
+     остатком другого: человек, чей старый перенос случайно совпал с новой
+     дельтой, не попал бы ни в «новые», ни в «устаревшие», и перенос ему молча
+     не записался бы — то есть переплату он получил бы второй раз. */
+  if (payrollShown !== per) { toast('Дождитесь, пока месяц загрузится', true); return; }
   let r;
   try { r = await store.listPrevRemainder(per); }
   catch (e) { toast(e.message || e, true); return; }
-  const { fresh, stale, extra } = carryState(r.all || r.rows);
+  // Прошлого месяца нет в системе вовсе (учёт начат позже, месяц-дыра) — сверять
+  // не с чем. Молча продолжать нельзя: «нет данных» и «все рассчитались» с виду
+  // одинаковы, а стоят по-разному.
+  if (!(r.all || []).length && !(r.rows || []).length) {
+    toast(`За ${periodLabel(r.prev)} в системе нет расчёта — сверять не с чем`); return;
+  }
+  const { fresh, stale, extra, manual } = carryState(r.all || r.rows, payrollCarryNotes);
   const sum = fresh.reduce((a, x) => a + x.delta_kop, 0);
   if (!r.rows.length && !stale.length && !extra.length) { toast(`За ${periodLabel(r.prev)} переплат нет — переносить нечего`); return; }
-  if (!fresh.length && !stale.length && !extra.length) { toast('Все переносы за этот месяц уже проставлены и совпадают'); return; }
-  const row = (fio, txt, cls) => `<div class="me-row"><span class="muted">${esc(fio)}</span><b class="money${cls}">${txt}</b></div>`;
+  if (!fresh.length && !stale.length && !extra.length && !manual.length) { toast('Все переносы за этот месяц уже проставлены и совпадают'); return; }
+  const row = (fio, txt, cls, sub) => `<div class="me-row"><span class="muted">${esc(fio)}${
+    sub ? `<br><span class="small" style="opacity:.7">${esc(sub)}</span>` : ''}</span><b class="money${cls}">${txt}</b></div>`;
+  /* ⚠ Список показываем ЦЕЛИКОМ. Первая редакция резала до десяти и дописывала
+     «…и ещё N», а применяла всё — то есть человек утверждал деньги, которых не
+     видел. На 99 сотрудниках список из десяти — это норма, а не край. */
   const block = (title, arr, fn) => arr.length
-    ? `<div class="me-cap" style="margin-top:10px">${title} · ${arr.length}</div>`
-      + arr.slice(0, 10).map(fn).join('')
-      + (arr.length > 10 ? `<div class="muted small">…и ещё ${arr.length - 10}</div>` : '') : '';
+    ? `<div class="me-cap" style="margin-top:10px">${title} · ${arr.length}${
+        title !== 'Не трогаем' ? ` · <b>${rub(arr.reduce((a, x) => a + (x.delta_kop - x.was), 0))} ₽</b> к «Осталось выдать»` : ''}</div>`
+      + arr.map(fn).join('') : '';
+  const changes = fresh.length + stale.length + extra.length;
   showModal2(`<h3>Перенос остатков за ${esc(periodLabel(r.prev))}</h3>
     <div class="msub">${fresh.length ? `Новых: <b>${fresh.length}</b> на ${rub(Math.abs(sum))} ₽. ` : ''}${
       stale.length ? `<b class="money neg">Устарели: ${stale.length}</b> — прошлый месяц поправили после переноса. ` : ''}${
-      extra.length ? `<b class="money neg">Лишних: ${extra.length}</b> — человек больше не в минусе. ` : ''}</div>
-    <div class="rc-diff" style="max-height:260px;overflow:auto">
+      extra.length ? `<b class="money neg">Лишних: ${extra.length}</b> — человек больше не в минусе. ` : ''}${
+      manual.length ? `Ручных: <b>${manual.length}</b> — их не трогаем. ` : ''}</div>
+    <div class="rc-diff" style="max-height:300px;overflow:auto">
       ${block('Поставить', fresh, x => row(x.fio, rub(x.delta_kop) + ' ₽', ' neg'))}
       ${block('Обновить', stale, x => row(x.fio, `${rub(x.was)} → ${rub(x.delta_kop)} ₽`, ' neg'))}
       ${block('Снять', extra, x => row(x.fio, `${rub(x.was)} → —`, ''))}
+      ${block('Не трогаем', manual, x => row(x.fio, `${rub(x.was)} ₽`, x.was > 0 ? '' : ' neg',
+          x.was > 0 ? 'плюс — это долг клиники человеку' : (x.note ? 'поставлено вручную: ' + x.note : 'поставлено вручную')))}
     </div>
+    ${manual.length ? `<div class="msub" style="margin-top:8px">Ручные переносы пересчёт <b>не трогает</b>: это чьё-то решение, а не снимок. Если такой перенос устарел — поправьте его в клетке «С прошлого месяца».</div>` : ''}
     <div class="msub" style="margin-top:8px">Правка и снятие уже учтённого переноса пишутся в журнал <b>красным</b>.</div>
     <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="cpNo">Отмена</button>
-      <button class="btn btn-primary btn-sm" id="cpYes">${ICONS.check}Применить</button></div>`);
+      ${changes ? `<button class="btn btn-primary btn-sm" id="cpYes">${ICONS.check}Применить · ${changes}</button>` : ''}</div>`);
   modalOnClose2 = () => {};
   $('cpNo').onclick = closeModal2;
+  if (!$('cpYes')) return;                 // менять нечего — только показали ручные
   $('cpYes').onclick = async () => {
     const b = $('cpYes'); if (b.disabled) return; b.disabled = true;
     b.textContent = 'Применяю…';
@@ -5347,12 +5424,15 @@ async function carryFromPrev(per, onDone) {
         await store.setCarry(x.employee_id, per, null);   // null убирает перенос
         done++;
       }
-      closeModal2(); toast(ICONS.check + `Готово: ${done} из ${total}`); if (onDone) await onDone();
+      closeModal2(); toast(ICONS.check + `Готово: ${done} из ${total}`);
     } catch (err) {
       closeModal2();
       toast(`Успели ${done} из ${total}, дальше ошибка: ${err.message || err}`, true);
-      if (onDone) await onDone();
     }
+    // Перерисовка — ВНЕ try: упади она, это ошибка показа, а не записи. Раньше
+    // она попадала в тот же catch, и человек читал «дальше ошибка» про деньги,
+    // которые на самом деле записались все до одной, а onDone звался дважды.
+    if (onDone) { try { await onDone(); } catch (e) { console.warn('перерисовка после переноса:', e); } }
   };
 }
 /* Что именно лежит в «Прочем» у человека: каждая строка своим названием.
@@ -5391,11 +5471,21 @@ async function editCarry(empId, per, onDone, row) {
   const fio = src.fio || '';
   const cur = src.carry_kop || 0;
   const over = cur < 0;                                   // переплата — обычный случай
+  const curNote = (payrollCarryNotes instanceof Map ? payrollCarryNotes.get(empId) : null) || '';
   showModal2(`<h3>С прошлого месяца</h3>
-    <div class="msub">${esc(fio)} · ${esc(periodLabel(per))}${cur ? ` · сейчас <b>${rub(cur)} ₽</b>` : ''}</div>
+    <div class="msub">${esc(fio)} · ${esc(periodLabel(per))}${cur ? ` · сейчас <b>${rubShort(cur)} ₽</b>` : ''}</div>
     <label class="flbl">Переплатили в прошлом месяце</label>
-    <input class="input" id="ecVal" inputmode="numeric" autocomplete="off" value="${cur ? fmt(Math.round(Math.abs(cur) / 100)) : ''}" placeholder="напр. 19 589">
-    <input class="input" id="ecNote" placeholder="причина (необязательно)" autocomplete="off" style="margin-top:8px" value="">
+    <!-- ⚠ Копейки показываем и сохраняем. Раньше поле округляло до целых рублей:
+         открыл клетку, ничего не менял, нажал «Сохранить» — и −19 589,47 ₽
+         превращалось в −19 589,00. Перенос сразу расходился с прошлым месяцем на
+         47 копеек, кнопка загоралась «1 устарел», а каждый пересчёт писал в
+         журнал КРАСНУЮ строку. То есть сигнал, ради которого всё и сделано,
+         забивался копейками. -->
+    <input class="input" id="ecVal" inputmode="decimal" autocomplete="off" value="${cur ? rubShort(Math.abs(cur)) : ''}" placeholder="напр. 19 589,47">
+    <!-- Причину подставляем СУЩЕСТВУЮЩУЮ. Раньше поле открывалось пустым, а
+         upsert перетирал note в NULL: «остаток за Июль 2026» пропадал без следа,
+         и пересчёт потом уже не мог отличить свою запись от ручной. -->
+    <input class="input" id="ecNote" placeholder="причина (необязательно)" autocomplete="off" style="margin-top:8px" value="${esc(curNote || '')}">
     <div class="msub" style="margin-top:8px">Эта сумма <b>вычтется</b> из «Осталось выдать» за месяц.
       Если переплата больше начисления, остаток снова уйдёт в минус и перейдёт дальше.
       Каждое изменение видно владельцу в журнале.</div>
@@ -5420,7 +5510,11 @@ async function editCarry(empId, per, onDone, row) {
     if (!v) { toast('Укажите сумму переплаты', true); return; }
     b.disabled = true;
     try {
-      await store.setCarry(empId, per, -Math.round(v * 100), $('ecNote').value.trim() || null);
+      // Если сумма и причина не менялись — не пишем вовсе: лишняя запись подняла
+      // бы красный флаг в журнале на пустом месте.
+      const kop = -Math.round(v * 100), note = $('ecNote').value.trim() || null;
+      if (kop === cur && (note || '') === (curNote || '')) { closeModal2(); return; }   // ничего не меняли — не сорим красным в журнале
+      await store.setCarry(empId, per, kop, note);
       closeModal2(); toast(ICONS.check + 'Перенос записан'); if (onDone) await onDone();
     } catch (err) { b.disabled = false; toast(err.message || err, true); }
   };
