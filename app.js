@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=203';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=206';
 
 const $ = id => document.getElementById(id);
 
@@ -888,6 +888,13 @@ const canEditSchedule = () => ['operator', 'owner', 'ceo'].includes(store.me()?.
 const canEditCards   = () => ['owner', 'ceo', 'operator', 'cashier1'].includes(store.me()?.role);
 const canCreateCards = () => ['owner', 'ceo', 'cashier1'].includes(store.me()?.role);
 const canEditRates   = () => ['owner', 'ceo'].includes(store.me()?.role);
+/* «Финальная сумма вручную» (month_salary_override) — НЕ выплата, а замена всего
+   расчёта: решение владельца о том, сколько человек получит за месяц. Бухгалтер
+   вносит выплаты на карту, а не назначает зарплату, поэтому поле не её.
+   ⚠ Нашлось обходом её экранов: поле показывалось ей вместе со всей правкой
+   денег, а база до 133 ещё и ПУСКАЛА — политика ключевалась на «видит человека»,
+   и право приехало вместе с чтением employee, которое открыла 127. */
+const canSetFinalSum = () => ['owner', 'ceo'].includes(store.me()?.role);
 /* Бухгалтер: официальные выплаты НА КАРТУ (127). Видит людей, график, расчёт и
    заработок — но правит только свои карточные суммы. Отдельный предикат, а не
    isStaff: у неё другой набор экранов, и складывать их в одну кучу — верный
@@ -5574,7 +5581,7 @@ async function payrollDialog(empId) {
         <button class="btn btn-primary btn-sm" id="pmRevSave">${ICONS.check}Сохранить</button>
       </div>
       <div class="msub">Для процентников считаем ЗП от введённой выручки (оплаты пациентов пока неполные). Изменение выручки видит владелец в журнале.</div>` : ''}
-    ${canEdit ? `<label class="flbl">${piece ? 'Сумма за месяц · сдельно' : 'Финальная сумма вручную'}${r.flag_manual_salary ? ' · <span class="jact">задана</span>' : ''}</label>
+    ${canSetFinalSum() ? `<label class="flbl">${piece ? 'Сумма за месяц · сдельно' : 'Финальная сумма вручную'}${r.flag_manual_salary ? ' · <span class="jact">задана</span>' : ''}</label>
       <div class="me-add">
         <input class="input" id="pmFinal" placeholder="итоговая зарплата ₽" autocomplete="off" inputmode="numeric" value="${curOverride ? fmt(Math.round(curOverride / 100)) : ''}">
         <button class="btn btn-primary btn-sm" id="pmFinalSave">${ICONS.check}${r.flag_manual_salary ? 'Изменить' : 'Задать'}</button>
@@ -5780,8 +5787,8 @@ async function payrollDialog(empId) {
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
   // Финальная сумма вручную: задать/изменить (миграция 049). Заменяет «заработал».
-  if (canEdit) $('pmFinal').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('pmFinalSave').click(); } };
-  if (canEdit) $('pmFinalSave').onclick = async () => {
+  if (canSetFinalSum()) $('pmFinal').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('pmFinalSave').click(); } };
+  if (canSetFinalSum()) $('pmFinalSave').onclick = async () => {
     const btn = $('pmFinalSave'); if (btn.disabled) return;
     let val;
     try { val = parseNum($('pmFinal').value, { thousands: true, field: 'сумму', max: RATE_ABSURD }); }
@@ -5797,7 +5804,7 @@ async function payrollDialog(empId) {
       closeModal(); payrollDialog(empId);
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
-  if (canEdit && r.flag_manual_salary) $('pmFinalClear').onclick = async () => {
+  if (canSetFinalSum() && r.flag_manual_salary) $('pmFinalClear').onclick = async () => {
     const btn = $('pmFinalClear'); if (btn.disabled) return;
     btn.disabled = true;
     try {
