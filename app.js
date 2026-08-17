@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=218';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=219';
 
 const $ = id => document.getElementById(id);
 
@@ -5100,10 +5100,14 @@ function drawPayroll(filter = '') {
         ? `<span class="muted">всего по плану ${rub(plan)}</span> · всего фактически <b>${rub(fakt)}</b> · `
         : '';
       return `<tr class="pw-total pw-plan"><td class="pw-name">Подтверждено фактом</td>
-        <td colspan="10" class="muted small">${split}отмечено ${fmtH(done)} из ${fmtH(past)} отработанных ·
-          <b>${wait} ${plural(wait, 'день', 'дня', 'дней')}</b> ещё без отметки — они посчитаны по плану,
-          в «Осталось выдать» не идут</td>
-        <td class="num pw-byplan"></td><td class="num pw-pay fin"><b class="money">${Math.round(done / past * 100)}%</b></td><td class="num pw-fcast"></td>
+        <td colspan="10" class="muted small">${split}отмечено ${fmtH(done)} из ${fmtH(past)} отработанных
+          (${Math.round(done / past * 100)}%) · <b>${wait} ${plural(wait, 'день', 'дня', 'дней')}</b> ещё без отметки —
+          они посчитаны по плану, в «Осталось выдать» не идут</td>
+        <!-- В колонке — СУММА, а не процент: на телефоне подвал читается строками
+             «подпись — число», и процент там выглядел как деньги. Процент ушёл в
+             текст, к часам, из которых он и считается. -->
+        <td class="num pw-byplan">${hasMarked ? `<span class="muted">${rub(plan)}</span>` : ''}</td>
+        <td class="num pw-pay fin"><b class="money">${rub(hasMarked ? fakt : 0)}</b></td><td class="num pw-fcast"></td>
         <td colspan="10"></td></tr>`;
     })()}
     ${(() => {
@@ -6240,6 +6244,7 @@ function drawOverview() {
 
   // hero + плитки. Главное число — «Осталось выдать» = Δ (начислено − выданное),
   // т.е. сколько ещё раздать людям (в осн. наличными), если все вышли по графику.
+  const ovFcast = prevMonthForecast(rows, prevRem, new Set((ovData.marked || []).map(m => m.employee_id)));
   const metric = (l, v, cls, gc) => `<div class="ov-metric${cls ? ' ' + cls : ''}"${gc ? ` style="--gc:${gc}"` : ''}><div class="l">${l}</div><div class="v">${v}</div></div>`;
   // Полная раскладка месяца: начислено → выдано → осталось. Раньше в подстрочнике
   // стояла только зарплата и карта, и сойтись это ни с чем не могло: премия,
@@ -6250,8 +6255,12 @@ function drawOverview() {
     + (overpaid ? `<div class="ov-over">Переплата вперёд: <b>−${rub(Math.abs(overpaid))} ₽</b>`
         + `<span class="muted small"> · ${overCnt} чел · выдано больше начисленного, перейдёт на следующий месяц</span></div>` : '')
     + `<div class="ov-break">`
-      + line('Начислено всего', rub(accrued) + ' ₽', 'sum')
-      + line('· зарплата', rub(salary) + ' ₽', 'sub')
+      + line('Начислено сейчас', rub(accrued) + ' ₽', 'sum')
+      + line('· зарплата по графику', rub(salary) + ' ₽', 'sub')
+      /* Три суммы про одну зарплату, и путать их дорого:
+         зелёная  — за это уже можно платить, выходы отмечены;
+         серая    — посчитано по плану, человек ещё не отмечен;
+         сиреневая (ниже, отдельным блоком) — сколько выйдет к концу месяца. */
       + (hasMarked && waiting ? line('· из них подтверждено фактом', rub(marked) + ' ₽', 'sub ov-marked') : '')
       + (hasMarked && waiting ? line('· ждёт отметок в графике', rub(waiting) + ' ₽', 'sub ov-waiting') : '')
       + (premia ? line('· премии', rub(premia) + ' ₽', 'sub') : '')
@@ -6260,15 +6269,24 @@ function drawOverview() {
         + (othNach ? line('· прочие начисления', rub(othNach) + ' ₽', 'sub') : '')
         + (othUderz ? line('· удержания', '−' + rub(othUderz) + ' ₽', 'sub') : '')
       + (carry ? line('С прошлого месяца', (carry < 0 ? '−' : '') + rub(Math.abs(carry)) + ' ₽', 'sub neg') : '')
+      /* «Начислено» выше — это СЕЙЧАС. Сколько станет к концу месяца — отдельной
+         суммой, иначе «начислено всего» отвечает сразу на три вопроса и ни на
+         один внятно. Прогноз по графикам и прогноз по прошлому месяцу названы
+         порознь: первое расчёт, второе догадка. */
+      + (hasMarked && (forecast > salary || ovFcast.sum)
+          ? line('К концу месяца', rub(forecast + (accrued - salary) + ovFcast.sum) + ' ₽', 'sum ov-fcast-line')
+            + line('· зарплата по графикам', rub(forecast) + ' ₽', 'sub')
+            + (accrued - salary ? line('· премии, отпускные и прочее', rub(accrued - salary) + ' ₽', 'sub') : '')
+            + (ovFcast.sum ? line(`· прогноз по ${ovFcast.who.length} без графика`, rub(ovFcast.sum) + ' ₽', 'sub') : '')
+          : '')
       + line('Выдано', rub(card + uvol + cash + othPay) + ' ₽', 'sum')
       + line('· на карту', rub(card) + ' ₽', 'sub')
       + (uvol ? line('· расчёт при увольнении', rub(uvol) + ' ₽', 'sub') : '')
-      + (cash ? line('· наличными', rub(cash) + ' ₽', 'sub') : '')
+      + (cash ? line('· наличными (записано в расчёте)', rub(cash) + ' ₽', 'sub') : '')
         + (othPay ? line('· прочие выплаты (алименты, займы)', rub(othPay) + ' ₽', 'sub') : '')
     + `</div></div>`;
-  const ovFcast = prevMonthForecast(rows, prevRem, new Set((ovData.marked || []).map(m => m.employee_id)));
   const bento = `<div class="ov-bento">`
-    + metric('Начислено всего', rub(accrued) + ' ₽', '', 'rgba(139,123,232,.34)')
+    + metric('Начислено сейчас', rub(accrued) + ' ₽', '', 'rgba(139,123,232,.34)')
     // Прогноз считаем ТЕМ ЖЕ prevMonthForecast, что «Расчёт»: два экрана обязаны
     // назвать одно число. Плитка показывает всё вместе, а из чего оно сложено —
     // строкой под плитками (ovFcastNote): на плитке объяснению места нет, а
@@ -6277,22 +6295,15 @@ function drawOverview() {
         ? metric('К концу месяца', rub(forecast + (accrued - salary) + ovFcast.sum) + ' ₽', 'ov-fcast', 'rgba(139,123,232,.34)')
         : '')
     + metric('Официально на карту', rub(card) + ' ₽', '', 'rgba(62,115,216,.34)')
-    + metric('Выдано наличными', rub(paid) + ' ₽', '', 'rgba(31,165,101,.4)')
+    + metric('Проведено кассой', rub(paid) + ' ₽', '', 'rgba(31,165,101,.4)')
     + metric('Сотрудников', fmt(people), '', 'rgba(224,153,42,.34)')
     + `</div>`
-    /* Из чего сложен прогноз. Названо порознь намеренно: зарплата по графикам —
-       расчёт, а прошлый месяц — догадка (человек мог уйти, заболеть, сменить
-       ставку). Смешать их в одно число значило бы выдать догадку за расчёт.
-
-       ⚠ Зарплату и «премии, отпускные и прочее» тоже разводим. Плитка их
-       складывает, и первая редакция подписала сумму «по графикам» — а в
-       «Расчёте» под той же подписью стоит ОДНА зарплата. На августе разницы
-       нет (премий и отпускных ещё не вносили), а на июльских данных это
-       733 105 ₽ под одинаковой надписью на двух экранах. */
-    + (hasMarked && ovFcast.sum ? `<div class="ov-fnote">К концу месяца: <b>${rub(forecast)} ₽</b> зарплата по графикам${
-        accrued - salary ? ` · <b>${rub(accrued - salary)} ₽</b> премии, отпускные и прочее` : ''}
-        · <b>${rub(ovFcast.sum)} ₽</b> прогноз по ${ovFcast.who.length} ${plural(ovFcast.who.length, 'человеку', 'людям', 'людям')}
-        без графика — их сумма за ${esc(periodLabel(ovFcast.period).toLowerCase())}. Заведите им график, и догадка сменится расчётом.</div>` : '');
+    /* Раскладка прогноза уехала в hero, к остальным суммам: там ей место — рядом
+       с «начислено сейчас», от которого её и надо отличать. Здесь остаётся одна
+       строка: откуда взялась догадка по людям без графика. */
+    + (hasMarked && ovFcast.sum ? `<div class="ov-fnote">Прогноз по ${ovFcast.who.length} ${plural(ovFcast.who.length, 'человеку', 'людям', 'людям')}
+        без графика — их сумма за ${esc(periodLabel(ovFcast.period).toLowerCase())}, это догадка, а не расчёт.
+        Заведите им график, и она сменится расчётом.</div>` : '');
 
   // Требует внимания: флаги-агрегаты (кликают на Расчёт) + красные записи (на Журнал)
   const flagAlerts = OV_ALERTS.map(a => {

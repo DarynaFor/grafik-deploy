@@ -1439,14 +1439,20 @@ tr.pw-total.pw-over{z-index:5}
     font-variant-numeric:tabular-nums;background:none;border:none}
   /* Подпись над числом — иначе три суммы подряд неразличимы, а именно на этом
      экране путаница между «заработал» и «осталось выдать» стоит денег. */
+  /* Подписи: обычный регистр вместо caps. Три caps-надписи подряд над каждой
+     карточкой давали рябь, а «ОСТАЛОСЬ ВЫДАТЬ» ещё и ломалось пополам. */
   .pw-host .pw tr.pw-row td.num::before{
-    display:block;margin-bottom:1px;font-size:9px;font-weight:700;
-    letter-spacing:.03em;text-transform:uppercase;color:var(--ink-2);
+    display:block;margin-bottom:2px;font-size:10.5px;font-weight:500;
+    letter-spacing:0;text-transform:none;color:var(--ink-3,var(--ink-2));
     /* Два ряда с общей высотой: «Осталось выдать» в одну строку не влезает, а
        обрезать ЭТУ подпись нельзя — её и читают. min-height держит числа на
        одной линии, хотя подписи разной длины. */
     white-space:normal;line-height:1.15;min-height:2.3em}
   .pw-host .pw td.pw-earned::before{content:"Заработано"}
+  .pw-host .pw tr.pw-total td.sep::before{content:"Зарплата"}
+  .pw-host .pw tr.pw-total td.pw-byplan::before{content:"Всего по плану"}
+  .pw-host .pw tr.pw-total.pw-plan td.pw-pay::before{content:"Подтверждено фактом"}
+  .pw-host .pw tr.pw-total.pw-plan td.pw-byplan::before{content:"Было бы по плану"}
   .pw-host .pw td.pw-pay::before{content:"Осталось выдать"}
   .pw-host .pw td.pw-fcast::before{content:"К концу месяца"}
   /* В подвале та же колонка отвечает на другой вопрос — сколько ВЫДАТЬ к концу
@@ -1465,8 +1471,15 @@ tr.pw-total.pw-over{z-index:5}
   /* ── Заголовок отделения ──────────────────────────────────────────── */
   .pw-host .pw tr.pw-group{display:block;margin:14px 0 7px}
   .pw-host .pw tr.pw-group td{display:block;padding:0;border:none;background:none}
-  .pw-host .pw tr.pw-group span{font-size:10.5px;line-height:1.35;
-    white-space:normal;display:block}
+  .pw-host .pw tr.pw-group{margin:16px 0 8px}
+  .pw-host .pw tr.pw-group td{padding:7px 12px;border-radius:10px;
+    background:var(--fill-1);border-left:3px solid var(--cat,var(--green))}
+  /* Не caps: заголовок отделения в верхнем регистре занимал две строки, и «₽»
+     оставался на второй один. Обычный регистр короче и читается спокойнее, а
+     сумму держим неразрывной. */
+  .pw-host .pw tr.pw-group span{font-size:11.5px;line-height:1.4;
+    white-space:normal;display:block;text-transform:none;letter-spacing:0}
+  .pw-host .pw tr.pw-group b{white-space:nowrap}
 
   /* ── Итоги ────────────────────────────────────────────────────────────
      Здесь суммы семизначные, а пояснения длинные, поэтому не три колонки, а
@@ -1481,6 +1494,13 @@ tr.pw-total.pw-over{z-index:5}
   .pw-host .pw tr.pw-total td[colspan]{display:block;padding:0 0 8px;
     font-size:11.5px;line-height:1.45}
   .pw-host .pw tr.pw-total td[colspan]:empty{display:none}
+  /* Дарина 17.08: «не видно основних сум итого… суми всього зп, всього
+     нараховано по факту, всього за планом, всього зараз+по плану». В карточках
+     подвал показывал только три числа из пяти — добавлены «Зарплата» (td.sep)
+     и «По плану». Цвета те же, что везде: серое план, зелёное подтверждено,
+     фиолетовое прогноз. */
+  .pw-host .pw tr.pw-total td.sep,
+  .pw-host .pw tr.pw-total td.pw-byplan,
   .pw-host .pw tr.pw-total td.pw-earned,
   .pw-host .pw tr.pw-total td.pw-pay,
   .pw-host .pw tr.pw-total td.pw-fcast{
@@ -1488,11 +1508,15 @@ tr.pw-total.pw-over{z-index:5}
     padding:5px 0;text-align:right;font-size:14px;
     font-variant-numeric:tabular-nums;background:none;
     border:none;border-top:1px dashed var(--glass-bd)}
+  .pw-host .pw tr.pw-total td.sep::before,
+  .pw-host .pw tr.pw-total td.pw-byplan::before,
   .pw-host .pw tr.pw-total td.pw-earned::before,
   .pw-host .pw tr.pw-total td.pw-pay::before,
   .pw-host .pw tr.pw-total td.pw-fcast::before{
     font-size:11px;font-weight:600;text-transform:none;letter-spacing:0;
     color:var(--ink-2);white-space:nowrap}
+  .pw-host .pw tr.pw-total td.sep:empty,
+  .pw-host .pw tr.pw-total td.pw-byplan:empty,
   .pw-host .pw tr.pw-total td.pw-earned:empty,
   .pw-host .pw tr.pw-total td.pw-pay:empty,
   .pw-host .pw tr.pw-total td.pw-fcast:empty{display:none}
@@ -1512,3 +1536,28 @@ tr.pw-total.pw-over{z-index:5}
 .ov-fnote{margin-top:10px;padding:10px 13px;border-radius:12px;
   background:var(--fill-1);color:var(--ink-2);font-size:12px;line-height:1.5}
 .ov-fnote b{color:var(--violet-d);font-variant-numeric:tabular-nums}
+
+/* «К концу месяца» в раскладке «Обзора» — сиреневая, как везде прогноз. Строка
+   идёт вровень с «Начислено сейчас» и «Выдано»: это три ответа на три разных
+   вопроса, и путать их дорого. */
+.ov-line.ov-fcast-line b{color:var(--violet-d)}
+
+/* ── Телефон: панель над таблицей не должна съедать экран ────────────────────
+   На 375px до первой цифры «Расчёта» набиралось пять рядов: заголовок, описание
+   в две строки, месяц, поиск, два ряда фильтров. Милена открывает экран, чтобы
+   увидеть суммы, а видит настройки.
+   Уменьшаем не шрифт (в поле меньше 16px айфон зумит страницу), а ПРОМЕЖУТКИ и
+   высоту подзаголовка. */
+@media (max-width:767px){
+  .sched-tools{gap:8px;margin-bottom:10px}
+  /* Описание экрана — справочное, читают один раз. На телефоне держим в двух
+     строках вместо четырёх: смысл остаётся, экран возвращается. */
+  .page-head p{font-size:12.5px;line-height:1.35;margin-top:2px}
+  .page-head{gap:8px;margin-bottom:10px}
+  .month-nav{margin:0}
+  /* Чипы-переключатели в один ряд с выпадающим списком отделений: по отдельности
+     каждый занимал свою строку, хотя вместе умещаются. */
+  .sched-tools .rt-toggle{padding-left:10px;padding-right:12px}
+  .sched-tools .cselect{flex:0 1 auto;min-width:0}
+  .sched-tools .btn.btn-sm{white-space:nowrap}
+}
