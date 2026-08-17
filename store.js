@@ -1166,7 +1166,17 @@ const MONEY_ERRORS = [
   ['violates row-level security', 'Недостаточно прав для этого вида выплаты'],
   ['без сессии запрещена',  'Сессия истекла — войдите заново'],
 ];
-export function moneyError(err) {
+export /* У переноса нет «вида выплаты», и moneyError с его текстом («Недостаточно прав
+   для этого вида выплаты») уводил бы в сторону: перенос — это одна сумма на
+   месяц, а не начисление. Отдельный переводчик, чтобы отказ читался по делу. */
+function carryError(e) {
+  const m = String(e?.message || e || '');
+  if (/row-level security|permission denied|42501/i.test(m)) return 'Перенос с прошлого месяца меняет владелец или директор';
+  if (/month_carry_nonzero_chk/i.test(m)) return 'Ноль переносить нечего — уберите перенос совсем';
+  if (/month_carry_sane_chk/i.test(m)) return 'Слишком большая сумма переноса — проверьте, не опечатка ли';
+  return m || 'Не удалось сохранить перенос';
+}
+function moneyError(err) {
   const raw = (err && (err.message || err.details || String(err))) || 'Неизвестная ошибка';
   for (const [needle, human] of MONEY_ERRORS) if (raw.includes(needle)) return human;
   return raw;                                        // наши raise из БД уже по-русски
@@ -1903,7 +1913,7 @@ export class SupabaseStore {
       // нуле сделанного. Тот же путь у любого, чья сессия протухла.
       const { data, error } = await this.sb.from('month_carry')
         .delete().eq('employee_id', employee_id).eq('period', period + '-01').select();
-      if (error) throw new Error(moneyError(error));
+      if (error) throw new Error(carryError(error));
       if (!data || !data.length) throw new Error('Убрать перенос может владелец или директор');
       return null;
     }
@@ -1911,7 +1921,7 @@ export class SupabaseStore {
       .upsert({ employee_id, period: period + '-01', amount_kop, note: note || null, entered_by: this.user.id },
               { onConflict: 'employee_id,period' })
       .select().single();
-    if (error) throw new Error(moneyError(error));
+    if (error) throw new Error(carryError(error));
     return data;
   }
   async setSalaryOverride(employee_id, period, amount_kop, note) {

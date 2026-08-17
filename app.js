@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=216';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=217';
 
 const $ = id => document.getElementById(id);
 
@@ -5606,10 +5606,15 @@ async function editCarry(empId, per, onDone, row) {
          журнал КРАСНУЮ строку. То есть сигнал, ради которого всё и сделано,
          забивался копейками. -->
     <input class="input" id="ecVal" inputmode="decimal" autocomplete="off" value="${cur ? rubShort(Math.abs(cur)) : ''}" placeholder="напр. 19 589,47">
-    <!-- Причину подставляем СУЩЕСТВУЮЩУЮ. Раньше поле открывалось пустым, а
-         upsert перетирал note в NULL: «остаток за Июль 2026» пропадал без следа,
-         и пересчёт потом уже не мог отличить свою запись от ручной. -->
-    <input class="input" id="ecNote" placeholder="причина (необязательно)" autocomplete="off" style="margin-top:8px" value="${esc(curNote || '')}">
+    <!-- Причину подставляем существующую — но ТОЛЬКО ручную. Автоподпись
+         («остаток за Июль 2026», «пересчитан: …») в поле не кладём намеренно:
+         иначе человек правит сумму руками, подпись едет следом, и пересчёт
+         считает эту правку СВОЕЙ — на следующем нажатии вернёт расчётное число
+         поверх решения человека. Поправил руками — значит запись стала ручной,
+         и подпись должна это отражать. Прежняя подпись видна подсказкой, чтобы
+         было понятно, откуда сумма взялась. -->
+    <input class="input" id="ecNote" placeholder="${isAutoCarry(curNote) ? 'причина — впишите, если правите сумму сами' : 'причина (необязательно)'}" autocomplete="off" style="margin-top:8px" value="${isAutoCarry(curNote) ? '' : esc(curNote || '')}">
+    ${isAutoCarry(curNote) ? `<div class="msub" style="margin-top:4px">Сейчас стоит автоматически: «${esc(curNote)}». Сохраните — и перенос станет ручным: пересчёт его больше не тронет.</div>` : ''}
     <div class="msub" style="margin-top:8px">Эта сумма <b>вычтется</b> из «Осталось выдать» за месяц.
       Если переплата больше начисления, остаток снова уйдёт в минус и перейдёт дальше.
       Каждое изменение видно владельцу в журнале.</div>
