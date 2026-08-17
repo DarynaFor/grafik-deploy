@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=217';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=218';
 
 const $ = id => document.getElementById(id);
 
@@ -440,9 +440,12 @@ function navItems() { return NAV.filter(n => (!n.ownerOnly || isOwner()) && (!n.
 
 // ── Импорт: какие виды денег доступны роли (зеркало RLS ml_ins, миграция 046) ──
 // Алёна (operator) — отпускные (три вида) и наличные; владелец и СЕО — всё.
-// Кассиров (cashier1/cashier2) в списке НЕТ вообще: экран импорта требует ростер
-// сотрудников для сопоставления ФИО, а его им закрывает emp_select (024 §6) —
-// подробнее в комментарии ниже. Премию, кроме владельца, вносит только СЕО.
+// Бухгалтер (cashier1) — ВСЁ на карту: аванс, ЗП, расчёт, отпускные, больничные
+// (Дарина 16.08: «усі імпорті стосовно виплат будь-яких на карту»). Ростер ей
+// открыт с 127 — сопоставление ФИО работает. cashier2 в списке нет: учётки пока
+// нет вовсе. Премию, кроме владельца, вносит только СЕО.
+// ⚠ Список обязан совпадать с money_kind_allowed (140 §4) — это ОДНА матрица на
+// базу, и разошлись они уже однажды: экран предлагал шесть видов, сервер брал три.
 const IMPORT_KIND_META = {
   otpusk:      { label: 'Отпускные на карту',  hint: 'реестр отпускных (ТКБ) — деньги уже у человека, в «к выдаче» не идут' },
   otpusk_cash: { label: 'Отпускные наличными', hint: 'отпускные, которые выдаём из кассы — идут в «к выдаче»' },
@@ -455,16 +458,20 @@ const IMPORT_KIND_META = {
   cash:        { label: 'Наличные',            hint: 'выданные наличными' },
   premia:      { label: 'Премия',              hint: 'разовая премия, попадёт в журнал' },
 };
-// ⚠ Сопоставление ФИО идёт на КЛИЕНТЕ по всему ростеру, а читать employee
-// (emp_select) могут лишь owner, operator и ceo. Бух (cashier1/2) не видит даже
-// имён — это НАМЕРЕННАЯ граница (миграция 024: «Расширять emp_select НЕЛЬЗЯ»).
-// ⚠ Граница один раз уже падала: 105 открыла emp_select бухгалтеру, и этот
-// абзац десять часов был неправдой. Вернула 111. Если снова понадобится дать
-// кассе карточки — сначала перечитать 024 §6 и ОТВЕТИТЬ на её довод, а не
-// молча его отменить. Поэтому карту-реестр (аванс/1С) сейчас грузит владелец
-// (у него есть и ростер, и право писать card_*). Когда появится логин Бух 2,
-// его импорт карты сделаем через СЕРВЕРНЫЙ матч-RPC (SECURITY DEFINER вернёт
-// employee_id по списку, не раскрывая ростер) — тогда добавится cashier2.
+// ⚠ Сопоставление ФИО идёт на КЛИЕНТЕ по всему ростеру. Читают employee сейчас
+// owner, operator, ceo И cashier1 — бухгалтеру его открыла 127 ради экрана
+// «Сотрудники» и заведения карточек.
+// ⚠ ИСТОРИЯ ГРАНИЦЫ, читать прежде чем менять. 024 §6 запрещала расширять
+// emp_select; 105 её открыла и через десять часов вернула 111; 127 открыла
+// снова — на этот раз с доводом, а не молча. Довод: без ростера она не может ни
+// вести карточки, ни сопоставить свою же ведомость.
+// ⚠ Цена решения названа и НЕ закрыта: вместе с ростером ей видно, У КОГО
+// зарплата скрыта (колонка hidden_salary). Сумма закрыта, факт — нет. Прятать
+// строку пробовали в 140 §1 и отказались: сопоставление ФИО идёт по видимому
+// ростеру, и скрытый человек становился «не найден» в её ведомости — терялся
+// его аванс. Правильное лечение — маскирующая вьюха поверх employee, записано в
+// docs/todo-otlozheno.md. Для cashier2 (учётки ещё нет) ростер по-прежнему
+// закрыт: его импорт, когда понадобится, делаем серверным матч-RPC.
 const IMPORT_KINDS_BY_ROLE = {
   owner:    ['otpusk', 'otpusk_cash', 'otpusk_nach', 'card_avans', 'card_rasch', 'card_uvol', 'cash_avans', 'cash', 'premia'],
   operator: ['otpusk', 'otpusk_cash', 'otpusk_nach', 'cash_avans', 'cash'],
@@ -481,9 +488,28 @@ const IMPORT_KINDS_BY_ROLE = {
 const IMPORT_SIBLINGS = { otpusk: ['otpusk_cash'], otpusk_cash: ['otpusk'] };
 function importKinds() { return IMPORT_KINDS_BY_ROLE[store.me()?.role] || []; }
 function canImport() { return importKinds().length > 0; }
+/* Архивные с ненулевым остатком за показанный месяц. Считаем из ЛЮБОЙ загрузки
+   расчёта — их три (Расчёт, Обзор, сам Архив), и метка должна появляться от
+   первой же. Сначала это стояло только в renderPayroll, и метки не было ровно
+   там, где она нужнее всего: владелец открывает «Обзор», а не «Расчёт». */
+function zapomnitArhivnyeDolgi(rows) {
+  archMoney = new Map((rows || []).filter(r => r.flag_archived && +r.delta_kop)
+    .map(r => [r.employee_id, +r.delta_kop]));
+  renderNav();
+}
+// Метка на пункте меню. Сейчас одна: «Архив», если за уволенным остались деньги.
+// Смысл в слове «одразу»: экран «Архив» показывает это давно, но только если на
+// него зайти, — а не зайдя, про долг уволенному не вспомнишь.
+function navBadge(s) {
+  if (s !== 'archive' || !archMoney.size) return '';
+  const dolg = [...archMoney.values()].filter(v => v > 0).length;      // ему должны
+  const pere = archMoney.size - dolg;                                  // переплата
+  const title = [dolg && `${dolg} с невыплаченным`, pere && `${pere} с переплатой`].filter(Boolean).join(', ');
+  return `<span class="nav-badge${dolg ? '' : ' neg'}" title="${esc(title)}">${archMoney.size}</span>`;
+}
 function renderNav() {
-  $('sideNav').innerHTML = navItems().map(n => `<button class="nav-item${n.s === curScreen ? ' active' : ''}" data-s="${n.s}"><span class="ic">${ICONS[n.i] || ''}</span>${n.l}</button>`).join('');
-  $('mobileNav').innerHTML = navItems().map(n => `<button data-s="${n.s}" class="${n.s === curScreen ? 'active' : ''}"><span>${ICONS[n.i] || ''}</span>${n.l}</button>`).join('');
+  $('sideNav').innerHTML = navItems().map(n => `<button class="nav-item${n.s === curScreen ? ' active' : ''}" data-s="${n.s}"><span class="ic">${ICONS[n.i] || ''}</span>${n.l}${navBadge(n.s)}</button>`).join('');
+  $('mobileNav').innerHTML = navItems().map(n => `<button data-s="${n.s}" class="${n.s === curScreen ? 'active' : ''}"><span>${ICONS[n.i] || ''}</span>${n.l}${navBadge(n.s)}</button>`).join('');
   document.querySelectorAll('[data-s]').forEach(b => b.onclick = () => go(b.dataset.s));
   // Нижнее меню шире экрана и листается. Активный подводим сами: иначе, открыв
   // дальний пункт, человек видит ленту с начала и не понимает, где он.
@@ -1172,7 +1198,11 @@ function renderEmployees(filter = '') {
   // на «Архиве» галочкой «показать убранные».
   const arch = canEditCards() ? employees.filter(e => e.status === 'archived' && !e.hidden_at && String(e.fio || '').toLowerCase().includes(f)) : [];   // архив показываем только тем, кто правит карточки
   const showArch = $('empList').dataset.showArch === '1';
-  let html = arch.length ? `<div style="margin:0 0 10px"><button class="btn btn-ghost btn-sm" id="archToggle">${showArch ? 'Скрыть архив' : 'Архив · ' + arch.length}</button></div>` : '';
+  // Сколько архивных с ненулевым остатком — говорим ДО раскрытия списка: иначе
+  // «Архив · 7» выглядит как семь закрытых вопросов, хотя открытый среди них один.
+  const archN = arch.filter(e => archMoney.get(e.id)).length;
+  let html = arch.length ? `<div style="margin:0 0 10px"><button class="btn btn-ghost btn-sm" id="archToggle">${showArch ? 'Скрыть архив' : 'Архив · ' + arch.length}</button>${
+    archN ? `<span class="mini-chip" style="margin-left:8px">${archN} с деньгами</span>` : ''}</div>` : '';
   // Кого показываем — решаем ОДИН раз, дальше только раскладка по отделениям.
   // Иначе те же фильтры пришлось бы повторять дважды: для подсчёта в заголовке
   // группы и для самого списка, — а это два места для одной мысли.
@@ -1215,7 +1245,13 @@ function renderEmployees(filter = '') {
   }
   if (showArch && arch.length) {
     html += `<div class="group-label"><span class="caps">В архиве · ${arch.length}</span><span class="line"></span></div>`;
-    for (const e of arch) html += `<div class="emp-row" data-id="${e.id}" style="opacity:.55"><div class="emp-ava" style="background:var(--fill-2)">${esc(initials(e.fio))}</div><div class="emp-name">${esc(e.fio)}<div class="sub">в архиве · ${esc(specName(e.specialty_id))}</div></div><div class="emp-pay"></div><div class="chev">${ICONS.chevR}</div></div>`;
+    // Деньги показываем и здесь. Пустая колонка у архивного молчала бы ровно о
+    // том, ради чего на архив и смотрят: не осталось ли за уволенным долга.
+    for (const e of arch) {
+      const d = archMoney.get(e.id) || 0;
+      const pay = d ? `<span class="pill ${d > 0 ? 'o' : 'k'}">${d > 0 ? 'должны' : 'переплата'} ${rub(Math.abs(d))} ₽</span>` : '';
+      html += `<div class="emp-row" data-id="${e.id}" style="opacity:${d ? 1 : .55}"><div class="emp-ava" style="background:var(--fill-2)">${esc(initials(e.fio))}</div><div class="emp-name">${esc(e.fio)}<div class="sub">в архиве · ${esc(specName(e.specialty_id))}</div></div><div class="emp-pay">${pay}</div><div class="chev">${ICONS.chevR}</div></div>`;
+    }
   }
   $('empList').innerHTML = html || `<div class="empty">${all.length ? 'Никого не найдено' : 'Пока нет сотрудников.' + (isOwner() ? '<br><span class="small">Нажмите «Карточка», чтобы создать первую.</span>' : '')}</div>`;
   applyIcons($('empList'));
@@ -1777,9 +1813,30 @@ function splitImportLine(line) {
   }
   return { fio: fioCell, amount };
 }
-// Шапка/итог/не-ФИО? Общий фильтр для вставки и .xlsx.
-function isImportHeaderFio(fn) {
-  return !fn || !/[а-яё]{2}/i.test(fn) || /^(итого|итог|всего|сумма|ведомость|фио|сотрудник|списком|расшифровка|период|№)/.test(fn);
+/* Шапка/подвал/не-ФИО? Общий фильтр для вставки и .xlsx.
+   Принимает СЫРУЮ строку, а не нормализованную: fioNorm вырезает цифры,
+   двоеточия и кавычки — то есть ровно те приметы, по которым служебная строка и
+   узнаётся. Раньше фильтр получал уже очищенное и потому пропускал почти всё.
+
+   Проверено на настоящих реестрах «Список получателей» (ЗК 33/34/35): из 70
+   строк документа 12 служебных, и все они висели в предпросмотре как
+   «Не найден» — дюжина непонятных строк над собственными данными у человека,
+   который видит экран впервые. Одна из них, «Код вида дохода: 1», читалась ещё
+   и как сумма 1 ₽.
+
+   Правило по существу: ФИО — это 2–5 слов из букв, без цифр, двоеточий и
+   кавычек. Всё прочее в графе «Фамилия, имя, отчество» — оформление документа.
+   Список слов остаётся вторым рубежом: он ловит «Генеральный директор» и
+   «Список на зачисление», где ни цифр, ни знаков нет. */
+const IMPORT_SLUZHEBNYE = /^(итого|итог|всего|сумма|ведомость|фио|фамилия|сотрудник|списком|расшифровка|период|список|организация|единица|код|общество|генеральный|главный|бухгалтер|директор|руководитель|исполнитель|подпись|должность|приложение|получател)/;
+function isImportHeaderFio(syroe) {
+  const syro = String(syroe || '').trim();
+  const fn = fioNorm(syro);
+  if (!fn || !/[а-яё]{2}/i.test(fn)) return true;
+  if (/[\d:"«»№%]/.test(syro)) return true;              // «Код вида дохода:», «№ 35 от…», ООО "Доктор САН"
+  const slov = fn.split(' ').filter(Boolean);
+  if (slov.length < 2 || slov.length > 5) return true;   // «Бухгалтер» — одно слово, не ФИО
+  return IMPORT_SLUZHEBNYE.test(fn);
 }
 // Строка предпросмотра из ФИО + суммы (копейки) + пометки «уволен» (зачёркнут в
 // файле). Общий вход для вставки и .xlsx. Автогалочка ТОЛЬКО у точного совпадения
@@ -1801,7 +1858,7 @@ function parseImport() {
   for (const line of lines) {
     if (rows.length >= MAX_IMPORT_ROWS) { importState.truncated = true; break; }   // защита от гигантской вставки
     const { fio, amount } = splitImportLine(line);
-    if (isImportHeaderFio(fioNorm(fio))) continue;
+    if (isImportHeaderFio(fio)) continue;
     rows.push(buildImportRow(fio, parseAmountKop(amount), amount, false));
   }
   importState.rows = rows; importState.parsed = true;
@@ -1859,7 +1916,25 @@ function xlsxStruckStyles(doc) {
   const struck = new Set(); if (!doc) return struck;
   const struckFonts = new Set();
   const fonts = doc.getElementsByTagName('fonts')[0];
-  if (fonts) [...fonts.children].forEach((f, i) => { if (f.tagName === 'font' && f.getElementsByTagName('strike').length) struckFonts.add(i); });
+  // ⚠ НАЛИЧИЕ тега <strike/> ещё не значит «зачёркнут». В OOXML булевы признаки
+  // (b, i, strike) пишутся двумя способами: пустым тегом — «да», или тегом со
+  // значением: val="false"/"0" — «нет». Excel обычно ложные просто опускает,
+  // поэтому проверка «тег есть → зачёркнут» годами казалась верной.
+  //
+  // На настоящих реестрах она разваливается. Файлы «Список получателей» из банка
+  // (Arial, charset 204 — экспорт 1С/LibreOffice) выписывают признаки ЯВНО, и в
+  // каждом шрифте стоит <strike val="false"/>. Итог на живом документе ЗК 35:
+  // все 70 строк помечались «уволены (зачёркнуты)», к загрузке — 0 строк, 0 ₽.
+  // То есть бухгалтер грузит свою ведомость и не получает ничего, без объяснения.
+  const vklyucheno = el => {
+    const v = (el.getAttribute('val') ?? el.getAttribute('value') ?? '').trim().toLowerCase();
+    return v === '' || v === '1' || v === 'true' || v === 'on';
+  };
+  if (fonts) [...fonts.children].forEach((f, i) => {
+    if (f.tagName !== 'font') return;
+    const s = f.getElementsByTagName('strike');
+    if (s.length && [...s].some(vklyucheno)) struckFonts.add(i);
+  });
   const cellXfs = doc.getElementsByTagName('cellXfs')[0];
   if (cellXfs) [...cellXfs.children].forEach((xf, i) => { if (xf.tagName === 'xf' && struckFonts.has(+(xf.getAttribute('fontId') || 0))) struck.add(i); });
   return struck;
@@ -1935,7 +2010,7 @@ function xlsxGridToRows(grid) {
     if (out.length >= MAX_IMPORT_ROWS) { importState.truncated = true; break; }
     let fioCell = null, bestC = -1;
     for (const c of cells) { if (!c) continue; const k = (c.value.match(/[а-яё]/gi) || []).length; if (k > bestC) { bestC = k; fioCell = c; } }
-    if (!fioCell || isImportHeaderFio(fioNorm(fioCell.value))) continue;
+    if (!fioCell || isImportHeaderFio(fioCell.value)) continue;
     let amountCell = null;
     // 1) колонка суммы из шапки — если там валидная сумма
     if (amountCol >= 0 && cells[amountCol] && cells[amountCol] !== fioCell && cellAmountKop(cells[amountCol]) != null)
@@ -4756,6 +4831,9 @@ const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.car
 // считается ВЫДАННОЕ безналом, включая отпускные и больничные.
 const cardDelta = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
 let payrollRows = [], payrollLines = [], payrollSeq = 0, payrollShown = null;
+// Архивные с ненулевым остатком за показанный месяц: employee_id → delta_kop.
+// Заполняется загрузкой расчёта, читается меню («Архив · 2») и списком сотрудников.
+let archMoney = new Map();
 // Остаток прошлого месяца — чтобы кнопка переноса знала про устаревшие ещё до нажатия.
 let payrollPrev = null, payrollCarryNotes = new Map();
 let payrollMarked = [];   // сводка «подтверждено фактом» по месяцу (113)
@@ -4820,6 +4898,7 @@ async function renderPayroll(filter = '') {
   payrollShown = payPeriod;                             // теперь месяц ДЕЙСТВИТЕЛЬНО показан
   payrollMarked = marked || [];
   payrollRows = rows; payrollLines = lines;
+  zapomnitArhivnyeDolgi(rows);
   payrollNorms = new Map((norms || []).map(n => [n.employee_id, n]));
   payrollPrev = prevRem;
   // Примечания переносов: по ним пересчёт отличает свою запись от ручной.
@@ -4914,7 +4993,7 @@ function drawPayroll(filter = '') {
       // colspan 23, а не 22: в «Расчёте» прибавилась колонка «К концу месяца».
       const myCat = rows.filter(x => catOf(x) === cat);
       const catDelta = myCat.reduce((s, x) => s + (x.delta_kop || 0), 0);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="24"><span>${esc(catLabel(cat))} · ${myCat.length} чел · осталось выдать <b>${rub(catDelta)} ₽</b></span></td></tr>`;
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="24"><span>${esc(catLabel(cat))} · ${myCat.length} чел · осталось выдать <b class="money${catDelta < 0 ? ' neg' : ''}">${rub(catDelta)} ₽</b></span></td></tr>`;
     }
     const my = linesFor(r);
     const flags = payrollFlags(r);
@@ -6106,6 +6185,7 @@ async function renderOverview(reset = true) {
   } catch (e) { if (seq === ovSeq) { toast(e.message || e, true); ovPeriod = ovData?.period || want; workPeriod = ovPeriod; $('oLabel').textContent = periodLabel(ovPeriod); syncHash(false); } return; }
   if (seq !== ovSeq) return;                       // месяц сменили, пока грузили
   ovData = { rows, remarks, payouts: payouts?.list || [], aheadCnt: payouts?.ahead || 0, period: want, prevRem, marked };
+  zapomnitArhivnyeDolgi(rows);                       // метка «Архив · N» — с самого первого экрана
   $('oLabel').textContent = periodLabel(want);
   drawOverview();
 }
@@ -6396,6 +6476,7 @@ async function renderArchive() {
   } catch (e) { if (seq === arcSeq) { $('arcBody').innerHTML = ''; toast(e.message || e, true); } return; }
   if (seq !== arcSeq) return;
   const money = new Map(pay.map(r => [r.employee_id, r]));
+  zapomnitArhivnyeDolgi(pay);            // зашли прямо сюда по ссылке — метка тоже должна встать
   // hidden_at — карточка убрана владельцем «с глаз»: из списка уходит, запись и
   // журнал остаются (105). В arcRows держим ВСЕХ архивных, включая убранных, —
   // отсев делает drawArchive по галочке. Иначе переключение галочки лезло бы в
@@ -6432,11 +6513,17 @@ function drawArchive() {
   const shown = arcRows.filter(x => showHidden || !x.hidden);
   const hiddenN = arcRows.filter(x => x.hidden).length;
   const list = shown.filter(x => (!f || x.fio.toLowerCase().includes(f)) && (!onlyMoney || x.delta));
+  // Разделяем плюс и минус: это два РАЗНЫХ вопроса. Плюс — человеку не доплатили
+  // (наш долг, и он не выплатится сам). Минус — переплата, её либо переносят на
+  // следующий месяц, либо списывают. Одним счётчиком «с деньгами» они сливались.
   const withMoney = shown.filter(x => x.delta).length;
+  const nDolg = shown.filter(x => x.delta > 0).length;
+  const nPere = shown.filter(x => x.delta < 0).length;
   const noLeft = shown.filter(x => !x.left_on).length;
   const hiddenMoney = arcRows.filter(x => x.hidden && x.delta).length;
   $('arcStat').innerHTML = `<span class="mini-chip neutral">${shown.length} чел</span>`
-    + (withMoney ? `<span class="mini-chip">с деньгами: ${withMoney}</span>` : '')
+    + (nDolg ? `<span class="mini-chip">не доплатили: ${nDolg}</span>` : '')
+    + (nPere ? `<span class="mini-chip">переплата: ${nPere}</span>` : '')
     + (noLeft ? `<span class="mini-chip neutral">без даты увольнения: ${noLeft}</span>` : '')
     + (!showHidden && hiddenN ? `<span class="mini-chip neutral">убрано: ${hiddenN}${hiddenMoney ? `, из них с деньгами ${hiddenMoney}` : ''}</span>` : '');
 
@@ -6446,7 +6533,7 @@ function drawArchive() {
       <th class="num">Начислено</th><th class="num pw-pay">Осталось выдать</th><th></th></tr></thead><tbody>${
     list.map(x => `<tr class="arc-row${x.delta ? ' arc-money' : ''}">
       <td class="pw-name"><span class="pw-fio">${esc(x.fio)}</span>${
-        x.delta ? '<span class="mini-chip">остались деньги</span>' : ''}</td>
+        x.delta ? `<span class="mini-chip">${x.delta > 0 ? 'не доплатили' : 'переплата'}</span>` : ''}</td>
       <td class="muted">${esc(x.spec)}</td>
       <td>${x.left_on ? esc(dmy(x.left_on)) : '<span class="muted">не проставлена</span>'}</td>
       <td class="arc-by">${x.byWho

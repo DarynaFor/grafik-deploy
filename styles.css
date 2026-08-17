@@ -103,6 +103,12 @@ body.authed .login-stage{display:none}
 .nav-item:hover{background:var(--fill-2)}
 .nav-item.active{background:var(--fill-hi);color:var(--ink)}
 .nav-item .ic{width:20px;display:grid;place-items:center;color:var(--ink-3)}
+/* Метка «за уволенным остались деньги». Янтарная — это вопрос, а не авария;
+   красным в этом приложении помечают то, что уже сломано. */
+.nav-badge{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:var(--r-pill);
+  display:inline-grid;place-items:center;font-size:11.5px;font-weight:800;
+  color:var(--amber-d);background:rgba(242,193,78,.16);border:1px solid rgba(242,193,78,.3)}
+#mobileNav .nav-badge{margin-left:5px}
 .nav-item.active .ic{color:var(--green)}
 .main{grid-area:main;overflow-y:auto}
 .screen{display:none;padding:30px 34px 80px;max-width:1080px}
@@ -837,6 +843,9 @@ body.authed .login-stage{display:none}
    там, где её нет. Цвет на этом экране несёт смысл, а не украшает. */
 .pw td.pw-byplan .money.neg{color:var(--ink-3)}
 .pw td.pw-fcast .money.neg{color:var(--violet-d)}
+/* Подытог по отделению («ВРАЧИ · 1 чел · осталось выдать −900 000 ₽») шёл вообще
+   без класса и потому всегда был зелёным. Класс проставлен в drawPayroll; здесь
+   только следим, чтобы .pw-group b его не перебил — вес у .pw .money.neg выше. */
 .pw-flag{display:inline-block;padding:2px 7px;border-radius:var(--r-pill);
   font-size:10px;font-weight:700;letter-spacing:.03em;vertical-align:middle}
 .pw-flag.red{background:rgba(255,107,107,.14);color:var(--red-d)}

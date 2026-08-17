@@ -473,7 +473,16 @@ export class MockStore {
   }
   async listPayroll(period) {
     const lines = this._demoPayrollLines(period);
-    return this.db.employees.filter(e => e.status !== 'archived').map(e => {
+    // Архивных прод НЕ выбрасывает: keys в v_month_total держит человека, если за
+    // месяц есть хоть один денежный след — выплата, перенос, выдача, зарплата по
+    // графику. Иначе долг уволенному исчезал бы с экрана вместе с ним. Демо
+    // повторяет это правило: иначе оно врёт увереннее боя (тот же довод, что ниже
+    // про отпускные), и метка «Архив · N» в нём не появилась бы никогда.
+    const sled = e => (this.db.money || []).some(m => m.employee_id === e.id && m.period === period)
+      || (this.db.carry   || []).some(c => c.employee_id === e.id && c.period === period)
+      || (this.db.payouts || []).some(p => p.employee_id === e.id && p.period === period)
+      || lines.some(l => l.employee_id === e.id);
+    return this.db.employees.filter(e => e.status !== 'archived' || sled(e)).map(e => {
       const my = lines.filter(l => l.employee_id === e.id);
       const salary = my.reduce((s, l) => s + l.money_kop, 0);
       const mon = (this.db.money || []).filter(x => x.employee_id === e.id && x.period === period);
@@ -528,7 +537,8 @@ export class MockStore {
              + otpusk + otpuskCash + sum('bolnich')),
         norm_days: my.reduce((s, l) => s + l.planned, 0), fact_days: my.reduce((s, l) => s + l.worked, 0),
         flag_no_rate: !(e.lines || []).some(l => !l.valid_to), flag_partial_month: false,
-        flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false, flag_manual_salary: !!ovr };
+        flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false, flag_manual_salary: !!ovr,
+      flag_archived: e.status === 'archived' };
     });
   }
   async addMoneyLine({ employee_id, period, kind, amount_kop, note }) {
