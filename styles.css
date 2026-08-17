@@ -827,6 +827,16 @@ body.authed .login-stage{display:none}
 .pw-group span::before{content:'';width:9px;height:9px;border-radius:50%;background:var(--cat,var(--ink-3));flex:none}
 .pw-group b{color:var(--green-d);font-weight:800}
 .pw .money{color:var(--green-d)}
+/* ⚠ Минус — НЕ зелёный. `.money.neg` объявлен выше и с той же силой, поэтому
+   `.pw .money` его перебивал: «Переплата вперёд −270 729 ₽» красилась ровно как
+   «Осталось выдать» — деньги, которых на руки не дадут, выглядели деньгами к
+   выдаче. Нашлось при разборе телефонной вёрстки, но касается и десктопа. */
+.pw .money.neg{color:var(--red-d)}
+/* ...но НЕ в «По плану» и «К концу месяца»: эти две колонки красятся по своему
+   смыслу (серое — план, фиолетовое — прогноз), и красный там означал бы тревогу
+   там, где её нет. Цвет на этом экране несёт смысл, а не украшает. */
+.pw td.pw-byplan .money.neg{color:var(--ink-3)}
+.pw td.pw-fcast .money.neg{color:var(--violet-d)}
 .pw-flag{display:inline-block;padding:2px 7px;border-radius:var(--r-pill);
   font-size:10px;font-weight:700;letter-spacing:.03em;vertical-align:middle}
 .pw-flag.red{background:rgba(255,107,107,.14);color:var(--red-d)}
@@ -1251,7 +1261,15 @@ tr.pw-total.pw-over{z-index:5}
      Приморожено остаётся, но узкое: фамилии хватает, а на строку и так можно
      нажать и открыть карточку. */
   .pw .pw-name{max-width:112px}
+  /* «Кто убрал в архив» — справочная колонка, и распирать ради неё таблицу
+     нельзя: из-за наследованного nowrap она вышла шире всех (277px) и оттеснила
+     «Осталось выдать» — то самое, ради чего в архив и заходят (там нашёлся
+     Частухин с 27 000 ₽). Переносим в две строки и держим узкой. */
+  .pw.arc td.arc-by{white-space:normal;max-width:120px;line-height:1.3}
 }
+/* На широком тоже ограничиваем: с новой колонкой таблица впервые перестала
+   помещаться в контейнер (1331 против 1254). */
+.pw.arc td.arc-by, .pw.arc th.arc-by{max-width:210px}
 
 /* ── Телефон: поля не должны заставлять айфон зумить страницу ────────────────
    Safari на iOS увеличивает ВСЮ страницу, когда фокус попадает в поле с
@@ -1335,3 +1353,142 @@ tr.pw-total.pw-over{z-index:5}
 .ov-line.ov-waiting b{color:var(--ink-3)}
 .ov-line.ov-waiting span{color:var(--ink-3)}
 .ov-metric.ov-fcast .v{color:var(--violet-d,#6b46c1)}
+
+/* ── Телефон: «Расчёт» перестаёт быть таблицей ───────────────────────────────
+   24 колонки в 375 пикселей не помещаются ни при каком кегле. Раньше таблицу
+   ужимали и морозили имя, и получалось хуже, чем «мелко»: Милена открыла экран,
+   потянула вбок — цифры уехали под примороженное имя, на виду остались пустые
+   ячейки, и она решила, что в расчёте ВЕЗДЕ НУЛИ. Экран, который врёт про
+   деньги, хуже экрана, который их не показывает.
+
+   Поэтому на узком строка становится карточкой с тремя числами, которые
+   владелице и нужны: заработано · осталось выдать · к концу месяца. Остальные
+   двадцать колонок никуда не делись — карточка открывается нажатием, там вся
+   разбивка и ввод. Десктоп не меняется, там таблица на месте.
+
+   Правила ниже идут ПОСЛЕ блока с width:104px (стр. ~1241) намеренно: тот блок
+   ужимал те же три колонки для старого табличного режима, и его надо перекрыть.
+   Всё заперто на .pw-host — класс .pw висит ещё на архиве и отпусках. */
+@media (max-width:767px){
+  /* ⚠ НЕ трогаем overflow обёртки. Первая редакция ставила здесь
+     overflow:visible «чтобы отпустить горизонтальную прокрутку» — и убивала
+     прокрутку ВЕРТИКАЛЬНУЮ: на «Расчёте» .gridwrap единственный прокручиваемый
+     блок (#s-payroll.show держит height:100% + overflow:hidden), а .main под ним
+     не прокручивается вовсе. Экран замирал на трёх карточках из ста девятнадцати,
+     итоги были недостижимы. Отпускать при этом нечего: в карточном режиме
+     table.pw{width:100%}, горизонтального переполнения уже нет. */
+  .pw-host table.pw{min-width:0;width:100%;border-collapse:separate;border-spacing:0}
+  .pw-host .pw thead{display:none}
+  .pw-host .pw, .pw-host .pw tbody, .pw-host .pw tfoot, .pw-host .pw tr, .pw-host .pw td{
+    display:block;width:auto}
+  /* Базово прячем ВСЁ, показываем поимённо. Так новая колонка, которую кто-то
+     добавит в таблицу, не полезет на телефон сама собой. */
+  .pw-host .pw td{display:none}
+  .pw-host .pw td.pw-name,
+  .pw-host .pw td.pw-earned,
+  .pw-host .pw td.pw-pay,
+  .pw-host .pw td.pw-fcast{display:block}
+  /* Приморозку снимаем целиком: в блочном режиме она приклеивает ячейку к краю
+     экрана поверх соседей — ровно тот эффект, из-за которого всё и затевалось. */
+  .pw-host .pw td, .pw-host .pw th{position:static !important;
+    width:auto !important;min-width:0 !important;max-width:none !important}
+  .pw-host .pw tfoot tr.pw-total{position:static !important;bottom:auto !important}
+
+  /* ── Карточка человека ─────────────────────────────────────────────── */
+  .pw-host .pw tr.pw-row{
+    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px 8px;
+    padding:11px 13px;margin-bottom:8px;cursor:pointer;
+    background:var(--surf-2);border:1px solid var(--glass-bd);border-radius:14px}
+  .pw-host .pw tr.pw-row:active{background:var(--fill-hi)}
+  /* Вторая и последующие ставки одного человека — отдельные <tr> без фамилии.
+     В карточке они были бы пустыми прямоугольниками; разбивка по ставкам
+     целиком есть в открывающейся карточке. */
+  .pw-host .pw tr.pw-sub{display:none}
+  .pw-host .pw td.pw-name{
+    grid-column:1/-1;display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+    padding:0 0 7px;border:none;font-weight:650;font-size:14px;line-height:1.3}
+  /* Строка «нет ставки» / «нет начислений за месяц» — она приходит одной
+     ячейкой с colspan, поэтому показывается отдельным правилом. */
+  .pw-host .pw tr.pw-row td[colspan]{display:block;grid-column:1/-1;padding:0 0 6px}
+  /* Фон таблицы внутри карточки читается как чужая полоса (в тёмной теме
+     особенно): у .pw td он var(--bg), у .pw-total td — var(--surf-1). */
+  .pw-host .pw td[colspan]{background:none;border:none}
+  .pw-host .pw tr.pw-row td[colspan]:empty{display:none}
+  .pw-host .pw tr.pw-row td.num{
+    padding:0;text-align:left;font-size:13px;line-height:1.25;
+    font-variant-numeric:tabular-nums;background:none;border:none}
+  /* Подпись над числом — иначе три суммы подряд неразличимы, а именно на этом
+     экране путаница между «заработал» и «осталось выдать» стоит денег. */
+  .pw-host .pw tr.pw-row td.num::before{
+    display:block;margin-bottom:1px;font-size:9px;font-weight:700;
+    letter-spacing:.03em;text-transform:uppercase;color:var(--ink-2);
+    /* Два ряда с общей высотой: «Осталось выдать» в одну строку не влезает, а
+       обрезать ЭТУ подпись нельзя — её и читают. min-height держит числа на
+       одной линии, хотя подписи разной длины. */
+    white-space:normal;line-height:1.15;min-height:2.3em}
+  .pw-host .pw td.pw-earned::before{content:"Заработано"}
+  .pw-host .pw td.pw-pay::before{content:"Осталось выдать"}
+  .pw-host .pw td.pw-fcast::before{content:"К концу месяца"}
+  /* В подвале та же колонка отвечает на другой вопрос — сколько ВЫДАТЬ к концу
+     месяца, тогда как соседняя строка говорит, сколько НАЧИСЛИМ. На десктопе их
+     разводят колонки, в карточках развести может только подпись. */
+  .pw-host .pw tr.pw-total td.pw-fcast::before{content:"К выдаче на конец месяца"}
+  /* Цвета те же, что на «Обзоре» и в таблице: фиолетовое — заработано,
+     зелёное — подтверждено и к выдаче, серое — прогноз по плану. */
+  /* .pw td задаёт nowrap для табличного режима — в карточке из-за него
+     пояснение «зарплата … + премии … + отпускные …» уезжало за правый край. */
+  .pw-host .pw td{white-space:normal;overflow-wrap:anywhere}
+  /* Прогноз фиолетовый — тот же язык цвета, что на «Обзоре» и в таблице:
+     серое план, зелёное подтверждено, фиолетовое прогноз. */
+  .pw-host .pw tr.pw-row td.pw-fcast{color:var(--violet-d)}
+
+  /* ── Заголовок отделения ──────────────────────────────────────────── */
+  .pw-host .pw tr.pw-group{display:block;margin:14px 0 7px}
+  .pw-host .pw tr.pw-group td{display:block;padding:0;border:none;background:none}
+  .pw-host .pw tr.pw-group span{font-size:10.5px;line-height:1.35;
+    white-space:normal;display:block}
+
+  /* ── Итоги ────────────────────────────────────────────────────────────
+     Здесь суммы семизначные, а пояснения длинные, поэтому не три колонки, а
+     список «подпись — значение» во всю ширину. */
+  .pw-host .pw tfoot{display:block;margin-top:14px}
+  .pw-host .pw tr.pw-total{
+    display:block;padding:12px 13px;margin-bottom:8px;
+    background:var(--surf-2);border:1px solid var(--glass-bd);border-radius:14px}
+  .pw-host .pw tr.pw-total td.pw-name{
+    padding:0 0 8px;font-size:13px;font-weight:750;text-transform:uppercase;
+    letter-spacing:.03em;border:none}
+  .pw-host .pw tr.pw-total td[colspan]{display:block;padding:0 0 8px;
+    font-size:11.5px;line-height:1.45}
+  .pw-host .pw tr.pw-total td[colspan]:empty{display:none}
+  .pw-host .pw tr.pw-total td.pw-earned,
+  .pw-host .pw tr.pw-total td.pw-pay,
+  .pw-host .pw tr.pw-total td.pw-fcast{
+    display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+    padding:5px 0;text-align:right;font-size:14px;
+    font-variant-numeric:tabular-nums;background:none;
+    border:none;border-top:1px dashed var(--glass-bd)}
+  .pw-host .pw tr.pw-total td.pw-earned::before,
+  .pw-host .pw tr.pw-total td.pw-pay::before,
+  .pw-host .pw tr.pw-total td.pw-fcast::before{
+    font-size:11px;font-weight:600;text-transform:none;letter-spacing:0;
+    color:var(--ink-2);white-space:nowrap}
+  .pw-host .pw tr.pw-total td.pw-earned:empty,
+  .pw-host .pw tr.pw-total td.pw-pay:empty,
+  .pw-host .pw tr.pw-total td.pw-fcast:empty{display:none}
+  /* ⚠ В итоговых строках колонка «Осталось выдать» занята под РАЗНОЕ: у
+     «Подтверждено фактом» там процент отметок, у прогноза — сумма к концу
+     месяца, у переплаты — минус. Общая подпись врала бы прямо про деньги,
+     поэтому каждой строке своя. */
+  .pw-host .pw tr.pw-accrued td.pw-pay::before{content:"Начислено всего"}
+  .pw-host .pw tr.pw-plan td.pw-pay::before{content:"Отмечено фактом"}
+  .pw-host .pw tr.pw-forecast td.pw-pay::before{content:"Начислим за месяц"}
+  .pw-host .pw tr.pw-over td.pw-pay::before{content:"Переплачено вперёд"}
+}
+
+/* Подпись под плитками «Обзора»: из чего сложен прогноз к концу месяца. Отдельной
+   строкой, а не в плитке — на плитке помещается только число, а число без
+   объяснения («откуда 5,3 млн, если начислено 4,2?») стоит владельцу вопроса. */
+.ov-fnote{margin-top:10px;padding:10px 13px;border-radius:12px;
+  background:var(--fill-1);color:var(--ink-2);font-size:12px;line-height:1.5}
+.ov-fnote b{color:var(--violet-d);font-variant-numeric:tabular-nums}

@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=210';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=212';
 
 const $ = id => document.getElementById(id);
 
@@ -291,6 +291,9 @@ const initials = f => String(f || '?').split(' ').slice(0, 2).map(w => w[0] || '
 const PAY_KINDS = [['оклад', 'Оклад'], ['фикс', 'Фикс/мес'], ['сутки', 'Сутки'], ['12ч', '12ч день / ночь'], ['почасово', 'Почасово'], ['процент', 'Процент'], ['сдельно', 'Сдельно (сумма за месяц)']];
 const payKindLabel = k => (PAY_KINDS.find(p => p[0] === k) || [k, k])[1];
 const fmtDT = iso => { const d = new Date(iso); return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
+// То же самое, но с годом. В журнале год не нужен — там смотрят свежее, — а в
+// архиве карточка может лежать не первый год, и «04.08 19:28» неоднозначно.
+const fmtDTY = iso => { const d = new Date(iso); return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
 const fmt = n => Number(n || 0).toLocaleString('ru-RU');            // 80000 → «80 000» (деньги, ставки)
 
 /* Надёжный разбор денежной суммы. Пробелы = разделитель тысяч. «50.000»/«50,000»
@@ -398,36 +401,39 @@ function renderLogin() {
 
 /* ── каркас после входа ── */
 const NAV = [
-  // Обзор — только владельцу и первым: с него Милена начинает, оттуда видит,
-  // не залезая в экраны, всё ли в порядке. Остальные роли работают, а не смотрят.
+  /* Порядок задала Дарина 12.08 — по тому, чем Милена пользуется чаще всего:
+     обзор → расчёт → график → отпуска → журнал → отделения → правила → импорт →
+     архив → пробелы. Раньше порядок сложился исторически, и «Расчёт» — то, ради
+     чего программу открывают, — стоял седьмым.
+
+     «Сотрудники» и «Оплаты пациентов» Дарина не называла: они нужны Алёне, а не
+     владелице, поэтому стоят после её списка и ей на глаза не лезут.
+
+     «Ставки» убраны из меню совсем (Дарина: «це потрібно було на початок роботы,
+     а зараз вже усім заведено»). Экран жив и открывается по адресу #/stavki —
+     массовый ввод ставок может понадобиться при найме сразу нескольких людей. */
   { s: 'overview', i: 'chart', l: 'Обзор', ownerOnly: true },
-  // Пробелы — рабочий список «что дозаполнить». Обзор показывает флаги счётчиками
-  // и уводит на Расчёт; здесь те же флаги развёрнуты пофамильно, плюс то, чего в
-  // v_month_total нет вовсе (нет графика за месяц, дыры в карточке).
-  // staffOnly, а не ownerOnly: заполняет пробелы Алёна, ей и нужен список
-  // (решение 30.07). Утечки скрытой зарплаты это не даёт — v_month_total
-  // ВЫБРАСЫВАЕТ строку целиком: `NOT (hidden_salary AND current_app_role() IN
-  // ('operator','cashier1','cashier2'))`, миграции 040/041. То есть у Алёны
-  // спрятанный человек просто не появится ни в одной денежной группе.
-  { s: 'gaps', i: 'alert', l: 'Пробелы', staffOnly: true },
-  { s: 'vacation', i: 'cal', l: 'Отпуска' },   // видят все, включая кассу (115): суммы отпускных вносит и она
-  { s: 'archive', i: 'users', l: 'Архив', ownerOnly: true },
-  // isStaff, а не canEditCards: пункт вёл бы бухгалтера на экран, до которого он
-  // всё равно не доходит — enter() уводит кассы на заглушку раньше загрузки.
-  { s: 'employees', i: 'users', l: 'Сотрудники', show: () => worksWithPayroll() },   // бухгалтер смотрит, править не может (127)
-  { s: 'schedule', i: 'cal', l: 'График', show: () => worksWithPayroll() },
   { s: 'payroll', i: 'coin', l: 'Расчёт', show: () => worksWithPayroll() },
-  { s: 'rates', i: 'coin', l: 'Ставки', ownerOnly: true },
-  // Только owner+operator: RLS на patient_payment (pp_sel) пускает именно их,
-  // касса оплаты пациентов не видит — это не её участок.
-  { s: 'patients', i: 'card', l: 'Оплаты пациентов', staffOnly: true },
-  // Импорт ведомостей: каждый вносит СВОИ документы. Кто какой вид денег может
-  // писать — заперто в RLS money_line (миграция 008); экран лишь показывает то,
-  // что роль реально может внести, и то же проверит база. show: canImport.
-  { s: 'import', i: 'upload', l: 'Импорт', show: () => canImport() },
+  { s: 'schedule', i: 'cal', l: 'График', show: () => worksWithPayroll() },
+  // Видят все, включая кассу (115): суммы отпускных вносит и она.
+  { s: 'vacation', i: 'cal', l: 'Отпуска' },
+  { s: 'journal', i: 'journal', l: 'Журнал', ownerOnly: true },
   { s: 'specialties', i: 'tag', l: 'Отделения', staffOnly: true },
   { s: 'rules', i: 'tag', l: 'Правила', staffOnly: true },
-  { s: 'journal', i: 'journal', l: 'Журнал', ownerOnly: true },
+  // Каждый вносит СВОИ документы: что роль может записать, заперто в RLS
+  // money_line (008), экран лишь показывает доступное.
+  { s: 'import', i: 'upload', l: 'Импорт', show: () => canImport() },
+  { s: 'archive', i: 'users', l: 'Архив', ownerOnly: true },
+  /* «Пробелы» — рабочий список «что дозаполнить»: те же флаги, что на «Обзоре»,
+     но пофамильно, плюс то, чего в расчёте нет вовсе (нет графика за месяц, дыры
+     в карточке). staffOnly, потому что заполняет их Алёна. Утечки скрытой
+     зарплаты не даёт: v_month_total выбрасывает такую строку целиком (040/041). */
+  { s: 'gaps', i: 'alert', l: 'Пробелы', staffOnly: true },
+
+  // Дальше — то, что нужно Алёне, а не владелице.
+  { s: 'employees', i: 'users', l: 'Сотрудники', show: () => worksWithPayroll() },
+  // Только owner+operator: RLS patient_payment (pp_sel) пускает именно их.
+  { s: 'patients', i: 'card', l: 'Оплаты пациентов', staffOnly: true },
 ];
 function isOwner() { return store.me()?.role === 'owner'; }
 function navItems() { return NAV.filter(n => (!n.ownerOnly || isOwner()) && (!n.staffOnly || isStaff()) && (!n.show || n.show())); }
@@ -479,9 +485,11 @@ function renderNav() {
   $('sideNav').innerHTML = navItems().map(n => `<button class="nav-item${n.s === curScreen ? ' active' : ''}" data-s="${n.s}"><span class="ic">${ICONS[n.i] || ''}</span>${n.l}</button>`).join('');
   $('mobileNav').innerHTML = navItems().map(n => `<button data-s="${n.s}" class="${n.s === curScreen ? 'active' : ''}"><span>${ICONS[n.i] || ''}</span>${n.l}</button>`).join('');
   document.querySelectorAll('[data-s]').forEach(b => b.onclick = () => go(b.dataset.s));
-  // Нижнее меню шире экрана (11 пунктов) и теперь листается. Активный подводим
-  // сами: иначе, открыв «Ставки», человек видит ленту с начала и не понимает,
-  // где он. `nearest` — чтобы не дёргать ленту, когда пункт и так на виду.
+  // Нижнее меню шире экрана и листается. Активный подводим сами: иначе, открыв
+  // дальний пункт, человек видит ленту с начала и не понимает, где он.
+  // `nearest` — чтобы не дёргать ленту, когда пункт и так на виду.
+  // act бывает null: «Ставки» убраны из меню, но экран открывается по адресу и
+  // из «Пробелов» — подсвечивать тогда нечего, и это нормально.
   const act = $('mobileNav').querySelector('button.active');
   if (act && act.scrollIntoView) { try { act.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {} }
 }
@@ -656,6 +664,11 @@ function parseHash() {
 // сотрудников. Заглушка «скоро» — наоборот, только тем, у кого нет экранов.
 function allowedScreen(s) {
   if (s === 'card') return worksWithPayroll();
+  /* «Ставки» убраны ИЗ МЕНЮ, но не из программы: экран открывается по адресу и
+     из «Пробелов» (RATES_GO). Без этой строки allowedScreen пошёл бы по NAV,
+     где пункта больше нет, — и #/stavki отвергался бы при переходе, при
+     «назад» и при восстановлении адреса после самоперезагрузки. */
+  if (s === 'rates') return isOwner();
   if (s === 'soon') return !worksWithPayroll();
   return navItems().some(n => n.s === s);
 }
@@ -1094,7 +1107,25 @@ function cardGaps(e) {
   return {
     // пробел по СОДЕРЖИМОМУ: нужна фамилия+имя (>=2 слова). sentinel — доп. сигнал по импортированным.
     fio: e.position === FIO_SENTINEL || fio.split(/\s+/).filter(Boolean).length < 2,
-    rate: !(e.lines || []).some(l => !l.valid_to && l.line_type === 'основной'),
+    /* Пробел — когда считать зарплату НЕ ПО ЧЕМУ, то есть нет ни одной живой
+       строки начисления. Раньше здесь требовалась бессрочная строка именно
+       типа «основной», и совместитель с нормальной действующей ставкой
+       попадал в «Не заведена ставка»: на «Пробелах» висело 7 человек, из них
+       у пятерых (Голик, Горбатенкова, Лобанова, Новикова, Иван) ставка была и
+       зарплата считалась. Экран, который зовёт заводить уже заведённое, учит
+       не верить и настоящим пробелам — а настоящих было ровно два.
+       Строка с будущим valid_from тоже считается заведённой: она есть, просто
+       начнёт действовать позже. Закрытая прошлым числом — не считается. */
+    /* ⚠ У скрытого сотрудника (гендиректор, 040/065/066) строки начисления не
+       приходят вовсе — rate_select отдаёт их только владелице, — поэтому у всех
+       остальных `lines` пуст и пробел «нет ставки» получался ВСЕГДА. Экран тем
+       самым сообщал Алёне: этого человека от тебя прячут. Раньше он тонул среди
+       восьми ложных срабатываний, а после починки правила остался бы одним из
+       трёх — то есть починка сделала утечку заметнее.
+       Урок 065/066 ровно про это: «нельзя» должно выглядеть как «нет вопроса»,
+       а не как красный флаг. Сумма не утекала и не утекает — утекал сам факт. */
+    rate: (isOwner() || !e.hidden_salary)
+      && !(e.lines || []).some(l => !l.valid_to || l.valid_to >= mskTodayISO()),
     // ТОТ ЖЕ инвариант, что CHECK в базе. Раньше стояло digits.length < 11 —
     // и «77921554123» (потерянная цифра, дописанная кодом страны) проходило,
     // значок пропадал, а СМС ушла бы чужому. См. migrations/023.
@@ -1499,7 +1530,8 @@ async function loadCardMoney(id) {
               показывала СПЛОШНЫЕ НУЛИ (оклад за дни отпуска не начисляется — 044,
               значит Начислено 0 и Δ 0), пока касса должна ему все отпускные. */''}
         ${r.to_pay_kop ? `<span class="mini-chip">К выдаче наличными: <b>${rub(r.to_pay_kop)} ₽</b></span>` : ''}
-        ${r.flag_no_rate ? '<span class="mini-chip warn">нет ставки</span>' : ''}
+        ${r.flag_no_rate && !payNotByShift(id, per)
+          ? '<span class="mini-chip warn">вид смены без ставки</span>' : ''}
       </div>`;
   } catch (err) { box.innerHTML = ''; }
 }
@@ -4575,6 +4607,45 @@ function deltaCell(r, salaryKop) {
   if (v === (+r.delta_kop || 0)) return '<span class="muted">—</span>';
   return `<b class="money${v < 0 ? ' neg' : ''}">${rub(v)}</b>`;
 }
+/* Прогноз тем, кому график не заводили вовсе: их сумма за прошлый месяц.
+
+   ⚠ Один расчёт на «Расчёт» и «Обзор». Оба экрана называют «к концу месяца», и
+   разъехаться им нельзя: владелец сверяет одно с другим. На этом уже обжигались
+   со «Начислено ноль» — своя формула на «Пробелах» давала 11 человек против 1 у
+   флага, и два экрана спорили друг с другом про один и тот же месяц.
+
+   Условие «пусто по-настоящему» (ни начисления, ни плана) отсекает ФИКСНИКОВ:
+   фикс считается из карточки, графика не требует и уже сидит в сумме по графикам.
+   Окладников оно НЕ отсекает — оклад считается от часов графика и без графика
+   даёт ноль (это и есть flag_oklad_no_days). Им прогноз по прошлому месяцу как
+   раз и нужен: оклад они получат. */
+function prevMonthForecast(rows, prev, marked) {
+  const prevSal = new Map((prev?.all || []).map(p => [p.employee_id, p.salary_kop || 0]));
+  /* ⚠ «Нет графика» — это ОТСУТСТВИЕ СТРОКИ в v_month_marked, а не нули в
+     деньгах. Первая редакция брала всех, у кого начислено и план нулевые, и
+     ловила совсем других людей:
+     · Воронина и Синенченко весь август В ОТПУСКЕ (31 клетка из 31). Зарплаты
+       они не заработают, а отпускные придут своей графой — и плитка «Обзора»
+       посчитала бы те же деньги дважды, отпускными и прошлой зарплатой. 222 000 ₽.
+     · Ещё девять — процентники: график у них есть, ноль оттого, что за август
+       не внесены оплаты пациентов. Им нужна выручка, а не график, и совет
+       «заведите график» был бы ровно той глупостью, от которой мы только что
+       чинили «нет ставки».
+     Из восемнадцати остаётся семеро — те, у кого клеток нет вообще. */
+  const noSched = id => !(marked instanceof Set ? marked.has(id) : false);
+  const who = rows.filter(r => noSched(r.employee_id) &&
+    /* ⚠ Уволенного в прогноз брать нельзя: он в этом месяце уже не заработает.
+       Строку в расчёте он всё-таки получает — `keys` во вьюхе (119) это не
+       только активные, а UNION с money_line, month_carry и выплатами. Обычный
+       путь: расчёт при увольнении проводят СЛЕДУЮЩИМ месяцем, и человек
+       появляется с нулями; кнопка «Перенести остатки» затаскивает архивных
+       туда же сама. Сегодня таких в базе нет, поэтому на глаз это не поймать —
+       но прогноз завышался бы ровно на зарплату тех, кто уже не работает,
+       а прогноз и делался для того, чтобы планировать наличку. */
+    r.status === 'active' && !r.flag_archived
+    && !(r.salary_plan_kop || 0) && !(r.salary_kop || 0) && prevSal.get(r.employee_id) > 0);
+  return { who, sum: who.reduce((a, r) => a + prevSal.get(r.employee_id), 0), period: prev?.prev || null };
+}
 function forecastRow(r) {
   const fin = +r.salary_plan_kop || 0;
   if (!fin || fin <= (+r.salary_kop || 0)) return '';
@@ -4873,7 +4944,8 @@ function drawPayroll(filter = '') {
 `;
     if (!my.length) {
       body += `<tr class="pw-row" data-id="${r.employee_id}"><td class="pw-name"><span class="pw-fio">${esc(r.fio)}</span>${flags}</td>
-        <td colspan="4" class="muted small">${r.flag_no_rate ? 'нет ставки' : 'нет начислений за месяц'}</td>${right}</tr>`;
+        <td colspan="4" class="muted small">${r.flag_no_rate && !payNotByShift(r.employee_id, payPeriod)
+          ? 'вид смены не связан со ставкой' : 'нет начислений за месяц'}</td>${right}</tr>`;
       continue;
     }
     my.forEach((l, i) => {
@@ -4963,13 +5035,39 @@ function drawPayroll(filter = '') {
          Строка появляется только пока в месяце есть будущие плановые дни: когда
          месяц дошёл до конца, прогноз сравнивается с фактом и говорить нечего. */
       const done = sum('salary_marked_kop'), fin = sum('salary_plan_kop');
-      if (!fin || fin <= sum('salary_kop')) return '';
-      const left = fin - done;
+      /* ⚠ Прогноз по графикам молчит о тех, кому график не заводили вовсе: у них
+         и начислено, и план — нули, и в сумму они не попадают ничем. В августе
+         таких оказалось 18 человек больше чем на миллион (Зарипов 245 700,
+         Бочаров 220 800, Воронина 150 000 …) — то есть «к концу месяца» было
+         занижено на эту величину, и по нему нельзя было планировать наличку.
+
+         Дарина: «давай може тоді якусь прогнозовану суму брати з попереднього
+         місяця? але окремо писати, стільки з графіків, стільки прогнозованих».
+         Так и делаем — и НЕ смешиваем: сумма по графикам и прогноз по прошлому
+         месяцу названы порознь, потому что доверие к ним разное. Прошлый месяц
+         — это догадка: человек мог уйти, заболеть, сменить ставку.
+
+         Берём только тех, у кого в этом месяце по-настоящему пусто (ни
+         начисления, ни плана): у окладника и фиксника деньги считаются без
+         графика, они уже в fin и вторым слоем идти не должны. */
+      const fc = prevMonthForecast(rows, payrollPrev, new Set((payrollMarked || []).map(m => m.employee_id)));
+      const noSched = fc.who, fromPrev = fc.sum;
+      // Раньше выходили молча, когда план не превышает начисленное. Теперь
+      // остаёмся, если есть что сказать про людей без графика.
+      if ((!fin || fin <= sum('salary_kop')) && !fromPrev) return '';
+      const left = Math.max(0, fin - done);
+      const byPlan = fin > sum('salary_kop')
+        ? `по графикам <b>${rub(fin)}</b> (уже подтверждено ${rub(done)} + осталось отработать по плану ${rub(left)})`
+        : `по графикам <b>${rub(fin)}</b>`;
+      const prevPart = fromPrev
+        ? ` · по прошлому месяцу <b>${rub(fromPrev)}</b> — ${noSched.length} ${plural(noSched.length, 'человек', 'человека', 'человек')} без графика (${
+            esc(noSched.slice(0, 3).map(r => shortFio(r.fio)).join(', '))}${noSched.length > 3 ? ' и другие' : ''}), сумма взята за ${periodLabel(payrollPrev.prev).toLowerCase()}`
+        : '';
       return `<tr class="pw-total pw-forecast"><td class="pw-name">К концу месяца</td>
-        <td colspan="10" class="muted small">если доработают по графику: уже подтверждено
-          <b>${rub(done)}</b> + осталось отработать по плану ${rub(left)}.
-          Это прогноз, а не долг — в «Осталось выдать» идёт только подтверждённое</td>
-        <td class="num pw-byplan"></td><td class="num pw-pay fin"><b class="money">${rub(fin)}</b></td><td class="num pw-fcast"></td>
+        <td colspan="10" class="muted small">если доработают: ${byPlan}${prevPart}.
+          Это прогноз, а не долг — в «Осталось выдать» идёт только подтверждённое${
+            fromPrev ? '; заведите таким людям график, и догадка сменится расчётом' : ''}</td>
+        <td class="num pw-byplan"></td><td class="num pw-pay fin"><b class="money">${rub(fin + fromPrev)}</b></td><td class="num pw-fcast"></td>
         <td colspan="10"></td></tr>`;
     })()}
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
@@ -5023,14 +5121,38 @@ function drawPayroll(filter = '') {
 }
 
 // Флаги — короткими чипами у имени. Это ПОДСКАЗКА «посмотри», а не приговор.
-// Есть ли у человека вид оплаты «сдельно», действующий в периоде ведомости.
-// Держим отдельной функцией: этим признаком гасится ложный flag_no_rate и в
-// чипах, и в счётчике «нужна ставка», и в модалке — расходиться им нельзя.
-function isPiece(employee_id) {
+// (isPiece убрана: гасить ложный flag_no_rate у сдельщиков было её единственным
+//  делом, и теперь это делает payNotByShift — шире и одним местом на все экраны.)
+/* Оплата, которой ВСЁ РАВНО, какой вид смены стоит в клетке: оклад считается от
+   часов, фикс — раз в месяц, сдельно — суммой прямо из клетки. У таких людей
+   flag_no_rate («день не нашёл ставку») денег не стоит ни копейки.
+
+   Проверено на августе: у Богдановой 3–8 стоит вид «День» и маршрут в оклад
+   есть, 11–16 стоит «12ч» и маршрута нет — а начислено 37 333 ₽, то есть
+   70 000 ÷ 180 × 96 ч, все восемь дней. Часы для оклада вьюха берёт без
+   оглядки на маршрут (oklad_hours), поэтому день «без ставки» оплачен.
+
+   Так на «Обзоре» набиралось 11 человек под красным «Не заведена ставка», у
+   которых ставка есть и деньги начислены. Гасим ровно этот случай — у людей
+   БЕЗ такой оплаты (платят только за смены) день без маршрута действительно
+   оплачивается нулём, и там сигнал остаётся. */
+function payNotByShift(employee_id, period) {
   const e = employees.find(x => x.id === employee_id);
-  if (!e || !e.lines) return false;
-  const p1 = payPeriod + '-01', pn = nextPeriodStart(payPeriod);
-  return e.lines.some(l => l.pay_kind === 'сдельно' && l.valid_from < pn && (!l.valid_to || l.valid_to > p1));
+  if (!e || !e.lines || !period) return false;
+  const p1 = period + '-01', pn = nextPeriodStart(period);
+  const live = e.lines.filter(l => l.valid_from < pn && (!l.valid_to || l.valid_to > p1));
+  /* ⚠ Сначала проверяем ОБРАТНОЕ. Есть сменная ставка — значит смены человеку
+     платят отдельно, и день без маршрута это прямая недоплата, а не шум.
+     Оклад такие часы не подхватит: дежурства стоят position='second', а
+     oklad_hours во вьюхе считает только 'main'.
+     Так живут трое: Гулевский (оклад 194 000 + сутки 18 000 + 12ч 9 000),
+     Максимова (оклад 133 000 + те же смены) и Орлова (фикс + 12ч). Первая
+     редакция гасила флаг «есть оклад — значит шум» и по ним тоже: закройся у
+     них ставка «сутки» задним числом (так уже бывало, миграция 081), и 72 000 ₽
+     за август с 99 000 ₽ за июль пропали бы молча, разом со всеми тремя
+     экранами, которые об этом кричали. */
+  if (live.some(l => ['сутки', '12ч', 'почасово'].includes(l.pay_kind))) return false;
+  return live.some(l => ['сдельно', 'оклад', 'фикс'].includes(l.pay_kind));
 }
 function payrollFlags(r) {
   const f = [];
@@ -5038,7 +5160,9 @@ function payrollFlags(r) {
   if (!r.flag_manual_salary) {            // при ручной финальной сумме расчётные предупреждения не к месту
     if (r.flag_money_without_calc) f.push(['деньги без расчёта', 'red']);
     // у сдельщика ставки «под смену» и не должно быть — сумму называют числом
-  if (r.flag_no_rate && !isPiece(r.employee_id)) f.push(['нет ставки', 'red']);
+    // Текст правдивый: ставка у человека есть, а вот вид смены из графика с ней
+    // не связан. «Нет ставки» посылало заводить уже заведённое.
+    if (r.flag_no_rate && !payNotByShift(r.employee_id, payPeriod)) f.push(['вид смены без ставки', 'red']);
     if (r.flag_oklad_no_days)  f.push(['оклад без дней', 'red']);
     if (r.flag_rate_gap)       f.push(['ставка не на все дни', 'amber']);
     if (r.flag_no_patient_data)f.push(['нет оплат пациентов', 'amber']);
@@ -5623,7 +5747,9 @@ async function payrollDialog(empId) {
     : `<div class="me-row"><span class="muted">${
         r.flag_manual_salary ? 'Сумма вписана вручную — расчёт по графику не применялся'
         : piece ? 'Сдельно — сумму за месяц вписывают ниже'
-        : r.flag_no_rate ? 'Ставка не заведена' : 'Начислений за месяц нет'
+        : r.flag_no_rate && !payNotByShift(r.employee_id, payPeriod)
+          ? 'Вид смены из графика не связан ни с одной ставкой — такой день оплачен нулём'
+          : 'Начислений за месяц нет'
       }</span>${r.flag_manual_salary || piece ? '' : '<b>0 ₽</b>'}</div>`;
   const pct = '';   // процент теперь приходит строкой из linesFor()
 
@@ -5942,7 +6068,13 @@ const OV_ALERTS = [
   { key: 'flag_no_data', red: false, t: 'График есть, а денег ноль', d: 'человек работал, но ничего не начислено' },
   { key: 'flag_oklad_no_days', red: false, t: 'Оклад есть, отработанных дней ноль', d: 'оклад не на что начислить' },
   { key: 'flag_pct_no_rate', red: false, t: 'Процент без ставки', d: 'оплаты пациентов есть, а ставки процента нет' },
-  { key: 'flag_no_rate', red: false, t: 'Не заведена ставка', d: 'без ставки зарплата не считается' },
+  /* Не голый флаг: он поднимается на КАЖДЫЙ отработанный день, для которого не
+     нашлось ставки, — а у окладников и фиксников такой день всё равно оплачен
+     (см. payNotByShift). Голым флагом «Обзор» показывал 11 человек с заведённой
+     ставкой и начисленными деньгами. Остаётся тот случай, где это реальные
+     деньги: платят за смены, а смена ни к чему не привязана — день даст ноль. */
+  { key: r => r.flag_no_rate && !payNotByShift(r.employee_id, ovPeriod), red: true,
+    t: 'Вид смены не связан со ставкой', d: 'такой день оплатится нулём — в карточке нет ставки под этот вид смены' },
   { key: 'flag_partial_month', red: false, t: 'Неполный месяц', d: 'приём или увольнение в середине месяца' },
 ];
 
@@ -5951,10 +6083,16 @@ async function renderOverview(reset = true) {
   if (!ovPeriod) ovPeriod = nowPeriod();
   const want = ovPeriod, seq = ++ovSeq;
   $('oLabel').textContent = periodLabel(want);
-  let rows, remarks, payouts;
+  let rows, remarks, payouts, prevRem, marked;
   try {
-    [rows, remarks, payouts] = await Promise.all([
+    [rows, remarks, payouts, prevRem, marked] = await Promise.all([
       store.listPayroll(want), store.listRedRemarks(6), store.listRecentPayouts(5, want),
+      // Прошлый месяц — ради прогноза тем, у кого нет графика. Не критично:
+      // не отдастся — «Обзор» покажет прогноз только по графикам, как раньше.
+      store.listPrevRemainder(want).catch(e => { console.warn('listPrevRemainder:', e); return null; }),
+      // Кому график вообще заводили. Тот же источник, что у «Расчёта», — иначе
+      // два экрана возьмут в прогноз разных людей.
+      store.listMonthMarked(want).catch(e => { console.warn('listMonthMarked:', e); return []; }),
     ]);
   // Месяц не загрузился — откатываем ovPeriod к тому, что РЕАЛЬНО на экране, а не
   // только заголовок. Иначе расходятся три вещи: данные (старый месяц), ‹/› (шагали
@@ -5962,7 +6100,7 @@ async function renderOverview(reset = true) {
   // человек перешлёт — получатель уехал бы в месяц, которого отправитель не видел.
   } catch (e) { if (seq === ovSeq) { toast(e.message || e, true); ovPeriod = ovData?.period || want; workPeriod = ovPeriod; $('oLabel').textContent = periodLabel(ovPeriod); syncHash(false); } return; }
   if (seq !== ovSeq) return;                       // месяц сменили, пока грузили
-  ovData = { rows, remarks, payouts: payouts?.list || [], aheadCnt: payouts?.ahead || 0, period: want };
+  ovData = { rows, remarks, payouts: payouts?.list || [], aheadCnt: payouts?.ahead || 0, period: want, prevRem, marked };
   $('oLabel').textContent = periodLabel(want);
   drawOverview();
 }
@@ -5970,7 +6108,7 @@ async function renderOverview(reset = true) {
 function drawOverview() {
   paintMonthNav();
   if (!ovData) return;
-  const { rows, remarks, payouts, aheadCnt } = ovData;
+  const { rows, remarks, payouts, aheadCnt, prevRem } = ovData;   // marked берём из ovData ниже
   const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
   const salary = sum('salary_kop');
   // Плюсы и минусы НЕ складываем (решение Дарины 01.08). Раньше главное число
@@ -6043,15 +6181,33 @@ function drawOverview() {
       + (cash ? line('· наличными', rub(cash) + ' ₽', 'sub') : '')
         + (othPay ? line('· прочие выплаты (алименты, займы)', rub(othPay) + ' ₽', 'sub') : '')
     + `</div></div>`;
+  const ovFcast = prevMonthForecast(rows, prevRem, new Set((ovData.marked || []).map(m => m.employee_id)));
   const bento = `<div class="ov-bento">`
     + metric('Начислено всего', rub(accrued) + ' ₽', '', 'rgba(139,123,232,.34)')
-    + (hasMarked && forecast > salary
-        ? metric('К концу месяца', rub(forecast + (accrued - salary)) + ' ₽', 'ov-fcast', 'rgba(139,123,232,.34)')
+    // Прогноз считаем ТЕМ ЖЕ prevMonthForecast, что «Расчёт»: два экрана обязаны
+    // назвать одно число. Плитка показывает всё вместе, а из чего оно сложено —
+    // строкой под плитками (ovFcastNote): на плитке объяснению места нет, а
+    // догадка по прошлому месяцу не должна выглядеть как расчёт.
+    + (hasMarked && (forecast > salary || ovFcast.sum)
+        ? metric('К концу месяца', rub(forecast + (accrued - salary) + ovFcast.sum) + ' ₽', 'ov-fcast', 'rgba(139,123,232,.34)')
         : '')
     + metric('Официально на карту', rub(card) + ' ₽', '', 'rgba(62,115,216,.34)')
     + metric('Выдано наличными', rub(paid) + ' ₽', '', 'rgba(31,165,101,.4)')
     + metric('Сотрудников', fmt(people), '', 'rgba(224,153,42,.34)')
-    + `</div>`;
+    + `</div>`
+    /* Из чего сложен прогноз. Названо порознь намеренно: зарплата по графикам —
+       расчёт, а прошлый месяц — догадка (человек мог уйти, заболеть, сменить
+       ставку). Смешать их в одно число значило бы выдать догадку за расчёт.
+
+       ⚠ Зарплату и «премии, отпускные и прочее» тоже разводим. Плитка их
+       складывает, и первая редакция подписала сумму «по графикам» — а в
+       «Расчёте» под той же подписью стоит ОДНА зарплата. На августе разницы
+       нет (премий и отпускных ещё не вносили), а на июльских данных это
+       733 105 ₽ под одинаковой надписью на двух экранах. */
+    + (hasMarked && ovFcast.sum ? `<div class="ov-fnote">К концу месяца: <b>${rub(forecast)} ₽</b> зарплата по графикам${
+        accrued - salary ? ` · <b>${rub(accrued - salary)} ₽</b> премии, отпускные и прочее` : ''}
+        · <b>${rub(ovFcast.sum)} ₽</b> прогноз по ${ovFcast.who.length} ${plural(ovFcast.who.length, 'человеку', 'людям', 'людям')}
+        без графика — их сумма за ${esc(periodLabel(ovFcast.period).toLowerCase())}. Заведите им график, и догадка сменится расчётом.</div>` : '');
 
   // Требует внимания: флаги-агрегаты (кликают на Расчёт) + красные записи (на Журнал)
   const flagAlerts = OV_ALERTS.map(a => {
@@ -6122,6 +6278,15 @@ function stickFooterRows(host) {
   // экран показан: там высоты настоящие. Записать нули было бы даже хуже — они
   // прикидываются посчитанными.
   if (!host.offsetParent && getComputedStyle(host).position !== 'fixed') return;
+  /* На телефоне подвал не приморожен (карточный режим), и лесенка не нужна.
+     Важнее — СНЯТЬ прежние значения: они посчитаны по высотам карточек (~650px
+     против обычных ~40) и, если человек повернёт телефон в ландшафт, вернувшийся
+     position:sticky растащит итоги поверх таблицы. Само чинилось только следующей
+     перерисовкой, то есть переходом по меню. */
+  if (window.matchMedia('(max-width:767px)').matches) {
+    rows.forEach(r => { r.style.bottom = ''; });
+    return;
+  }
   let acc = 0;
   for (let i = rows.length - 1; i >= 0; i--) {
     const h = rows[i].getBoundingClientRect().height;
@@ -6129,6 +6294,15 @@ function stickFooterRows(host) {
     acc += h;
   }
 }
+/* Поворот телефона меняет раскладку «Расчёта» целиком (карточки ⇄ таблица), а
+   высоты подвала пересчитывает только отрисовка. Без этого поворот оставлял
+   итоги висеть посреди таблицы до следующего перехода по меню. Дебаунс — чтобы
+   не считать на каждый пиксель тяги за угол окна на десктопе. */
+let stickTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(stickTimer);
+  stickTimer = setTimeout(() => stickFooterRows(document.getElementById('payrollTable')), 120);
+});
 
 /* ── «Кто в программе» ──────────────────────────────────────────────────
    Владельцу — подробно: экран, месяц, сколько правок за час (из журнала, то есть
@@ -6223,10 +6397,20 @@ async function renderArchive() {
   // сеть за полным списком (listEmployees + listPayroll), тогда как соседние
   // «поиск» и «только с деньгами» рисуются по памяти. При клиничном интернете
   // (800 КБ холодный заход, всегда инкогнито) это заметная разница.
-  arcRows = emps.filter(e => e.status === 'archived').map(e => {
+  const arch = emps.filter(e => e.status === 'archived');
+  /* Кто убрал карточку — отдельным запросом и НЕ в Promise.all выше: если журнал
+     почему-то не отдастся, экран должен показать архив без этой колонки, а не
+     упасть целиком. Ради подписи «кто убрал» терять список людей с деньгами
+     (ради которого экран и существует) нельзя. */
+  let arcBy = new Map();
+  try { arcBy = await store.listArchivedBy(arch.map(e => e.id)); }
+  catch (e) { console.warn('журнал архивации не прочитался:', e.message || e); }
+  if (seq !== arcSeq) return;
+  arcRows = arch.map(e => {
     const r = money.get(e.id) || {};
+    const a = arcBy.get(e.id);
     return { id: e.id, fio: e.fio || '—', spec: specName(e.specialty_id),
-             hidden: !!e.hidden_at,
+             hidden: !!e.hidden_at, byWho: a?.who || null, byAt: a?.at || null,
              left_on: e.left_on || null, delta: r.delta_kop || 0, salary: r.salary_kop || 0 };
   }).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || a.fio.localeCompare(b.fio, 'ru'));
   drawArchive();
@@ -6253,12 +6437,16 @@ function drawArchive() {
 
   $('arcBody').innerHTML = list.length ? `<div class="gridwrap"><table class="pw arc"><thead><tr>
       <th class="pw-name">Сотрудник</th><th>Специальность</th><th>Дата увольнения</th>
+      <th class="arc-by" title="Из журнала — он неизменяемый, эту подпись не переписать">Кто убрал в архив</th>
       <th class="num">Начислено</th><th class="num pw-pay">Осталось выдать</th><th></th></tr></thead><tbody>${
     list.map(x => `<tr class="arc-row${x.delta ? ' arc-money' : ''}">
       <td class="pw-name"><span class="pw-fio">${esc(x.fio)}</span>${
         x.delta ? '<span class="mini-chip">остались деньги</span>' : ''}</td>
       <td class="muted">${esc(x.spec)}</td>
       <td>${x.left_on ? esc(dmy(x.left_on)) : '<span class="muted">не проставлена</span>'}</td>
+      <td class="arc-by">${x.byWho
+        ? `${esc(x.byWho)}<span class="muted small"> · ${esc(fmtDTY(x.byAt))}</span>`
+        : '<span class="muted">не записано</span>'}</td>
       <td class="num fin">${x.salary ? rub(x.salary) : '<span class="muted">—</span>'}</td>
       <td class="num pw-pay fin">${x.delta ? `<b class="money${x.delta < 0 ? ' neg' : ''}">${rub(x.delta)}</b>` : '<span class="muted">—</span>'}</td>
       <td class="num"><button class="btn btn-ghost btn-sm arc-back" data-id="${x.id}">Вернуть</button>
@@ -6535,7 +6723,7 @@ function drawVacation() {
         <tfoot><tr class="pw-total"><td class="pw-name">ИТОГО</td><td></td>
           <td class="num">${tot.days}</td><td class="num fin">${rub(tot.nach)}</td>
           <td class="num fin">${rub(sum('card'))}</td><td class="num fin">${rub(sum('cash'))}</td>
-          <td class="num pw-pay fin"><b class="money">${rub(tot.nach - tot.paid)}</b></td></tr></tfoot></table></div>`
+          <td class="num pw-pay fin"><b class="money${tot.nach - tot.paid < 0 ? ' neg' : ''}">${rub(tot.nach - tot.paid)}</b></td></tr></tfoot></table></div>`
     : `<div class="empty">За ${esc(periodLabel(vacData.period))} отпусков нет — ни дней в графике, ни отпускных.</div>`;
   $('vacBody').querySelectorAll('.vac-row').forEach(tr => tr.onclick = () => openCard(+tr.dataset.id));
   { const b = $('vacAdd'); if (b) b.onclick = () => vacAddDialog(); }
@@ -6577,6 +6765,12 @@ const GAP_CHECKS = [
   // молча false. То есть ровно те, кого экран и должен ловить, выпадали бы.
   { g: 0, t: 'Не заведена ставка', d: 'без ставки зарплата не считается вовсе', go: RATES_GO, test: e => cardGaps(e).rate },
   { g: 0, t: 'Ставка обрывается посреди месяца', d: 'часть дней не по чему считать', go: RATES_GO, test: (e, r) => !!r?.flag_rate_gap },
+  /* Ставка есть, но вид смены из графика к ней не привязан. У окладников и
+     фиксников это денег не стоит и потому гасится (payNotByShift); у тех, кому
+     платят за смены, такой день оплачивается нулём и молча — до сих пор этого
+     не было видно ни на одном экране. */
+  { g: 0, t: 'Вид смены не связан со ставкой', d: 'день оплатится нулём — в карточке нет ставки под этот вид смены', go: RATES_GO,
+    test: (e, r) => !!r?.flag_no_rate && !payNotByShift(e.id, gapsPeriod) },
   { g: 0, t: 'Отрицательная зарплата', d: 'начислено меньше нуля — так быть не должно', go: 'payroll', test: (e, r) => (r?.salary_kop || 0) < 0 },
   { g: 0, t: 'Деньги есть, а расчёта нет', d: 'выплата без начисления под ней', go: 'payroll', test: (e, r) => !!r?.flag_money_without_calc },
   // Порог тот же, что на Обзоре и в payrollDialog: сигналим, только когда

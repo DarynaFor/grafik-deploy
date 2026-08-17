@@ -354,6 +354,16 @@ export class MockStore {
   }
 
   async listEmployees() { return structuredClone(this.db.employees); }
+  // Зеркало боевого listArchivedBy: в демо журнал лежит тут же, и actor — уже имя.
+  async listArchivedBy(ids = []) {
+    const want = new Set(ids);
+    const by = new Map();
+    for (const j of (this.db.journal || []))          // журнал в демо уже отсортирован свежими вперёд
+      if (j.entity === 'employee' && j.field === 'status' && j.new_value === 'archived'
+          && want.has(j.entity_id) && !by.has(j.entity_id))
+        by.set(j.entity_id, { at: j.at, who: j.actor || null });
+    return by;
+  }
   async createEmployee({ fio, position, phone, specialty_id, specialty_id_2, dept, hired_on, left_on, lines, valid_from }) {
     const vfrom = valid_from || rateFrom();
     const e = {
@@ -627,7 +637,7 @@ export class MockStore {
     const [y, m] = period.split('-').map(Number);
     const pm = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
     const all = (await this.listPayroll(pm))
-      .map(r => ({ employee_id: r.employee_id, fio: r.fio, delta_kop: r.delta_kop || 0 }))
+      .map(r => ({ employee_id: r.employee_id, fio: r.fio, delta_kop: r.delta_kop || 0, salary_kop: r.salary_kop || 0 }))
       .sort((a, b) => a.delta_kop - b.delta_kop);
     return { prev: pm, rows: all.filter(r => r.delta_kop < 0), all };
   }
@@ -1342,6 +1352,29 @@ export class SupabaseStore {
     if (error) throw error;
     return data.map(e => ({ ...e, lines: e.lines || [] }));
   }
+  /* Кто и когда убрал человека в архив. В самой карточке этого нет — есть только
+     нынешний status, — поэтому берём из журнала: он неизменяемый (триггер
+     journal_no_update), то есть ответ «кто убрал» подделать нельзя.
+
+     Берём v_journal_named ради actor_name: в journal лежит uuid, и экрану
+     пришлось бы отдельно тянуть список пользователей. security_invoker=on, так
+     что RLS журнала (только владелец) действует ровно как на таблице — вызывать
+     это имеет смысл только там, где экран и так владельческий.
+
+     Возвращений из архива бывает несколько (человека вернули и убрали опять),
+     поэтому берём САМУЮ СВЕЖУЮ запись на каждого — она и описывает нынешнее
+     состояние карточки. */
+  async listArchivedBy(ids = []) {
+    if (!ids.length) return new Map();
+    const { data, error } = await this.sb.from('v_journal_named')
+      .select('entity_id,at,actor_name')
+      .eq('entity', 'employee').eq('field', 'status').eq('new_value', 'archived')
+      .in('entity_id', ids).order('at', { ascending: false });
+    if (error) throw new Error(error.message);
+    const by = new Map();
+    for (const r of data || []) if (!by.has(r.entity_id)) by.set(r.entity_id, { at: r.at, who: r.actor_name || null });
+    return by;
+  }
   async createEmployee({ fio, position, phone, specialty_id, specialty_id_2, dept, hired_on, left_on, lines, valid_from }) {
     const { data: e, error } = await this.sb.from('employee')
       .insert({ fio, position, phone, specialty_id, specialty_id_2: specialty_id_2 || null, dept: dept || null, hired_on: hired_on || null, left_on: left_on || null, created_by: this.user.id }).select().single();
@@ -1839,7 +1872,10 @@ export class SupabaseStore {
     const [y, m] = period.split('-').map(Number);
     const pm = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
     const { data, error } = await this.sb.from('v_month_total')
-      .select('employee_id, fio, delta_kop').eq('period', pm + '-01').order('delta_kop');
+      // salary_kop — для прогноза тем, у кого в этом месяце графика нет вовсе:
+      // «к концу месяца» берёт им сумму прошлого месяца (иначе больше миллиона
+      // прогноза просто выпадало из итога).
+      .select('employee_id, fio, delta_kop, salary_kop').eq('period', pm + '-01').order('delta_kop');
     if (error) throw error;
     const all = data || [];
     return { prev: pm, rows: all.filter(r => (r.delta_kop || 0) < 0), all };
