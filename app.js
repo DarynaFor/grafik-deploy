@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=209';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=210';
 
 const $ = id => document.getElementById(id);
 
@@ -5999,6 +5999,18 @@ function drawOverview() {
   // выдать», поэтому без них раскладка «Начислено − Выдано = Осталось» не сходилась.
   const othNach = sum('nach_other_kop'), othUderz = sum('uderz_other_kop'), othPay = sum('pay_other_kop');
   const accrued = salary + premia + otpNach + bol + othNach - othUderz;
+  /* Три суммы одним взглядом — просьба Дарины 12.08: «щоб суми які нараховані
+     зароблені, фіолетові, зелені і сірі — були також в обзорі у Мілєни». Цвета
+     значат ровно то же, что в «Расчёте» и в графике:
+       серое      — по плану, если все доработают месяц как назначено;
+       зелёное    — подтверждено отметками факта, за это уже можно платить;
+       фиолетовое — прогноз к концу месяца.
+     Милена смотрит «Обзор» с телефона, и ей важно с одного взгляда понимать,
+     какая часть суммы реальна, а какая держится на одном плане. */
+  const marked = sum('salary_marked_kop');          // подтверждено фактом
+  const forecast = sum('salary_plan_kop');          // к концу месяца, если доработают
+  const hasMarked = rows.some(r => r.salary_marked_kop != null);
+  const waiting = Math.max(0, salary - marked);     // ещё ждёт отметок
   const carry = sum('carry_kop');                                   // перенос с прошлого месяца, со знаком
   const cash = sum('cash_kop') + sum('cash_avans_kop') + sum('otpusk_cash_kop');
   const people = rows.filter(r => r.status === 'active').length;
@@ -6017,6 +6029,8 @@ function drawOverview() {
     + `<div class="ov-break">`
       + line('Начислено всего', rub(accrued) + ' ₽', 'sum')
       + line('· зарплата', rub(salary) + ' ₽', 'sub')
+      + (hasMarked && waiting ? line('· из них подтверждено фактом', rub(marked) + ' ₽', 'sub ov-marked') : '')
+      + (hasMarked && waiting ? line('· ждёт отметок в графике', rub(waiting) + ' ₽', 'sub ov-waiting') : '')
       + (premia ? line('· премии', rub(premia) + ' ₽', 'sub') : '')
       + (otpNach ? line('· отпускные', rub(otpNach) + ' ₽', 'sub') : '')
       + (bol ? line('· больничные', rub(bol) + ' ₽', 'sub') : '')
@@ -6031,6 +6045,9 @@ function drawOverview() {
     + `</div></div>`;
   const bento = `<div class="ov-bento">`
     + metric('Начислено всего', rub(accrued) + ' ₽', '', 'rgba(139,123,232,.34)')
+    + (hasMarked && forecast > salary
+        ? metric('К концу месяца', rub(forecast + (accrued - salary)) + ' ₽', 'ov-fcast', 'rgba(139,123,232,.34)')
+        : '')
     + metric('Официально на карту', rub(card) + ' ₽', '', 'rgba(62,115,216,.34)')
     + metric('Выдано наличными', rub(paid) + ' ₽', '', 'rgba(31,165,101,.4)')
     + metric('Сотрудников', fmt(people), '', 'rgba(224,153,42,.34)')

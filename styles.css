@@ -699,7 +699,7 @@ body.authed .login-stage{display:none}
   .main{overflow-x:hidden;min-width:0}
   .side{display:none}
   .mobile-nav{display:flex!important}
-  .screen{padding:20px 14px 90px;min-width:0}
+  .screen{padding:20px 14px 104px;min-width:0}   /* под нижнее меню: оно стало выше, чтобы не ловить системный жест */
   .grid2{grid-template-columns:1fr}
   .page-head{flex-wrap:wrap}
   .page-head .right{margin-left:0;width:100%}
@@ -728,9 +728,19 @@ body.authed .login-stage{display:none}
    прокрутки не было (Дарина 06.08: «всі іконки внизу не влазять і не гортаються»).
    Теперь пункты не сжимаются, а лента листается пальцем; активный подводится сам
    (scrollActiveNavIntoView). Полосу прокрутки прячем — она тут только мешает. */
-.mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:30;background:var(--bar);backdrop-filter:var(--blur);border-top:1px solid var(--glass-bd);padding:7px 10px calc(7px + env(safe-area-inset-bottom));overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
+/* Нижняя панель на телефоне. Дарина 12.08: «іконки дуже низько розташовані,
+   коли намагаюсь перегорнути — чіпляється нижня риска і перегортається весь
+   додаток, важко попасти саме на гортання лінії нижньої».
+   Три причины, все три и лечим:
+   1. safe-area учитывался, но пустотой ПОД кнопками — сами кнопки оставались в
+      полосе системного жеста. Поднимаем их: отступ снизу +14 px сверх safe-area;
+   2. браузер не знал, что здесь горизонтальный жест, и отдавал его системе —
+      говорим прямо через touch-action: pan-x;
+   3. долистав панель до края, палец продолжал движение и перелистывал СТРАНИЦУ —
+      overscroll-behavior обрывает это на границе панели. */
+.mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:30;background:var(--bar);backdrop-filter:var(--blur);border-top:1px solid var(--glass-bd);padding:9px 10px calc(21px + env(safe-area-inset-bottom));overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity;touch-action:pan-x;overscroll-behavior:contain}
 .mobile-nav::-webkit-scrollbar{display:none}
-.mobile-nav button{flex:0 0 auto;min-width:62px;scroll-snap-align:center;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;font-weight:700;color:var(--ink-3);padding:6px}
+.mobile-nav button{flex:0 0 auto;min-width:62px;padding:4px 2px;scroll-snap-align:center;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;font-weight:700;color:var(--ink-3);padding:6px}
 .mobile-nav button.active{color:var(--green-d)}
 /* смена ставки: было → станет, чтобы владелец видел последствие до подтверждения */
 .rc-diff{display:grid;gap:6px;background:var(--fill-1);border:1px solid var(--hair);border-radius:10px;padding:11px 13px;margin:10px 0 4px;font-size:13.5px}
@@ -999,7 +1009,7 @@ tr.pw-total.pw-over{z-index:5}
 
 @media(max-width:720px){
   /* Нижнее меню перекрывает экран — таблице оставляем место под него */
-  #s-schedule.show,#s-payroll.show{padding-bottom:88px}
+  #s-schedule.show,#s-payroll.show{padding-bottom:102px}
 }
 
 /* Новая специальность прямо в карточке (Милена 06.08: «нет возможности добавить
@@ -1316,3 +1326,12 @@ tr.pw-total.pw-over{z-index:5}
 .cselect-panel .cselect-head + .cselect-opt{padding-top:6px}
 /* Поле вида денег стоит в одной строке с суммой и кнопкой — тянется, как select */
 .me-add .pm-kind{flex:1 1 190px;min-width:150px}
+
+
+/* «Обзор»: цвета значат то же, что везде — серое план, зелёное подтверждено,
+   фиолетовое прогноз. Милена смотрит эту страницу с телефона и должна понимать
+   реальность суммы, не открывая «Расчёт». */
+.ov-line.ov-marked b{color:var(--green-d)}
+.ov-line.ov-waiting b{color:var(--ink-3)}
+.ov-line.ov-waiting span{color:var(--ink-3)}
+.ov-metric.ov-fcast .v{color:var(--violet-d,#6b46c1)}
