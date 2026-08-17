@@ -1169,14 +1169,25 @@ tr.pw-total.pw-over{z-index:5}
    ширины нельзя — на снимке экрана фиолетовая колонка уехала за край, потому что
    я угадала 140px, а колонка оказалась шире. Жёсткая ширина делает смещения
    точными по построению. */
-:root{--pw3:146px}
+/* Ширина трёх примороженных колонок. 146px были рассчитаны на заголовок
+   «Осталось выдать» в одну строку — а он и есть самое широкое, что там бывает:
+   числа уже семизначных не растут («5 556 609» при tabular-nums это ~78px).
+   Дарина 17.08: «зроби стовпці останні три вужчими, вони багато місця займають».
+   Разрешили заголовкам переноситься в две строки — и три колонки отдали таблице
+   120 пикселей, которые нужнее левой части с фамилиями и начислениями. */
+:root{--pw3:106px}
 .pw .pw-byplan,.pw .pw-pay,.pw .pw-fcast{
   position:sticky;z-index:2;box-sizing:border-box;
   min-width:var(--pw3);max-width:var(--pw3);background:var(--surf-2)}
 .pw .pw-byplan{right:calc(var(--pw3) * 2)}
 .pw .pw-pay   {right:var(--pw3)}
 .pw .pw-fcast {right:0}
-.pw th.pw-byplan,.pw th.pw-pay,.pw th.pw-fcast{background:var(--surf-1);z-index:4}
+.pw th.pw-byplan,.pw th.pw-pay,.pw th.pw-fcast{background:var(--surf-1);z-index:4;
+  white-space:normal;line-height:1.2;vertical-align:bottom}
+/* Отступы тоже ужимаем: 12px по бокам на 106px колонке — это девятая часть
+   ширины с каждой стороны. Числа выровнены вправо, слева им отступ не нужен. */
+.pw td.pw-byplan,.pw td.pw-pay,.pw td.pw-fcast,
+.pw th.pw-byplan,.pw th.pw-pay,.pw th.pw-fcast{padding-left:6px;padding-right:10px}
 .pw .pw-byplan{color:var(--ink-3)}
 .pw td.pw-byplan b{font-weight:600;color:var(--ink-3)}
 .pw td.pw-fcast b,.pw td.pw-fcast .money{font-weight:600;color:var(--violet-d)}
