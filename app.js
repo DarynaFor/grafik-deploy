@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=219';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=220';
 
 const $ = id => document.getElementById(id);
 
@@ -4675,7 +4675,18 @@ function rateFormula(l, r, nh, emp) {
    Дарина 12.08: «щоб одразу було видно: план сірим, до видачі зараз зеленим,
    фіолетовим прогнозована сума до кінця місяця». */
 function deltaAs(r, salaryKop) {
-  return (+r.delta_kop || 0) + ((+salaryKop || 0) - (+r.salary_marked_kop || 0));
+  /* ⚠ Вычитаем ровно то слагаемое, которое вьюха ПОЛОЖИЛА в delta_kop, а оно
+     зависит от месяца: `CASE WHEN fact_required THEN salary_marked_kop ELSE
+     salary_kop END`. Правило включено с 01.08.2026 (calc_rule.fact_required_from,
+     решение Дарины: «тільки з серпня, липень не чіпаємо»), потому что июль
+     заливали с бумажных графиков — там отметки нет по построению.
+     Безусловное `- salary_marked_kop` приписывало на июле разницу «план минус
+     отмеченное» к КАЖДОЙ строке: 74 человека, +4 940 004 ₽. «По плану» и «К концу
+     месяца» показывали 6 841 887 ₽ вместо 2 085 962 ₽. На десктопе это стояло в
+     дальних колонках, а телефонный подвал (v=219) вынес число на первый экран —
+     туда, где по нему планируют наличку. */
+  const base = r.fact_required ? (+r.salary_marked_kop || 0) : (+r.salary_kop || 0);
+  return (+r.delta_kop || 0) + ((+salaryKop || 0) - base);
 }
 function deltaCell(r, salaryKop) {
   const v = deltaAs(r, salaryKop);
@@ -5079,6 +5090,11 @@ function drawPayroll(filter = '') {
          рахуємо по цьому, це тільки зп планована». Деньги не трогаем — июль
          заливали уже фактом, — но видно, какая часть месяца держится на одном
          плане и сколько дней ещё ждут отметки. */
+      /* ⚠ Только для месяцев, где явка ВЛИЯЕТ на деньги (с 01.08.2026). В июле
+         правило выключено: суммы уже начислены и подтверждены СЕО, ничего не
+         «ждёт отметки», и приговор «830 дней … в „Осталось выдать“ не идут» был
+         прямой неправдой. */
+      if (!rows.some(r => r.fact_required)) return '';
       const ids = new Set(rows.map(r => r.employee_id));
       const mk = (payrollMarked || []).filter(m => ids.has(m.employee_id));
       const past = mk.reduce((a, m) => a + (+m.past_hours || 0), 0);
@@ -6236,7 +6252,10 @@ function drawOverview() {
      какая часть суммы реальна, а какая держится на одном плане. */
   const marked = sum('salary_marked_kop');          // подтверждено фактом
   const forecast = sum('salary_plan_kop');          // к концу месяца, если доработают
-  const hasMarked = rows.some(r => r.salary_marked_kop != null);
+  /* Не просто «колонка пришла», а «месяц считает ПО ФАКТУ»: в июле разница
+     план−отмеченное — это не ожидание отметок, а способ начисления (044/113),
+     деньги уже подтверждены. Строки «подтверждено/ждёт» там врали. */
+  const hasMarked = rows.some(r => r.salary_marked_kop != null) && rows.some(r => r.fact_required);
   const waiting = Math.max(0, salary - marked);     // ещё ждёт отметок
   const carry = sum('carry_kop');                                   // перенос с прошлого месяца, со знаком
   const cash = sum('cash_kop') + sum('cash_avans_kop') + sum('otpusk_cash_kop');
@@ -6261,8 +6280,8 @@ function drawOverview() {
          зелёная  — за это уже можно платить, выходы отмечены;
          серая    — посчитано по плану, человек ещё не отмечен;
          сиреневая (ниже, отдельным блоком) — сколько выйдет к концу месяца. */
-      + (hasMarked && waiting ? line('· из них подтверждено фактом', rub(marked) + ' ₽', 'sub ov-marked') : '')
-      + (hasMarked && waiting ? line('· ждёт отметок в графике', rub(waiting) + ' ₽', 'sub ov-waiting') : '')
+      + (hasMarked && waiting ? line('из них подтверждено фактом', rub(marked) + ' ₽', 'sub sub2 ov-marked') : '')
+      + (hasMarked && waiting ? line('ждёт отметок в графике', rub(waiting) + ' ₽', 'sub sub2 ov-waiting') : '')
       + (premia ? line('· премии', rub(premia) + ' ₽', 'sub') : '')
       + (otpNach ? line('· отпускные', rub(otpNach) + ' ₽', 'sub') : '')
       + (bol ? line('· больничные', rub(bol) + ' ₽', 'sub') : '')
@@ -6278,6 +6297,8 @@ function drawOverview() {
             + line('· зарплата по графикам', rub(forecast) + ' ₽', 'sub')
             + (accrued - salary ? line('· премии, отпускные и прочее', rub(accrued - salary) + ' ₽', 'sub') : '')
             + (ovFcast.sum ? line(`· прогноз по ${ovFcast.who.length} без графика`, rub(ovFcast.sum) + ' ₽', 'sub') : '')
+            /* Итог складывается из трёх строк выше — говорим это вслух, иначе
+               «начислено сейчас» и «к концу месяца» читаются как несводимые. */
           : '')
       + line('Выдано', rub(card + uvol + cash + othPay) + ' ₽', 'sum')
       + line('· на карту', rub(card) + ' ₽', 'sub')

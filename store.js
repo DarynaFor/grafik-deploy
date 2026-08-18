@@ -264,7 +264,20 @@ export class MockStore {
     this.db.deptRules = (this.db.deptRules || []).filter(r => r.category !== category);
     this._save();
   }
-  async listMonthMarked() { return []; }
+  /* Часы факта демо не считает (это 113-я вьюха), но КТО ЕСТЬ В СПИСКЕ — обязано
+     отдавать честно: по наличию строки прогноз «к концу месяца» решает, заводили
+     человеку график или нет. Пустой список означал бы «графика нет ни у кого», и
+     демо тянуло бы в прогноз отпускников и процентников — ровно то поведение,
+     которое в бою и чинили. Клетка считается заведённой так же, как в renderGaps:
+     есть план ИЛИ факт. */
+  async listMonthMarked(period) {
+    const pre = period + '-';
+    const ids = new Set();
+    for (const s of (this.db.schedule || []))
+      if (String(s.work_date).startsWith(pre) && (s.plan_kind || s.fact)) ids.add(s.employee_id);
+    return [...ids].map(employee_id => ({ employee_id, period: period + '-01',
+      marked_hours: 0, past_hours: 0, unmarked_days: 0, marked_days: 0 }));
+  }
   async listCategoryOrder() { return [...(this.db.catOrder || [])]; }
   async setCategoryOrder(rows) {
     if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Менять порядок может владелец или директор');

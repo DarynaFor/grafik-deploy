@@ -1197,6 +1197,8 @@ tr.pw-total.pw-over{z-index:5}
    ширины с каждой стороны. Числа выровнены вправо, слева им отступ не нужен. */
 .pw td.pw-byplan,.pw td.pw-pay,.pw td.pw-fcast,
 .pw th.pw-byplan,.pw th.pw-pay,.pw th.pw-fcast{padding-left:6px;padding-right:10px}
+/* Мобильный блок ниже задаёт свои отступы только для th — из-за этого шапка и
+   числа расходились на 2px. Повторяем там же для td. */
 .pw .pw-byplan{color:var(--ink-3)}
 .pw td.pw-byplan b{font-weight:600;color:var(--ink-3)}
 .pw td.pw-fcast b,.pw td.pw-fcast .money{font-weight:600;color:var(--violet-d)}
@@ -1259,6 +1261,20 @@ tr.pw-total.pw-over{z-index:5}
    Поэтому на узком экране приморожена ОДНА — «Осталось выдать», та, по которой
    выдают. Две соседние просто прокручиваются: в таблице они стоят рядом, так что
    потянув вбок, все три видишь вместе. */
+/* На широком тоже ограничиваем: с новой колонкой таблица впервые перестала
+   помещаться в контейнер (1331 против 1254). Перенос обязателен — без него
+   nowrap выносил «Мещерякова-Селиверстова Ангелина · 17.08.2026 21:14» на
+   174px поверх соседней колонки.
+   ⚠ Идёт ДО мобильного блока намеренно: там max-width:120px, и он должен
+   выигрывать, а при равной силе побеждает тот, кто ниже по файлу. */
+.pw.arc td.arc-by, .pw.arc th.arc-by{max-width:210px;white-space:normal}
+/* ⚠ Приморозка «Осталось выдать» рассчитана на «Расчёт», где эта колонка почти
+   последняя. В архиве и отпусках за ней идёт колонка кнопок, и примороженная
+   вставала НЕ у края: справа оставалась щель, в которой проезжали «Вернуть /
+   История / Убрать», а хвост «Начислено» уходил под неё. Этим таблицам приморозка
+   и не нужна — они в семь колонок. */
+.pw.arc .pw-pay, .pw.vac .pw-pay{position:static}
+
 @media (max-width: 767px){
   /* Не примораживаем НИ ОДНУ из трёх. Пробовала оставить зелёную: при прокрутке
      до конца она наезжала на фиолетовую и срезала себе цифры слева — «546 526 ₽»
@@ -1273,6 +1289,7 @@ tr.pw-total.pw-over{z-index:5}
     font-size:11.5px;padding-left:6px;padding-right:8px}
   /* Заголовкам разрешаем перенос: «Осталось выдать» и «К концу месяца» шире
      104px и на nowrap наезжали друг на друга — «ОСТАЛОСЬ ВЫДАТЬК КОНЦУ МЕСЯЦА». */
+  .pw td.pw-byplan,.pw td.pw-pay,.pw td.pw-fcast{padding-right:8px}
   .pw th.pw-byplan,.pw th.pw-pay,.pw th.pw-fcast{
     font-size:9.5px;padding-left:6px;padding-right:8px;
     white-space:normal;line-height:1.25;vertical-align:bottom}
@@ -1287,9 +1304,6 @@ tr.pw-total.pw-over{z-index:5}
      Частухин с 27 000 ₽). Переносим в две строки и держим узкой. */
   .pw.arc td.arc-by{white-space:normal;max-width:120px;line-height:1.3}
 }
-/* На широком тоже ограничиваем: с новой колонкой таблица впервые перестала
-   помещаться в контейнер (1331 против 1254). */
-.pw.arc td.arc-by, .pw.arc th.arc-by{max-width:210px}
 
 /* ── Телефон: поля не должны заставлять айфон зумить страницу ────────────────
    Safari на iOS увеличивает ВСЮ страницу, когда фокус попадает в поле с
@@ -1447,12 +1461,22 @@ tr.pw-total.pw-over{z-index:5}
     /* Два ряда с общей высотой: «Осталось выдать» в одну строку не влезает, а
        обрезать ЭТУ подпись нельзя — её и читают. min-height держит числа на
        одной линии, хотя подписи разной длины. */
-    white-space:normal;line-height:1.15;min-height:2.3em}
+    /* min-height нужен только там, где подпись переносится (на 320px «Осталось
+       выдать» в две строки). На 375+ подписи однострочные, и 2.3em давали 12px
+       пустоты в каждой карточке — на 119 сотрудниках почти два экрана прокрутки
+       на том же экране, ради которого ужимали фильтры. */
+    white-space:normal;line-height:1.15;min-height:1.15em}
   .pw-host .pw td.pw-earned::before{content:"Заработано"}
   .pw-host .pw tr.pw-total td.sep::before{content:"Зарплата"}
-  .pw-host .pw tr.pw-total td.pw-byplan::before{content:"Всего по плану"}
+  /* ⚠ В этой ячейке ИТОГО лежит Σ deltaAs(r, salary_kop) — «сколько осталось бы
+     выдать, если бы все дни по графику зачлись», а НЕ зарплата по плану. Подпись
+     «Всего по плану» ставила её рядом с «Зарплата» и врала на 2 195 301 ₽: сама
+     зарплата по плану стоит абзацем ниже, под «Было бы по плану». */
+  .pw-host .pw tr.pw-total td.pw-byplan::before{content:"По плану осталось выдать"}
   .pw-host .pw tr.pw-total.pw-plan td.pw-pay::before{content:"Подтверждено фактом"}
-  .pw-host .pw tr.pw-total.pw-plan td.pw-byplan::before{content:"Было бы по плану"}
+  /* Здесь ЗАРПЛАТА по плану, а этажом выше — «По плану осталось выдать»: разные
+     величины (на августе 373 833 ₽ разницы), и подписи должны это говорить. */
+  .pw-host .pw tr.pw-total.pw-plan td.pw-byplan::before{content:"Зарплата по плану"}
   .pw-host .pw td.pw-pay::before{content:"Осталось выдать"}
   .pw-host .pw td.pw-fcast::before{content:"К концу месяца"}
   /* В подвале та же колонка отвечает на другой вопрос — сколько ВЫДАТЬ к концу
@@ -1477,8 +1501,12 @@ tr.pw-total.pw-over{z-index:5}
   /* Не caps: заголовок отделения в верхнем регистре занимал две строки, и «₽»
      оставался на второй один. Обычный регистр короче и читается спокойнее, а
      сумму держим неразрывной. */
+  /* Гасим табличное оформление span: у него свои фон, паддинг и sticky (стр. ~832),
+     и непрозрачный --surf-1 рисовался ПОВЕРХ новой плашки — рамка в 15px слева,
+     двойной паддинг, скругление не видно, цветная риска висела отдельно. */
   .pw-host .pw tr.pw-group span{font-size:11.5px;line-height:1.4;
-    white-space:normal;display:block;text-transform:none;letter-spacing:0}
+    white-space:normal;display:block;text-transform:none;letter-spacing:0;
+    background:none;position:static;padding:0}
   .pw-host .pw tr.pw-group b{white-space:nowrap}
 
   /* ── Итоги ────────────────────────────────────────────────────────────
@@ -1489,7 +1517,7 @@ tr.pw-total.pw-over{z-index:5}
     display:block;padding:12px 13px;margin-bottom:8px;
     background:var(--surf-2);border:1px solid var(--glass-bd);border-radius:14px}
   .pw-host .pw tr.pw-total td.pw-name{
-    padding:0 0 8px;font-size:13px;font-weight:750;text-transform:uppercase;
+    background:none;padding:0 0 8px;font-size:13px;font-weight:750;text-transform:uppercase;
     letter-spacing:.03em;border:none}
   .pw-host .pw tr.pw-total td[colspan]{display:block;padding:0 0 8px;
     font-size:11.5px;line-height:1.45}
@@ -1525,7 +1553,6 @@ tr.pw-total.pw-over{z-index:5}
      месяца, у переплаты — минус. Общая подпись врала бы прямо про деньги,
      поэтому каждой строке своя. */
   .pw-host .pw tr.pw-accrued td.pw-pay::before{content:"Начислено всего"}
-  .pw-host .pw tr.pw-plan td.pw-pay::before{content:"Отмечено фактом"}
   .pw-host .pw tr.pw-forecast td.pw-pay::before{content:"Начислим за месяц"}
   .pw-host .pw tr.pw-over td.pw-pay::before{content:"Переплачено вперёд"}
 }
@@ -1561,3 +1588,10 @@ tr.pw-total.pw-over{z-index:5}
   .sched-tools .cselect{flex:0 1 auto;min-width:0}
   .sched-tools .btn.btn-sm{white-space:nowrap}
 }
+
+/* Второй уровень вложенности в раскладке «Обзора»: «из них подтверждено фактом»
+   и «ждёт отметок» — это ЧАСТИ строки «зарплата по графику», а не слагаемые
+   рядом с ней. На одном отступе сложение всех «·» давало 15 575 071 ₽ при
+   заголовке 8 154 088 — читатель видел несводимый столбик. */
+.ov-line.sub2{padding-left:26px;font-size:12px}
+.ov-line.sub2 span::before{content:"└ ";color:var(--ink-3,var(--ink-2));opacity:.6}
