@@ -413,6 +413,10 @@ body.authed .login-stage{display:none}
    неотличимы от готовых. Рамка внутренней тенью, а не border: border сдвинул бы
    содержимое клетки на пиксель и сетка «поехала» бы на всю ширину месяца. */
 .gr-cell.f-plan{background:transparent;box-shadow:inset 0 0 0 1px rgba(52,201,124,.42)}
+/* ⚠ Подсветку при наведении возвращаем ЯВНО: `.gr-cell:hover` слабее (0,1,1),
+   чем правило выше (0,2,1), и клетка с рамкой переставала откликаться на мышь —
+   выглядела бы неактивной ровно там, где по ней и надо кликать. */
+.gr-cell.f-plan:hover{background:var(--fill-hi)}
 .gr-cell.f-dev{background:rgba(242,193,78,.2)}
 .gr-cell.f-miss{background:rgba(255,107,107,.15)}
 .gr-cell.f-rest{background:var(--fill-2)}
