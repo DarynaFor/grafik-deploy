@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=226';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=227';
 
 const $ = id => document.getElementById(id);
 
@@ -1501,7 +1501,10 @@ function openCard(id, replace) {
     <div class="card cardpad" style="margin-top:16px">
       <div class="caps" style="margin-bottom:10px">Комментарии</div>
       <div id="cardNotes"><span class="muted small">загружаем…</span></div>
-      ${isStaff() ? `<div class="me-add" style="margin-top:12px">
+      ${/* Пишут ВСЕ роли, кого пускает база (can_see_employee_note): поле было
+           заперто на isStaff, и бухгалтеру с кассой показывали чужие заметки
+           без возможности ответить. Дарина 19.08: «щоб могли усі писати». */
+        store.me()?.role ? `<div class="me-add" style="margin-top:12px">
         <input class="input" id="noteInput" placeholder="добавить заметку к карточке…" autocomplete="off" maxlength="4000">
         <button class="btn btn-primary btn-sm" id="noteAdd">${ICONS.plus}Добавить</button>
       </div>` : ''}
@@ -1522,7 +1525,11 @@ function openCard(id, replace) {
   loadCardNotes(id);
   return true;
 }
-// Лента заметок на карточке (миграция 037). Добавляют owner/operator/ceo/бухгалтер.
+/* Лента заметок на карточке (миграция 037). Пишут ВСЕ роли — owner, ceo,
+   operator и обе кассы (can_see_employee_note); у скрытого сотрудника заметки
+   видит только владелица, тем же механизмом, что и его зарплату.
+   СЕО просил это, чтобы отмечать особенности по людям; каждая заметка
+   подписана автором и временем, править чужую нельзя. */
 async function loadCardNotes(id) {
   const box = $('cardNotes'); if (!box) return;
   try {
