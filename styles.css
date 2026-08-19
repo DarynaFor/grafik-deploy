@@ -1607,3 +1607,19 @@ tr.pw-total.pw-over{z-index:5}
    заголовке 8 154 088 — читатель видел несводимый столбик. */
 .ov-line.sub2{padding-left:26px;font-size:12px}
 .ov-line.sub2 span::before{content:"└ ";color:var(--ink-3,var(--ink-2));opacity:.6}
+
+/* Предупреждение в окне закрытия дня: неотмеченные выходы. Красное, потому что
+   после закрытия отметить их уже нельзя, и деньги за них не уйдут в выдачу. */
+.mwarn{display:flex;gap:8px;align-items:flex-start;margin:12px 0 0;padding:11px 13px;
+  border-radius:12px;background:var(--red-l,rgba(196,59,59,.1));
+  border:1px solid var(--red-d);color:var(--ink);font-size:12.5px;line-height:1.5}
+.mwarn svg{flex:none;width:15px;height:15px;margin-top:1px;color:var(--red-d)}
+.mwarn b{color:var(--red-d)}
+/* Что именно делает каждая кнопка. «Закрыть по 11-е» читалось как «11 зашито
+   в программу» — теперь рядом сказано, что это период с 1-го числа. */
+.mnote{margin-top:10px;padding:9px 12px;border-radius:11px;background:var(--fill-1);
+  color:var(--ink-2);font-size:12px;line-height:1.5}
+.mnote svg{width:13px;height:13px;vertical-align:-2px;opacity:.7}
+/* Замок в кнопках окна закрытия: иконка идёт перед текстом без отступа и на
+   узкой кнопке выглядела крупнее подписи. */
+.modal-foot .btn svg{width:14px;height:14px;margin-right:5px;vertical-align:-2px}

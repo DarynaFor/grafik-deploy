@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=224';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=225';
 
 const $ = id => document.getElementById(id);
 
@@ -2979,6 +2979,11 @@ const REST_KINDS = ['off', 'absent', 'отпуск', 'отпуск_бз'];   // 
 const VAC_KINDS = ['отпуск', 'отпуск_бз'];
 const isVac = k => VAC_KINDS.includes(k);   // нерабочие виды: НЕ в норму, НЕ «прогул», без оплаты смены
 const isRest = k => REST_KINDS.includes(k);
+/* Месяц в родительном падеже: «11 августа», а не «11 Август». Нужен там, где
+   число и месяц стоят рядом в живой фразе — например, в окне закрытия дня. */
+const MONTHS_GEN = ['', 'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const monthGenitive = period => MONTHS_GEN[+String(period || '').slice(5, 7)] || '';
 function cellText(c) {
   if (!c || !c.plan_kind) return '';
   const k = shiftKinds.find(x => x.code === c.plan_kind), short = k ? (k.short || k.label) : c.plan_kind;
@@ -3890,6 +3895,38 @@ const denSlovami = ds => ds.length === 1 ? `день ${ds[0].slice(8)}.${ds[0].s
      открыть  — Милена и СЕО. Алёне открытие заменит СМС-код (отдельная задача),
                 поэтому ей здесь честно сказано, к кому идти, а не показана
                 кнопка, которую сервер всё равно отобьёт. */
+/* Сколько выходов в отрезке ещё НЕ отмечено. Правило ровно как у базы
+   (v_sched_day): рабочий день — это план не из «отдыхающих» видов, отмеченный —
+   это непустой fact.
+
+   ⚠ Зачем это в окне закрытия. Закрытый день блокирует в графике ЛЮБУЮ правку,
+   включая простановку выхода (политики sch_ins/sch_upd/sch_del, миграция 143).
+   А с августа в «Осталось выдать» идут только отмеченные дни. Значит закрыть
+   день с неотмеченными людьми = запереть их деньги: отметить уже нельзя, и
+   единственный выход — открывать день обратно с красной записью в журнале.
+   На 18.08 в августе так висело 322 дня у 76 человек на 3 228 501 ₽ — окно об
+   этом молчало, а «Закрыть по N-е» закрывает такие дни пачкой. */
+function unmarkedIn(from, to) {
+  const today = mskTodayISO();
+  const days = new Set(), people = new Set();
+  for (const c of (scheduleRows || [])) {
+    const d = c.work_date;
+    if (!d || d < from || d > to || d > today) continue;   // будущее отмечать нечем
+    if (!c.plan_kind || isRest(c.plan_kind)) continue;      // выходной/отпуск — не выход
+    if (c.fact != null && c.fact !== '') continue;          // уже отмечен
+    days.add(d + '|' + c.employee_id);
+    people.add(c.employee_id);
+  }
+  return { days: days.size, people: people.size };
+}
+// Предупреждение для окна закрытия. Пустая строка — когда предупреждать не о чем.
+function unmarkedWarn(from, to) {
+  const u = unmarkedIn(from, to);
+  if (!u.days) return '';
+  return `<div class="mwarn">${ICONS.alert}<span>Не отмечено <b>${u.days} ${plural(u.days, 'выход', 'выхода', 'выходов')}</b>
+    у ${u.people} ${plural(u.people, 'человека', 'человек', 'человек')}. После закрытия отметить их будет нельзя,
+    и эти дни не попадут в «Осталось выдать» — сначала отметьте выходы, потом закрывайте.</span></div>`;
+}
 function scheduleDayDialog(day) {
   const date = cellDate(day), closed = closedDays.has(date), meRole = store.me()?.role;
   const label = day + ' ' + periodLabel(curPeriod);
@@ -3900,10 +3937,18 @@ function scheduleDayDialog(day) {
     // «Завтра» считаем по Москве, как и «прошедший день» в остальном графике.
     const zavtra = new Date(mskNow().getTime() + 864e5).toISOString().slice(0, 10);
     const budushchee = date > zavtra;
+    const mFrom = curPeriod + '-01';
+    // Два предупреждения: по одному дню и по всему отрезку с начала месяца —
+    // кнопки закрывают разное, и цена у них разная.
+    const warnDay = budushchee ? '' : unmarkedWarn(date, date);
+    const warnTo  = budushchee ? '' : unmarkedWarn(mFrom, date);
     showModal(`<h3>Закрыть день ${esc(label)}?</h3>
       <div class="msub">${budushchee
         ? 'Этот день ещё не наступил — закрывать нечего, план по нему может смениться.'
         : 'После закрытия день блокируется для <b>всех</b>, включая владельца. Чтобы исправить — день надо будет открыть, и это отметится в журнале красным.'}</div>
+      ${warnTo || warnDay}
+      ${budushchee ? '' : `<div class="mnote">${ICONS.lock} <b>Закрыть день</b> — только ${day} ${monthGenitive(curPeriod)}.
+        <b>Закрыть по ${day}-е</b> — весь период с 1-го по ${day} ${monthGenitive(curPeriod)} сразу.</div>`}
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="dCancel">Отмена</button>${budushchee ? '' : `<button class="btn btn-primary btn-sm" id="dClose">${ICONS.lock}Закрыть день</button><button class="btn btn-primary btn-sm" id="dCloseTo">${ICONS.lock}Закрыть по ${day}-е</button>`}</div>`);
     if ($('dClose')) $('dClose').onclick = async () => { const b = $('dClose'); if (b.disabled) return; b.disabled = true; try { await store.closeDay(date); closeModal(); toast(ICONS.check + 'День ' + day + ' закрыт'); renderSchedule(); } catch (e) { b.disabled = false; toast(e.message || e, true); } };
     // «Закрыть по N-е» — закрытие ПЕРИОДА с начала месяца. Просьба СЕО 17.08
