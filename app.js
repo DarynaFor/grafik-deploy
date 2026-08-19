@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=230';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=231';
 
 const $ = id => document.getElementById(id);
 
@@ -939,10 +939,6 @@ const canSetFinalSum = () => ['owner', 'ceo'].includes(store.me()?.role);
    isStaff: у неё другой набор экранов, и складывать их в одну кучу — верный
    способ однажды открыть ей лишнее. */
 const isBuh = () => store.me()?.role === 'cashier1';
-/* Прикидку к авансу вносят те же, кого пускает база (me_ins, миграция 145):
-   Милена, директор и Алёна. Кассам нечего — они деньги выдают, а не оценивают.
-   Дарина 19.08: «дамо можливість вносити і альоні, і сео, і мілєні». */
-const canEditEstimate = () => ['owner', 'ceo', 'operator'].includes(store.me()?.role);
 /* Кто вообще работает с расчётом и графиком (смотрит или правит). */
 const worksWithPayroll = () => isStaff() || isBuh();
 async function enter() {
@@ -6020,14 +6016,6 @@ async function payrollDialog(empId) {
   if (pctLine && canEdit) { try { curRev = await store.getDoctorRevenue(empId, per); } catch (e) {} }
   let curOverride = null;                                 // финальная сумма вручную (миграция 049)
   if (canEdit) { try { curOverride = await store.getSalaryOverride(empId, per); } catch (e) {} }
-  /* Прикидка к авансу (145). Тянем ВСЕГДА, когда роль может её вносить: она
-     нужна и чтобы показать уже внесённую, и чтобы понять, какой вид выбран.
-     Ошибку глотаем — окно человека должно открыться и без неё. */
-  let curEst = null;
-  if (canEditEstimate()) {
-    try { curEst = (await store.listEstimates(per)).find(x => x.employee_id === empId) || null; }
-    catch (e) { console.warn('listEstimates:', e); }
-  }
   // Пока ждали базу, месяц или экран могли смениться. Диалог тогда уже не про то,
   // что перед человеком: молча уходим, строку он откроет заново.
   if (payPeriod !== per || curScreen !== 'payroll') return;
@@ -6098,26 +6086,6 @@ async function payrollDialog(empId) {
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
       <div class="me-row"><span class="muted small">${r.salary_marked_kop != null && +r.salary_marked_kop < (+r.salary_kop || 0) ? '<b>Подтверждено фактом</b>' : '<b>Заработано</b>'} − <b>на карту</b> − <b>дополнительные поступления</b> + перенос с прошлого месяца. Столько ещё раздать наличными.<br>Начисленные отпускные и больничные <b>входят</b> в заработок, а выплаченные — вычитаются: если начислили и выплатили поровну, на разницу они не влияют. Удержания (алименты и прочее) стоят в блоке «На карту» — они тоже уменьшают выдачу.</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
-    ${/* ── ПРИКИДКА К АВАНСУ (миграция 145) ──────────────────────────────
-         Показываем только там, где картины нет вовсе: ни одного отмеченного дня
-         и ни ручной суммы. Кто отмечен или кому сумма задана — уже посчитан, и
-         лишнее поле только путало бы.
-
-         ⚠ Это НЕ начисление: в «Осталось выдать» прикидка не идёт, долга перед
-         человеком не создаёт, расчёт не подменяет. Отвечает на один вопрос к
-         20-му числу — «сколько человек примерно наработал, чтобы аванс не был
-         вслепую». В июле без неё двоим выдали авансом 69 % и 73 % того, что они
-         в итоге заработали. */
-      canEditEstimate() && !(+r.salary_marked_kop || 0) && !r.flag_manual_salary ? `
-      <label class="flbl">Прикидка к авансу${curEst ? ` · внесена ${esc(fmtDT(curEst.updated_at))}` : ''}</label>
-      <div class="me-add">
-        <div class="cselect pm-kind" id="pmEstKind"></div>
-        <input class="input" id="pmEst" placeholder="примерная сумма ₽" autocomplete="off" inputmode="numeric"
-               value="${curEst ? fmt(Math.round(curEst.amount_kop / 100)) : ''}">
-        <button class="btn btn-primary btn-sm" id="pmEstSave">${ICONS.check}${curEst ? 'Изменить' : 'Записать'}</button>
-        ${curEst ? `<button class="btn btn-ghost btn-sm" id="pmEstClear">Убрать</button>` : ''}
-      </div>
-      <div class="msub">Приблизительно, для решения по авансу.${hint('На расчёт и на «Осталось выдать» не влияет — заменится, как только появятся отметки в графике или выручка. Каждая правка видна владельцу в журнале.')}</div>` : ''}
 
     ${pctLine && canEdit ? `<label class="flbl">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё</label>
       <div class="me-add">
@@ -6161,39 +6129,6 @@ async function payrollDialog(empId) {
   { const kb = $('pmKind');
     if (kb) { const o = moneyKindOpts(store.me()?.role);
       makeDropdown(kb, o, (o.find(x => !x.head) || {}).v || '', () => {}); } }
-  /* ── Прикидка к авансу (145) ─────────────────────────────────────────────
-     Два вида по решению Дарины («нехай будуть обидва варіанти»): «выручка» —
-     для процентников, программа умножит на их процент; «заработок» — прямая
-     сумма для всех остальных. Вид по умолчанию берём из ставки человека, чтобы
-     не заставлять выбирать очевидное. */
-  { const kb = $('pmEstKind');
-    if (kb) {
-      const opts = [{ v: 'заработок', label: 'Заработок' }, { v: 'выручка', label: 'Выручка' }];
-      const def = curEst ? curEst.kind : (pctLine ? 'выручка' : 'заработок');
-      makeDropdown(kb, opts, def, () => {});
-    } }
-  if ($('pmEstSave')) $('pmEstSave').onclick = async () => {
-    const b = $('pmEstSave'); if (b.disabled) return;
-    let val;
-    try { val = parseNum($('pmEst').value, { thousands: true, field: 'сумму', max: RATE_ABSURD }); }
-    catch (e) { return toast(e.message || e, true); }
-    b.disabled = true;
-    try {
-      await store.saveEstimate(empId, per, $('pmEstKind').dataset.value, Math.round(val * 100));
-      toast(ICONS.check + 'Прикидка записана');
-      closeModal(); payrollDialog(empId);
-    } catch (e) { b.disabled = false; toast(e.message || e, true); }
-  };
-  if ($('pmEst')) $('pmEst').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('pmEstSave').click(); } };
-  if ($('pmEstClear')) $('pmEstClear').onclick = async () => {
-    const b = $('pmEstClear'); if (b.disabled) return;
-    b.disabled = true;
-    try {
-      await store.delEstimate(empId, per, curEst.kind);
-      toast(ICONS.check + 'Прикидка убрана');
-      closeModal(); payrollDialog(empId);
-    } catch (e) { b.disabled = false; toast(e.message || e, true); }
-  };
   if ($('pmUndoAll')) $('pmUndoAll').onclick = () => undoAllPayouts(empId, per, reopen);
   if ($('pmToCard')) $('pmToCard').onclick = () => focusOn('employees', empId) || openCard(empId);
   if ($('pmToSched')) $('pmToSched').onclick = () => focusOn('schedule', empId);
