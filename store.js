@@ -725,7 +725,7 @@ export class MockStore {
     return this.db.schedule.filter(s => String(s.work_date).startsWith(pre)).map(s => ({ ...s }));
   }
   async setScheduleCell(employeeId, work_date, cell, position = 'main') {
-    if (this.user?.role === 'operator' && this._dayClosed(work_date)) throw new Error('День закрыт — правку вносит владелец (или Алёна по СМС, этап 5б)');
+    if (this._dayClosed(work_date)) throw new Error('День закрыт. Чтобы исправить, его надо открыть — это может Милена или директор');
     const empty = (cell.plan_kind ?? null) === null && (cell.plan_start ?? null) === null && (cell.fact ?? null) === null;
     const idx = this.db.schedule.findIndex(s => s.employee_id === employeeId && s.work_date === work_date && (s.position || 'main') === position);
     if (empty) { if (idx >= 0) this.db.schedule.splice(idx, 1); this._save(); return null; }   // очистка = удаление строки
@@ -739,9 +739,10 @@ export class MockStore {
     this._save(); return { ...row };
   }
   async setScheduleBulk(cells) {   // массовое заполнение (шаблон): cells=[{employee_id,work_date,plan_kind,plan_start,fact?}]
-    const op = this.user?.role === 'operator';
+    let zapisano = 0;
     for (const c of cells) {
-      if (op && this._dayClosed(c.work_date)) continue;   // закрытый день оператор шаблоном не переписывает (зеркалит RLS)
+      if (this._dayClosed(c.work_date)) continue;   // закрытый день шаблоном не переписывает НИКТО (зеркалит RLS 143)
+      zapisano++;
       const pos = c.position || 'main';
       const idx = this.db.schedule.findIndex(s => s.employee_id === c.employee_id && s.work_date === c.work_date && (s.position || 'main') === pos);
       let row = idx >= 0 ? this.db.schedule[idx] : null;
@@ -752,15 +753,15 @@ export class MockStore {
       if ('fact' in c) row.fact = c.fact ?? null;
       row.updated_at = new Date().toISOString();
     }
-    this._save(); return cells.length;
+    this._save(); return zapisano;                       // сколько РЕАЛЬНО записали (как в проде), а не сколько прислали
   }
-  async clearScheduleMonth(employeeId, period, position = 'main') {   // удалить месяц ОДНОЙ позиции (закрытые дни у оператора не трогаем)
-    const pre = period + '-', before = this.db.schedule.length, op = this.user?.role === 'operator';
-    this.db.schedule = this.db.schedule.filter(s => !(s.employee_id === employeeId && (s.position || 'main') === position && String(s.work_date).startsWith(pre) && !(op && this._dayClosed(s.work_date))));
+  async clearScheduleMonth(employeeId, period, position = 'main') {   // удалить месяц ОДНОЙ позиции (закрытые дни не трогаем ни у кого)
+    const pre = period + '-', before = this.db.schedule.length;
+    this.db.schedule = this.db.schedule.filter(s => !(s.employee_id === employeeId && (s.position || 'main') === position && String(s.work_date).startsWith(pre) && !this._dayClosed(s.work_date)));
     this._save(); return before - this.db.schedule.length;
   }
   async setScheduleFact(employeeId, work_date, fact, position = 'main') {   // табель: null=по плану · 'x'=не вышел · число=факт.часы
-    if (this.user?.role === 'operator' && this._dayClosed(work_date)) throw new Error('День закрыт — правку вносит владелец (или Алёна по СМС, этап 5б)');
+    if (this._dayClosed(work_date)) throw new Error('День закрыт. Чтобы исправить, его надо открыть — это может Милена или директор');
     const idx = this.db.schedule.findIndex(s => s.employee_id === employeeId && s.work_date === work_date && (s.position || 'main') === position);
     let row = idx >= 0 ? this.db.schedule[idx] : null;
     const old = row ? (row.fact ?? null) : null;
@@ -815,16 +816,58 @@ export class MockStore {
     const pre = period + '-';
     return (this.db.closed || []).filter(d => String(d.work_date).startsWith(pre)).map(d => d.work_date);
   }
-  async closeDay(work_date) {                            // закрыть день (operator/owner)
+  /* Записи в журнал зеркалят триггер log_closed_day (002): закрытие — обычной
+     строкой, открытие — КРАСНОЙ и с тем, кто и когда закрывал. Без этого демо
+     врало бы в самом важном: Дарина проверяет «фіксується в журналі червоним»
+     именно здесь, а на проде это делает база. */
+  async closeDay(work_date) {                            // закрыть день (operator/owner/ceo)
+    // Роль и «не будущее» проверяем и здесь: на проде это делает политика cd_ins,
+    // и демо обязано упираться в то же самое, иначе проверка глазами врёт.
+    if (!['owner', 'operator', 'ceo'].includes(this.user?.role)) throw new Error('Закрывать дни может Алёна, Милена или директор');
+    if (work_date > new Date(Date.now() + 3 * 3600e3 + 864e5).toISOString().slice(0, 10)) throw new Error('Этот день ещё не наступил — закрывать нечего');
     this.db.closed = this.db.closed || [];
-    if (!this.db.closed.some(d => d.work_date === work_date))
+    if (!this.db.closed.some(d => d.work_date === work_date)) {
       this.db.closed.push({ work_date, closed_by: this.user?.id || null, closed_at: new Date().toISOString() });
+      this._log('closed', 'day', 0, 'закрыт день', null, work_date);
+    }
     this._save(); return work_date;
   }
-  async reopenDay(work_date) {                           // открыть день — ТОЛЬКО владелец
-    if (this.user?.role !== 'owner') throw new Error('Открыть день может только владелец');
+  async reopenDay(work_date) {                           // открыть день — владелец и директор (зеркалит cd_del)
+    if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Открыть день может Милена или директор');
+    const bylo = (this.db.closed || []).find(d => d.work_date === work_date);
     this.db.closed = (this.db.closed || []).filter(d => d.work_date !== work_date);
+    if (bylo) this._log('reopened', 'day', 0, 'открыт день (был закрыт ' + (bylo.closed_by ?? '?') + ' @ ' + bylo.closed_at + ')', work_date, work_date, true);
     this._save(); return true;
+  }
+  // Закрыть период целиком. Зеркалит close_period (143): будущее отсекаем, уже
+  // закрытые пропускаем, возвращаем СКОЛЬКО закрыли — чтобы повторный клик
+  // честно сказал «уже были закрыты», а не соврал галочкой.
+  async closePeriod(from_date, to_date) {
+    if (!['owner', 'operator', 'ceo'].includes(this.user?.role)) throw new Error('Закрывать дни может Алёна, Милена или директор');
+    const zavtra = new Date(Date.now() + 3 * 3600e3 + 864e5).toISOString().slice(0, 10);
+    this.db.closed = this.db.closed || [];
+    let n = 0;
+    for (let d = new Date(from_date + 'T00:00:00Z'); d.toISOString().slice(0, 10) <= to_date; d.setUTCDate(d.getUTCDate() + 1)) {
+      const wd = d.toISOString().slice(0, 10);
+      if (wd > zavtra) continue;
+      if (this.db.closed.some(x => x.work_date === wd)) continue;
+      this.db.closed.push({ work_date: wd, closed_by: this.user?.id || null, closed_at: new Date().toISOString() });
+      this._log('closed', 'day', 0, 'закрыт день', null, wd);   // по строке на день, как триггер на проде
+      n++;
+    }
+    this._save(); return n;
+  }
+  async openPeriod(from_date, to_date) {                 // зеркалит open_period (144): право у owner/ceo
+    if (!['owner', 'ceo'].includes(this.user?.role)) throw new Error('Открыть день может Милена или директор');
+    this.db.closed = this.db.closed || [];
+    let n = 0;
+    for (const d of [...this.db.closed]) {
+      if (d.work_date < from_date || d.work_date > to_date) continue;
+      this.db.closed = this.db.closed.filter(x => x.work_date !== d.work_date);
+      this._log('reopened', 'day', 0, 'открыт день (был закрыт: ' + (d.closed_by ?? '?') + ')', d.work_date, d.work_date, true);
+      n++;
+    }
+    this._save(); return n;
   }
   async requestRetroEdit(work_date, employee_id, target, payload) {   // ретро-правка закрытого дня: заявка + код
     if (!(this.db.closed || []).some(d => d.work_date === work_date)) throw new Error('день не закрыт');
@@ -1512,6 +1555,7 @@ export class SupabaseStore {
   // onConflict обязан её повторять: по старой паре запрос теперь падает, потому
   // что такого ограничения больше нет.
   async setScheduleCell(employeeId, work_date, cell, position = 'main') {
+    if (this._dayClosed(work_date)) throw new Error(SupabaseStore.ZAKRYT);
     // «Пусто» считаем ТОЛЬКО когда вызывающий действительно чистит смену, то есть
     // прислал поля плана/факта. Иначе частичное обновление (одна лишь сумма)
     // читалось как пустая клетка и УДАЛЯЛО строку целиком: клик до «пусто» у
@@ -1523,9 +1567,17 @@ export class SupabaseStore {
       && (cell.fact ?? null) === null && (cell.amount_kop ?? null) === null
       && (cell.fact_start ?? null) === null;
     if (empty) {   // очистка = удаление строки, чтобы таблица не копила пустышки
-      const { error } = await this.sb.from('schedule').delete()
-        .eq('employee_id', employeeId).eq('work_date', work_date).eq('position', position);
-      if (error) throw error; return null;
+      // .select() обязателен: DELETE под правами не ошибается на закрытом дне, а
+      // молча удаляет НОЛЬ строк — и «Очищено» говорилось бы про целую смену.
+      const { data, error } = await this.sb.from('schedule').delete()
+        .eq('employee_id', employeeId).eq('work_date', work_date).eq('position', position).select('id');
+      if (error) throw this._perevestiOtkaz(error, work_date);
+      if (!data || !data.length) {
+        const { data: est } = await this.sb.from('schedule').select('id')
+          .eq('employee_id', employeeId).eq('work_date', work_date).eq('position', position).maybeSingle();
+        if (est) { this._zapomnit(work_date); throw new Error(SupabaseStore.ZAKRYT); }
+      }
+      return null;
     }
     const row = { employee_id: employeeId, work_date, position, source: 'manual', updated_by: this.user.id };
     if ('plan_start' in cell) row.plan_start = cell.plan_start ?? null;
@@ -1540,7 +1592,7 @@ export class SupabaseStore {
     if ('fact_end' in cell) row.fact_end = cell.fact_end ?? null;
     const { data, error } = await this.sb.from('schedule')
       .upsert(row, { onConflict: 'employee_id,work_date,position' }).select().single();
-    if (error) throw error; return data;
+    if (error) throw this._perevestiOtkaz(error, work_date); return data;
   }
   async setScheduleBulk(cells) {   // массовое заполнение (шаблон/импорт). fact не трогаем — это план
     /* plan_end пишем ТОЛЬКО когда вызывающий его прислал. Раньше стояло
@@ -1557,8 +1609,16 @@ export class SupabaseStore {
       if ('plan_end' in c) row.plan_end = c.plan_end ?? null;
       return row;
     });
-    const { error } = await this.sb.from('schedule').upsert(rows, { onConflict: 'employee_id,work_date,position' });
-    if (error) throw error; return rows.length;
+    /* Закрытые дни ВЫБРАСЫВАЕМ из пачки, а не отправляем и надеемся. Отправить —
+       значит уронить ВСЮ операцию: upsert идёт одним запросом, и одна строка на
+       закрытый день отобьёт вместе с ней все остальные. Человек бы увидел
+       «шаблон не применился» на весь месяц из-за одного проверенного дня.
+       Пропущенные считаем и возвращаем — вызывающий скажет об этом вслух. */
+    const otkrytye = rows.filter(r => !this._dayClosed(r.work_date));
+    if (!otkrytye.length) return 0;
+    const { error } = await this.sb.from('schedule').upsert(otkrytye, { onConflict: 'employee_id,work_date,position' });
+    if (error) throw this._perevestiOtkaz(error, otkrytye[0].work_date);
+    return otkrytye.length;                              // сколько РЕАЛЬНО записали, а не сколько прислали
   }
   // Чистим ОДНУ позицию: «Очистить месяц» в шаблоне относится к той строке
   // графика, из которой его вызвали, а не к обеим работам человека.
@@ -1566,11 +1626,22 @@ export class SupabaseStore {
     const start = period + '-01';
     const [y, m] = period.split('-').map(Number);
     const next = (m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01');
-    const { error } = await this.sb.from('schedule').delete()
-      .eq('employee_id', employeeId).eq('position', position).gte('work_date', start).lt('work_date', next);
-    if (error) throw error; return true;
+    /* ⚠ DELETE под правами не ошибается на закрытых днях — он их просто НЕ ТРОГАЕТ
+       (строка не проходит USING). Это ровно то поведение, которое нужно: очистка
+       месяца не должна сносить проверенное. Но раньше метод возвращал true, и
+       «месяц очищен» говорилось даже когда половина дней осталась. Возвращаем
+       реальное число удалённых строк — вызывающий скажет человеку правду. */
+    const { data, error } = await this.sb.from('schedule').delete()
+      .eq('employee_id', employeeId).eq('position', position).gte('work_date', start).lt('work_date', next).select('id');
+    if (error) throw error; return (data || []).length;
   }
   async setScheduleFact(employeeId, work_date, fact, position = 'main') {   // табель: пишем ТОЛЬКО факт (source/план не трогаем — сохраняем 'import')
+    /* ⚠ Проверка стоит ПЕРВОЙ строкой не для красоты. Без неё закрытый день врал
+       молча: UPDATE под правами возвращает НОЛЬ строк (не ошибку), код считал
+       «строки нет» и шёл INSERT-ом ниже; при fact == null он вообще возвращал
+       null — то есть «по плану» на закрытом дне выглядело как успешно
+       сохранённое, а в базе не менялось ничего. Отметка факта — это деньги. */
+    if (this._dayClosed(work_date)) throw new Error(SupabaseStore.ZAKRYT);
     // Журнал правок факта пишет триггер schedule_journal (migrations/002) — здесь ничего не нужно
     //   (перезаписывается при след. правке). Для анти-фрода нужна неизменяемая история кто/когда отметил.
     // eq('position') обязателен во ВСЕХ трёх запросах: без него отметка факта по
@@ -1588,10 +1659,22 @@ export class SupabaseStore {
       }
       return r;
     }
-    if (fact == null) return null;                       // строки нет и писать нечего
+    /* ⚠ Сюда мы попадаем, когда UPDATE не тронул НИ ОДНОЙ строки. Это два разных
+       случая, и раньше они были склеены: (1) строки графика нет — писать нечего,
+       (2) строка есть, но день закрыли из соседнего окна, и права её не отдали.
+       Во втором случае при fact == null программа возвращала null и рисовала
+       «Факт отмечен» — то есть врала: в базе не менялось ничего, а стоявший там
+       'x' («не вышел») оставался, и человек не получал денег за день.
+       Спрашиваем базу прямо: строка существует? Значит нас не пустили. */
+    if (fact == null) {
+      const { data: est } = await this.sb.from('schedule').select('id')
+        .eq('employee_id', employeeId).eq('work_date', work_date).eq('position', position).maybeSingle();
+      if (est) { this._zapomnit(work_date); throw new Error(SupabaseStore.ZAKRYT); }
+      return null;                                       // строки действительно нет — писать нечего
+    }
     const { data: ins, error: e2 } = await this.sb.from('schedule')   // вышел без плана — новая строка
       .insert({ employee_id: employeeId, work_date, position, fact, source: 'manual', updated_by: this.user.id }).select().single();
-    if (e2) throw e2; return ins;
+    if (e2) throw this._perevestiOtkaz(e2, work_date); return ins;
   }
   // Нормы часов месяца. Считает БАЗА (v_month_norm, migrations/056): ручное
   // переопределение → производственный календарь по типу недели из карточки.
@@ -1616,21 +1699,93 @@ export class SupabaseStore {
     if (error) throw new Error(employeeError(error));
     return true;
   }
+  /* Закрытые дни держит БАЗА (права sch_ins/sch_upd/sch_del, миграция 143) — это
+     единственная настоящая защита. Кэш ниже нужен не вместо неё, а чтобы отказ
+     выглядел человеческой фразой, а не сырой ошибкой Postgres, и чтобы шаблон на
+     месяц не падал целиком из-за одного закрытого дня.
+
+     ⚠ Кэш ОБЯЗАН уметь ЗАБЫВАТЬ. Первая версия только добавляла даты — и день,
+     который владелица только что открыла, оставался «закрытым» в кэше до F5:
+     замок с числа снимался, клетка становилась редактируемой, а сохранение
+     отбивалось фразой «день закрыт, откройте его» — тот, кто его уже открыл.
+     Поэтому listClosedDays ПЕРЕСОБИРАЕТ свой месяц целиком, а closeDay /
+     closePeriod / reopenDay правят кэш сразу за собой.
+
+     Кэш всё равно может отстать (закрыли из соседнего окна) — на этот случай
+     последнее слово за базой, а _perevestiOtkaz переводит её ответ на русский. */
   async listClosedDays(period) {                         // множество закрытых дат месяца 'YYYY-MM'
     const start = period + '-01';
     const [y, m] = period.split('-').map(Number);
     const next = (m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01');
     const { data, error } = await this.sb.from('closed_day').select('work_date').gte('work_date', start).lt('work_date', next);
-    if (error) throw error; return (data || []).map(d => d.work_date);
+    if (error) throw error;
+    const dni = (data || []).map(d => d.work_date);
+    this._closed = this._closed || new Set();
+    const pre = period + '-';
+    for (const d of [...this._closed]) if (d.startsWith(pre)) this._closed.delete(d);   // свой месяц — заново
+    for (const d of dni) this._closed.add(d);
+    return dni;
   }
-  async closeDay(work_date) {                            // закрыть день (operator/owner). closed_by = default auth.uid() (RLS)
+  _dayClosed(wd) { return !!(this._closed && this._closed.has(wd)); }
+  _zabyt(wd) { this._closed && this._closed.delete(wd); }
+  _zapomnit(wd) { (this._closed = this._closed || new Set()).add(wd); }
+  static ZAKRYT = 'День закрыт. Чтобы исправить, его надо открыть — это может Милена или директор';
+  /* Отказ прав выглядит как «new row violates row-level security policy». Человеку
+     такое показывать нельзя. ⚠ Раньше здесь стояла ещё и проверка _dayClosed — и
+     она делала перевод бесполезным ровно тогда, когда он нужен: если кэш свеж, до
+     запроса не дошли вовсе, а если отстал, то _dayClosed == false и сырой текст
+     улетал в тост. Записи в schedule ЗАПРЕЩЕНЫ только закрытием дня (роль
+     проверена входом), поэтому отказ прав здесь означает именно его. */
+  _perevestiOtkaz(e, work_date) {
+    const t = String(e?.message || e || '');
+    if (/row-level security|violates row level/i.test(t)) { this._zapomnit(work_date); return new Error(SupabaseStore.ZAKRYT); }
+    return e;
+  }
+  async closeDay(work_date) {                            // закрыть день (operator/owner/ceo). closed_by = default auth.uid() (RLS)
     const { error } = await this.sb.from('closed_day').upsert({ work_date }, { onConflict: 'work_date', ignoreDuplicates: true });
-    if (error) throw error; return work_date;
+    if (error) throw error;
+    this._zapomnit(work_date);
+    return work_date;
   }
-  async reopenDay(work_date) {                           // открыть день — RLS пускает только владельца
+  // Закрыть период одним вызовом (RPC close_period, миграция 143). Права берёт
+  // из политики cd_ins — второй копии матрицы прав тут намеренно нет.
+  // Возвращает, сколько дней реально закрылось: будущее и уже закрытое не в счёт.
+  async closePeriod(from_date, to_date) {
+    const { data, error } = await this.sb.rpc('close_period', { p_from: from_date, p_to: to_date });
+    if (error) throw error;
+    for (const d of this._dniPerioda(from_date, to_date)) this._zapomnit(d);
+    return data ?? 0;
+  }
+  // Парная к closePeriod (144). Без неё закрытие несимметрично: закрыть месяц —
+  // одно действие, открыть — тридцать. Право база берёт из cd_del (owner/ceo).
+  async openPeriod(from_date, to_date) {
+    const { data, error } = await this.sb.rpc('open_period', { p_from: from_date, p_to: to_date });
+    if (error) throw error;
+    for (const d of this._dniPerioda(from_date, to_date)) this._zabyt(d);
+    return data ?? 0;
+  }
+  _dniPerioda(from_date, to_date) {
+    const out = [];
+    for (const d = new Date(from_date + 'T00:00:00Z'); d.toISOString().slice(0, 10) <= to_date; d.setUTCDate(d.getUTCDate() + 1))
+      out.push(d.toISOString().slice(0, 10));
+    return out;
+  }
+  async reopenDay(work_date) {                           // открыть день — RLS пускает владельца и директора (cd_del)
+    // ⚠ DELETE под RLS не ошибается, а возвращает НОЛЬ строк — молчаливый отказ.
+    // Поэтому смотрим на .select(): пусто = не пустило (или день уже открыт).
     const { data, error } = await this.sb.from('closed_day').delete().eq('work_date', work_date).select();
     if (error) throw error;
-    if (!data || !data.length) throw new Error('Открыть день может только владелец');
+    if (!data || !data.length) {
+      // Ноль строк — это ДВА разных случая, и валить их в «нет прав» нельзя:
+      // владелице, у которой право есть, программа отвечала бы, что права нет.
+      // Спрашиваем базу, существует ли строка: нет — день уже открыт (второе окно,
+      // повторный клик), есть — значит нас действительно не пустили.
+      const { data: est } = await this.sb.from('closed_day').select('work_date').eq('work_date', work_date).maybeSingle();
+      this._zabyt(work_date);
+      if (!est) return true;                             // уже открыт — не ошибка
+      throw new Error('Открыть день может Милена или директор');
+    }
+    this._zabyt(work_date);
     return true;
   }
   async requestRetroEdit(work_date, employee_id, target, payload) {   // RPC: заявка + СМС-код (код не возвращается)

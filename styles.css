@@ -473,8 +473,20 @@ body.authed .login-stage{display:none}
 .dlockmark{display:block;line-height:0;margin-top:1px}
 .dlockmark svg{width:9px;height:9px;opacity:.65}
 .gr-cell.dclosed{cursor:default;position:relative}
-.gr-cell.dclosed::after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(45deg,transparent 0 4px,rgba(140,140,140,.06) 4px 5px)}
+/* Закрытый день должен быть виден ИЗДАЛЕКА. Виталий Гелиг 17.08: «сейчас я смотрю
+   на зеленые графики… надо сделать уже вариант блокировки», то есть проверенное от
+   непроверенного он не отличал. Штриховка была 6%-й — на глаз неразличима. Даём
+   заметную, но не кричащую: сетка читается, а закрытая область видна одним взглядом.
+   Цвет нейтрально-серый намеренно: зелёный/красный здесь уже заняты фактом. */
+.gr-cell.dclosed::after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(45deg,transparent 0 5px,rgba(120,124,132,.16) 5px 7px)}
+.gr-cell.dclosed{background:rgba(120,124,132,.05)}
+/* Колонка закрытого дня: шапка темнее и с замком, чтобы взгляд ловил границу
+   «докуда проверено» сверху, не разглядывая клетки. */
+.gr-day.dlock{background:var(--fill-hi);color:var(--ink-2);box-shadow:inset 0 -2px 0 rgba(120,124,132,.45)}
+.dlockmark svg{opacity:.85}
 .gr-day.today.dlock{background:var(--green)}   /* закрытый сегодняшний день: зелёный фон — число и замок читаемы */
+/* «Закрыто N из M» рядом с покрытием месяца */
+.sched-stat .chip-lock{background:var(--fill-hi);color:var(--ink-2)}
 /* владелец (ro) при наведении сохраняет цвет факта (анти-фрод сигнал не должен мигать) */
 .gr-cell.ro.f-ok:hover{background:rgba(52,201,124,.13)}
 .gr-cell.ro.f-dev:hover{background:rgba(242,193,78,.2)}

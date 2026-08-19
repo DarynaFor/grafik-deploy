@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=223';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=224';
 
 const $ = id => document.getElementById(id);
 
@@ -3507,10 +3507,13 @@ function drawSchedule() {
   const meRole = store.me()?.role;
   const isClosed = d => closedDays.has(cellDate(d));
   const anyEdit = ['operator', 'owner', 'ceo'].includes(meRole);   // есть ли право что-то править
-  // СМС-подтверждение временно убрано (#70): закрытые дни владелец/Алёна/СЕО правят
-  // НАПРЯМУЮ, каждая правка — в журнал (закрытие ещё показывается, но не блокирует).
-  // Вернём ретро-по-СМС отдельной задачей. Пока — доверенные роли правят любой день.
-  const canEditDay = d => ['owner', 'operator', 'ceo'].includes(meRole);
+  // Закрытый день НЕ ПРАВИТ НИКТО, включая владельца (миграция 143, просьба СЕО
+  // 17.08: «чтобы я понимал что верные и никто не будет править»). Чтобы исправить,
+  // день сначала ОТКРЫВАЮТ — это видимое действие и красная запись в журнале.
+  // Здесь ровно то же условие, что в правах базы; интерфейс лишь не даёт ткнуть в
+  // то, что всё равно отобьётся сервером. Раньше эта проверка игнорировала день
+  // целиком (#70, 30.07 — замок сняли временно вместе с ретро-по-СМС).
+  const canEditDay = d => ['owner', 'operator', 'ceo'].includes(meRole) && !isClosed(d);
   // Тип недели живёт в карточке (employee.week_hours), а карточку правят владелец и
   // СЕО (RLS emp_update, 035). Показываем «клик» ровно тем, кого пустит база —
   // иначе Алёна тыкала бы в поле и получала отказ.
@@ -3532,7 +3535,12 @@ function drawSchedule() {
   // строках, без фильтра и без перехода. Заодно ушёл лишний круг к серверу: он
   // грузился ОТДЕЛЬНЫМ запросом после общей пачки, при каждом открытии графика.
   if ($('schedNote')) {
-    $('schedNote').innerHTML = editable ? '' : `<div class="readonly-note">${ICONS.lock} График ведёт оператор (Алёна). У вас — просмотр; закрытые дни можно править напрямую.</div>`;
+    // ⚠ Эту плашку видит ТОЛЬКО бухгалтер: editable = owner/operator/ceo, а вкладка
+    // «График» открыта ещё и cashier1. Ему нельзя обещать ни клик по числу (класс
+    // tapday вешается только правящим ролям), ни закрытие: закрытых дней он вообще
+    // НЕ ВИДИТ — cd_sel пускает к closed_day только owner/operator/ceo, и список
+    // приходит пустым без всякой ошибки. Поэтому текст говорит ровно то, что есть.
+    $('schedNote').innerHTML = editable ? '' : `<div class="readonly-note">${ICONS.lock} График ведёт оператор (Алёна). У вас — просмотр.</div>`;
   }
 
   // покрытие месяца: считаем только РАБОЧИЕ смены (Выходной/Не вышел — не смена)
@@ -3544,7 +3552,12 @@ function drawSchedule() {
   const devs = scheduleRows.filter(isDev).length;
   if ($('schedStat')) {
     const pct = active.length ? Math.round(withShift.size / active.length * 100) : 0;
-    $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="cov-bar" title="${pct}% заполнено"><span class="cov-fill" style="width:${pct}%"></span></span><span class="gap-chips"><span class="mini-chip">${shifts} смен</span>${devs ? `<span class="mini-chip chip-dev" title="факт отличается от плана">⚠ расхождений: ${devs}</span>` : ''}</span>`;
+    // «Закрыто N из M» — чтобы СЕО видел границу проверенного, не разглядывая
+    // клетки. closedDays здесь уже только текущий месяц (строка 3405), но фильтр
+    // оставлен намеренно: он делает счётчик верным, даже если набор когда-нибудь
+    // станет общим, как кэш в store.
+    const zakrytoM = [...closedDays].filter(d => d.startsWith(curPeriod + '-')).length;
+    $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="cov-bar" title="${pct}% заполнено"><span class="cov-fill" style="width:${pct}%"></span></span><span class="gap-chips"><span class="mini-chip">${shifts} смен</span>${devs ? `<span class="mini-chip chip-dev" title="факт отличается от плана">⚠ расхождений: ${devs}</span>` : ''}${zakrytoM ? `<span class="mini-chip chip-lock" title="закрытые дни правки не принимают">${ICONS.lock} закрыто ${zakrytoM} из ${nd}</span>` : ''}</span>`;
   }
 
   // индекс клетки для O(1) (иначе find по всем строкам на каждую из ~3700 клеток)
@@ -3848,21 +3861,84 @@ function normDialog(empId) {
     } catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
 }
-// Закрытие/открытие дня табеля. Закрытый день лочит клетки от оператора (правит владелец / Алёна по СМС в 5б).
+/* Какие из этих дат закрыты. Нужна там, где пишут ПАЧКОЙ по одной клетке (отпуск
+   на две недели), потому что цикл спотыкается на первом закрытом дне и оставляет
+   работу СДЕЛАННОЙ НАПОЛОВИНУ: часть отпуска проставлена, часть нет, а человек
+   видит только ошибку и уверен, что не произошло ничего. Дни отпуска — это дни
+   без зарплаты, так что половина отпуска = неверные деньги.
+   Спрашиваем заранее, по всем затронутым месяцам: набор дат может пересекать
+   границу месяца, а closedDays на экране — только текущий. */
+async function zakrytyeIz(dates) {
+  const mesyacy = [...new Set(dates.map(d => String(d).slice(0, 7)))];
+  const zakrytye = new Set();
+  for (const m of mesyacy) {
+    try { for (const d of await store.listClosedDays(m)) zakrytye.add(d); }
+    catch { /* не прочитали — пусть решает база, она всё равно последнее слово */ }
+  }
+  return dates.filter(d => zakrytye.has(d));
+}
+const denSlovami = ds => ds.length === 1 ? `день ${ds[0].slice(8)}.${ds[0].slice(5, 7)}` : `дней: ${ds.length}`;
+
+/* Закрытие / открытие дня табеля.
+
+   Закрыто = НЕ ПРАВИТ НИКТО, включая владельца (миграция 143). Исправить можно
+   только открыв день, а это красная запись в журнале. Так «проверено и закрыто»
+   отличается от «поправлено после проверки» — ради чего СЕО об этом и просил.
+
+   Кто что может (ровно как в правах базы, cd_ins / cd_del):
+     закрыть  — Алёна, Милена, СЕО;
+     открыть  — Милена и СЕО. Алёне открытие заменит СМС-код (отдельная задача),
+                поэтому ей здесь честно сказано, к кому идти, а не показана
+                кнопка, которую сервер всё равно отобьёт. */
 function scheduleDayDialog(day) {
   const date = cellDate(day), closed = closedDays.has(date), meRole = store.me()?.role;
   const label = day + ' ' + periodLabel(curPeriod);
+  const mozhetOtkryt = ['owner', 'ceo'].includes(meRole);
   if (!closed) {
+    // Будущее закрывать нечего — база отсекает всё позже завтрашнего (cd_ins).
+    // Говорим об этом здесь, иначе клик по 25-му числу упёрся бы в отказ прав.
+    // «Завтра» считаем по Москве, как и «прошедший день» в остальном графике.
+    const zavtra = new Date(mskNow().getTime() + 864e5).toISOString().slice(0, 10);
+    const budushchee = date > zavtra;
     showModal(`<h3>Закрыть день ${esc(label)}?</h3>
-      <div class="msub">После закрытия клетки этого дня блокируются от правок. Изменить закрытый день сможет владелец напрямую (а Алёна — по СМС-подтверждению, этап 5б). Всё пишется в журнал.</div>
-      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="dCancel">Отмена</button><button class="btn btn-primary btn-sm" id="dClose">${ICONS.lock}Закрыть день</button></div>`);
-    $('dClose').onclick = async () => { const b = $('dClose'); if (b.disabled) return; b.disabled = true; try { await store.closeDay(date); closeModal(); toast(ICONS.check + 'День ' + day + ' закрыт'); renderSchedule(); } catch (e) { b.disabled = false; toast(e.message || e, true); } };
+      <div class="msub">${budushchee
+        ? 'Этот день ещё не наступил — закрывать нечего, план по нему может смениться.'
+        : 'После закрытия день блокируется для <b>всех</b>, включая владельца. Чтобы исправить — день надо будет открыть, и это отметится в журнале красным.'}</div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="dCancel">Отмена</button>${budushchee ? '' : `<button class="btn btn-primary btn-sm" id="dClose">${ICONS.lock}Закрыть день</button><button class="btn btn-primary btn-sm" id="dCloseTo">${ICONS.lock}Закрыть по ${day}-е</button>`}</div>`);
+    if ($('dClose')) $('dClose').onclick = async () => { const b = $('dClose'); if (b.disabled) return; b.disabled = true; try { await store.closeDay(date); closeModal(); toast(ICONS.check + 'День ' + day + ' закрыт'); renderSchedule(); } catch (e) { b.disabled = false; toast(e.message || e, true); } };
+    // «Закрыть по N-е» — закрытие ПЕРИОДА с начала месяца. Просьба СЕО 17.08
+    // («закрыть день, закрыть период»): в конце месяца проверенное закрывают
+    // разом, а не тыкая в 31 число по очереди.
+    if ($('dCloseTo')) $('dCloseTo').onclick = async () => {
+      const b = $('dCloseTo'); if (b.disabled) return; b.disabled = true;
+      try {
+        const n = await store.closePeriod(curPeriod + '-01', date);
+        closeModal();
+        toast(ICONS.check + (n ? `Закрыто дней: ${n}` : 'Все эти дни уже были закрыты'));
+        renderSchedule();
+      } catch (e) { b.disabled = false; toast(e.message || e, true); }
+    };
     $('dCancel').onclick = closeModal;
   } else {
     showModal(`<h3>${ICONS.lock} День ${esc(label)} закрыт</h3>
-      <div class="msub">Клетки заблокированы от правок. ${meRole === 'owner' ? 'Как владелец — вы можете открыть день или править клетки напрямую (запишется в журнал).' : 'Исправить может владелец, либо вы по СМС-подтверждению (этап 5б) — с уведомлением владельца.'}</div>
-      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="dCancel">Закрыть</button>${meRole === 'owner' ? `<button class="btn btn-primary btn-sm" id="dOpen">Открыть день</button>` : ''}</div>`);
+      <div class="msub">Правки заблокированы для всех. ${mozhetOtkryt
+        ? 'Чтобы исправить — откройте день; в журнале останется красная запись, кто и когда его закрывал.'
+        : 'Открыть может Милена или директор. Позже открытие будет по СМС-коду.'}</div>
+      <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="dCancel">Закрыть</button>${mozhetOtkryt ? `<button class="btn btn-primary btn-sm" id="dOpen">Открыть день</button><button class="btn btn-primary btn-sm" id="dOpenTo">Открыть по ${day}-е</button>` : ''}</div>`);
     if ($('dOpen')) $('dOpen').onclick = async () => { const b = $('dOpen'); if (b.disabled) return; b.disabled = true; try { await store.reopenDay(date); closeModal(); toast('День ' + day + ' открыт'); renderSchedule(); } catch (e) { b.disabled = false; toast(e.message || e, true); } };
+    /* Открытие ПАЧКОЙ — парное к «Закрыть по N-е». Без него закрытие было
+       односторонним храповиком: Алёна закрывает месяц одним кликом, а разгребать
+       владельцу по дню. Каждый открытый день — красная строка в журнале, так что
+       пачка видна как пачка. */
+    if ($('dOpenTo')) $('dOpenTo').onclick = async () => {
+      const b = $('dOpenTo'); if (b.disabled) return; b.disabled = true;
+      try {
+        const n = await store.openPeriod(curPeriod + '-01', date);
+        closeModal();
+        toast(n ? `Открыто дней: ${n}` : 'Открывать было нечего');
+        renderSchedule();
+      } catch (e) { b.disabled = false; toast(e.message || e, true); }
+    };
     $('dCancel').onclick = closeModal;
   }
 }
@@ -4064,9 +4140,12 @@ function vacationDialog(empId, startDay) {
     const days = picked;
     btn.disabled = true;
     try {
+      // Как и на экране «Отпуска»: проверяем ДО записи, иначе отпуск ляжет наполовину.
+      const zakr = await zakrytyeIz(days);
+      if (zakr.length) { btn.disabled = false; toast(`Закрыт ${denSlovami(zakr)} — сначала откройте, отпуск не отмечен`, true); return; }
       for (const d of days) await store.setScheduleCell(empId, d, { plan_kind: vk, plan_start: null, plan_end: null, fact: null });
       closeModal(); toast(ICONS.check + `Отпуск отмечен · ${days.length} дн`); renderSchedule();
-    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+    } catch (err) { btn.disabled = false; toast(err.message || err, true); renderSchedule(); }
   };
 }
 // Табель: отметка факта за прошедший день. Вышел по плану = сброс (null); прочерк = 'x'; свои часы = число.
@@ -4301,9 +4380,23 @@ function scheduleTemplateDialog(empId) {
         plan_kind: x.work ? kind : 'off',
         plan_start: x.work ? start : null,
         plan_end: x.work ? end : null,     // без него 12-часовая смена считалась бы восьмичасовой
-      })).filter(c => !closedDays.has(c.work_date));   // закрытые дни шаблоном не трогаем
-    if (!cells.length) { btn.disabled = false; toast('Все дни месяца уже прошли — отметьте галочку ниже', true); return; }
-    try { await store.setScheduleBulk(cells); closeModal(); toast(ICONS.check + 'Заполнено по шаблону'); renderSchedule(); }
+      }));
+    const doZakrytyh = cells.length;
+    const cells2 = cells.filter(c => !closedDays.has(c.work_date));   // закрытые дни шаблоном не трогаем
+    const propushcheno = doZakrytyh - cells2.length;
+    if (!cells2.length) {
+      btn.disabled = false;
+      // Раньше здесь при любой причине говорилось «все дни месяца уже прошли», и
+      // человек ставил галочку «включая прошедшие», жал снова — и получал то же
+      // самое. Настоящая причина (все дни закрыты) не называлась ни разу.
+      toast(propushcheno ? 'Все эти дни закрыты — сначала их надо открыть' : 'Все дни месяца уже прошли — отметьте галочку ниже', true);
+      return;
+    }
+    try {
+      await store.setScheduleBulk(cells2); closeModal();
+      toast(ICONS.check + (propushcheno ? `Заполнено. Закрытые дни (${propushcheno}) пропущены` : 'Заполнено по шаблону'));
+      renderSchedule();
+    }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
   /* Очистка месяца стирает и проставленные факты, и суммы за смену — работу,
@@ -4318,7 +4411,18 @@ function scheduleTemplateDialog(empId) {
     const sums = mine.filter(r => r.amount_kop).length;
     if (!await confirmClearMonth(e, mine.length, facts, sums)) return;
     const btn = $('tpClear'); if (btn.disabled) return; btn.disabled = true;
-    try { await store.clearScheduleMonth(empId, curPeriod); closeModal(); toast('Месяц очищен'); renderSchedule(); }
+    // Закрытые дни очистка НЕ трогает (права 143), поэтому говорим, сколько
+    // реально стёрли: «месяц очищен» при уцелевших закрытых днях было бы неправдой.
+    try {
+      const n = await store.clearScheduleMonth(empId, curPeriod);
+      // Считаем уцелевшие дни ЭТОГО человека, а не все закрытые дни месяца:
+      // при закрытых 1–17 и графике с 20-го получалось «закрытые (17) остались»
+      // про дни, которых у него отродясь не было.
+      const ostalos = mine.length - n;
+      closeModal();
+      toast(ostalos > 0 ? `Очищено дней: ${n}. Закрытых не тронули: ${ostalos}` : 'Месяц очищен');
+      renderSchedule();
+    }
     catch (err) { btn.disabled = false; toast(err.message || err, true); }
   };
 }
@@ -6725,9 +6829,13 @@ function vacAddDialog(preId) {
     b.disabled = true; b.textContent = 'Отмечаю…';
     try {
       const kind = $('vaKind').value || 'отпуск';
+      // Спрашиваем ДО первой записи: иначе цикл проставит часть отпуска и упрётся,
+      // а половина отпуска — это половина неначисленной зарплаты.
+      const zakr = await zakrytyeIz(d);
+      if (zakr.length) { b.disabled = false; b.textContent = 'Отметить'; toast(`Закрыт ${denSlovami(zakr)} — сначала откройте, отпуск не отмечен`, true); return; }
       for (const day of d) await store.setScheduleCell(id, day, { plan_kind: kind, plan_start: null, plan_end: null, fact: null });
       closeModal(); toast(ICONS.check + `Отпуск отмечен · ${d.length} дн`); await renderVacation();
-    } catch (e) { b.disabled = false; b.textContent = 'Отметить'; toast(e.message || e, true); }
+    } catch (e) { b.disabled = false; b.textContent = 'Отметить'; toast(e.message || e, true); await renderVacation(); }
   };
 }
 
