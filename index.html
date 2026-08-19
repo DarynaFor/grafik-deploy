@@ -429,6 +429,12 @@ body.authed .login-stage{display:none}
 .gr-cell.addable:hover::after{opacity:0}
 .gr-cell.fut .iv{opacity:.75}
 .gr-cell.f-ok{background:rgba(52,201,124,.13)}
+/* Прошедший рабочий день, который НИКТО не отметил: рамка вместо заливки —
+   «намечено, но не подтверждено». Раньше он красился той же зелёной заливкой,
+   что и подтверждённый выход, и 524 незаполненных дня из 530 были visually
+   неотличимы от готовых. Рамка внутренней тенью, а не border: border сдвинул бы
+   содержимое клетки на пиксель и сетка «поехала» бы на всю ширину месяца. */
+.gr-cell.f-plan{background:transparent;box-shadow:inset 0 0 0 1px rgba(52,201,124,.42)}
 .gr-cell.f-dev{background:rgba(242,193,78,.2)}
 .gr-cell.f-miss{background:rgba(255,107,107,.15)}
 .gr-cell.f-rest{background:var(--fill-2)}
@@ -514,6 +520,7 @@ body.authed .login-stage{display:none}
 .gr-cell.ro.f-dev:hover{background:rgba(242,193,78,.2)}
 .gr-cell.ro.f-miss:hover{background:rgba(255,107,107,.15)}
 .gr-cell.ro.f-rest:hover{background:var(--fill-2)}
+.gr-cell.ro.f-plan:hover{background:transparent}
 .gr-cell.ro.fut:hover{background:var(--fill-1)}
 
 /* кастомный дропдаун «Отделение» — в стиле приложения (нативный select не стилизуется) */
@@ -7261,7 +7268,17 @@ function factClass(c) {                                             // клас�
   if (fx === 'x') return ' f-miss';
   if (fx !== null && fx !== '' && !isNaN(parseFloat(fx)))
     return Math.abs(parseFloat(fx) - planHoursOf(c)) > 0.05 ? ' f-dev' : ' f-ok';   // часы = плановым → «по плану», не расхождение
-  return (p && !isRest(p)) ? ' f-ok' : ' f-rest';
+  /* ⚠ Прошедший рабочий день БЕЗ отметки — это НЕ «вышел по плану».
+     До августа было так: месяц считался по плану, и зелёная заливка честно
+     означала «отработал как назначено». С 01.08 в «Осталось выдать» идут только
+     отмеченные дни (calc_rule.fact_required_from), а цвет остался прежним — и
+     график стал говорить обратное расчёту. На 18.08: из 530 прошедших рабочих
+     дней зелёными выглядели все 530, отмечено было ШЕСТЬ, а 3 228 501 ₽ висели
+     неподтверждёнными. Найти незаполненное глазами было нельзя вовсе.
+     Теперь такой день — рамка без заливки: «намечено, но не подтверждено».
+     Дарина 19.08: «відміть усі автозалиті комірки рамочкою замість заливки». */
+  if (p && !isRest(p)) return ' f-plan';
+  return ' f-rest';
 }
 // Дежурство читается БУКВОЙ, а не часом начала: смен там всего три, и «Н/С/—»
 // с одного взгляда отличимы, тогда как «18» и «8» глаз путает с обычной сменой.

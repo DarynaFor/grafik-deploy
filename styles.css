@@ -407,6 +407,12 @@ body.authed .login-stage{display:none}
 .gr-cell.addable:hover::after{opacity:0}
 .gr-cell.fut .iv{opacity:.75}
 .gr-cell.f-ok{background:rgba(52,201,124,.13)}
+/* Прошедший рабочий день, который НИКТО не отметил: рамка вместо заливки —
+   «намечено, но не подтверждено». Раньше он красился той же зелёной заливкой,
+   что и подтверждённый выход, и 524 незаполненных дня из 530 были visually
+   неотличимы от готовых. Рамка внутренней тенью, а не border: border сдвинул бы
+   содержимое клетки на пиксель и сетка «поехала» бы на всю ширину месяца. */
+.gr-cell.f-plan{background:transparent;box-shadow:inset 0 0 0 1px rgba(52,201,124,.42)}
 .gr-cell.f-dev{background:rgba(242,193,78,.2)}
 .gr-cell.f-miss{background:rgba(255,107,107,.15)}
 .gr-cell.f-rest{background:var(--fill-2)}
@@ -492,6 +498,7 @@ body.authed .login-stage{display:none}
 .gr-cell.ro.f-dev:hover{background:rgba(242,193,78,.2)}
 .gr-cell.ro.f-miss:hover{background:rgba(255,107,107,.15)}
 .gr-cell.ro.f-rest:hover{background:var(--fill-2)}
+.gr-cell.ro.f-plan:hover{background:transparent}
 .gr-cell.ro.fut:hover{background:var(--fill-1)}
 
 /* кастомный дропдаун «Отделение» — в стиле приложения (нативный select не стилизуется) */
