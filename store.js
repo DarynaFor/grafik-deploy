@@ -367,6 +367,36 @@ export class MockStore {
   }
 
   async listEmployees() { return structuredClone(this.db.employees); }
+  // Зеркало промежуточных оценок (миграция 145): в демо живут тут же, в db.
+  async listEstimates(period) {
+    return (this.db.estimates || []).filter(x => x.period === period)
+      .map(x => ({ ...x }));
+  }
+  async saveEstimate(employee_id, period, kind, amount_kop, note) {
+    if (!['owner', 'ceo', 'operator'].includes(this.user?.role))
+      throw new Error('Прикидку вносят Милена, директор или Алёна');
+    this.db.estimates = this.db.estimates || [];
+    const i = this.db.estimates.findIndex(x =>
+      x.employee_id === employee_id && x.period === period && x.kind === kind);
+    const было = i >= 0 ? this.db.estimates[i].amount_kop : null;
+    const row = { employee_id, period, kind, amount_kop, note: note || null,
+                  updated_at: new Date().toISOString() };
+    if (i >= 0) this.db.estimates[i] = row; else this.db.estimates.push(row);
+    // Журнал так же, как в бою (там это делает триггер): правка приблизительной
+    // цифры не должна теряться ни в одном хранилище.
+    this._log(i >= 0 ? 'updated' : 'created', 'month_estimate', employee_id,
+              'оценка к авансу · ' + kind,
+              было == null ? null : (было / 100).toString(), (amount_kop / 100).toString());
+    this._save();
+    return row;
+  }
+  async delEstimate(employee_id, period, kind) {
+    this.db.estimates = (this.db.estimates || []).filter(x =>
+      !(x.employee_id === employee_id && x.period === period && x.kind === kind));
+    this._log('deleted', 'month_estimate', employee_id, 'оценка к авансу · ' + kind, null, null);
+    this._save();
+    return true;
+  }
   // Зеркало боевого listArchivedBy: в демо журнал лежит тут же, и actor — уже имя.
   async listArchivedBy(ids = []) {
     const want = new Set(ids);
@@ -1367,6 +1397,38 @@ export class SupabaseStore {
   }
   /* Сколько зарплаты подтверждено отметкой факта (113). Отдельным запросом, а не
      колонкой в расчёте: считается по дням, а расчёт — по месяцу. */
+  /* Промежуточная ОЦЕНКА наработанного (миграция 145). Не начисление: ни одна
+     вьюха расчёта её не читает, в «Осталось выдать» она не попадает. Нужна к
+     20-му числу, когда выдают авансы: у кого ни отметок, ни выручки, картины
+     нет вовсе, и аванс ставят на глаз (в июле так вышло 69 % и 73 % месячного
+     заработка вперёд у двоих). */
+  async listEstimates(period) {
+    const { data, error } = await this.sb.from('month_estimate')
+      .select('employee_id, kind, amount_kop, note, updated_at').eq('period', period + '-01');
+    if (error) throw new Error(error.message);
+    return data || [];
+  }
+  /* Одна строка на человека+месяц+вид, поэтому upsert по этому ключу: оценка по
+     определению меняется («ці цифри приблизні, можуть змінювати»). Каждая правка
+     идёт в журнал триггером — было → стало, кто, когда. */
+  async saveEstimate(employee_id, period, kind, amount_kop, note) {
+    const { data, error } = await this.sb.from('month_estimate')
+      .upsert({ employee_id, period: period + '-01', kind, amount_kop,
+                note: note || null, entered_by: this.user.id },
+              { onConflict: 'employee_id,period,kind' })
+      .select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  }
+  async delEstimate(employee_id, period, kind) {
+    // .select() обязателен: RLS не «запрещает», а не находит строку, и без него
+    // PostgREST вернул бы успех на нуле удалённых.
+    const { data, error } = await this.sb.from('month_estimate').delete()
+      .eq('employee_id', employee_id).eq('period', period + '-01').eq('kind', kind).select();
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) throw new Error('Не удалось убрать прикидку — нет прав или её уже нет');
+    return true;
+  }
   async listMonthMarked(period) {
     const { data, error } = await this.sb.from('v_month_marked').select('*').eq('period', period + '-01');
     if (error) throw error; return data || [];

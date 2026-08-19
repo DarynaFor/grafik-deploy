@@ -894,7 +894,23 @@ body.authed .login-stage{display:none}
 .me-calc>span{display:flex;flex-direction:column;gap:1px;min-width:0}
 .me-f{font-style:normal;font-size:11.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .me-sum{border-top:1px solid var(--hair);margin-top:5px;padding-top:7px;font-weight:700}
-.me-add{display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center}
+/* Ряд «выбор · сумма · кнопка». Раньше стоял жёсткий grid 1fr/120px/auto, и при
+   длинном названии вида оплаты («Аванс наличными») элементы переставали
+   помещаться в модалку шириной 480px и наезжали друг на друга — Дарина увидела
+   это на своём экране, не на телефоне. Flex с переносом: если места не хватает,
+   кнопка уходит на следующую строку целиком, а не залезает на поле. */
+.me-add{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.me-add .cselect{flex:1 1 130px;min-width:0}
+/* Внутренний триггер держит min-width:172px — из-за него ряд не сжимался ниже
+   своей суммы, и кнопка всё равно уезжала на следующую строку. В этом ряду
+   разрешаем ему быть уже: длинное название («Аванс наличными») подрежется
+   многоточием, а выбранный вид всё равно виден целиком в раскрытом списке. */
+.me-add .cselect,.me-add .cselect-trigger{width:100%}
+.me-add .cselect-trigger{min-width:0}
+/* width:auto обязателен: базовое .input задаёт width:100%, и поле распирало ряд,
+   выталкивая кнопку на следующую строку — flex-basis сам по себе этого не чинит. */
+.me-add .input{flex:0 1 118px;min-width:92px;width:auto}
+.me-add .btn{flex:0 0 auto}
 .pm-hist{max-height:180px;overflow-y:auto;border:1px solid var(--hair);border-radius:10px;padding:8px 11px}
 /* Блок выдачи наличных (085). Обведён и чуть подсвечен: это единственное место
    в модалке, где деньги реально уходят из рук, — оно не должно читаться как
@@ -909,7 +925,7 @@ body.authed .login-stage{display:none}
    съедать экран. 130+78 = 208 из ~350, середина остаётся достижимой скроллом. */
 @media (max-width:720px){
   :root{--gr-name-w:165px;--gr-sum-w:42px}
-  .me-add{grid-template-columns:1fr}
+  .me-add .cselect,.me-add .input{flex:1 1 100%}   /* на узком — каждый со своей строки */
   .pw{font-size:12.5px}
   .pw td,.pw th{padding:7px 8px}
   /* 130px хватало обрезанному имени; целому нужно шире, иначе ФИО встанет
@@ -1399,8 +1415,10 @@ tr.pw-total.pw-over{z-index:5}
   text-transform:uppercase;color:var(--ink-3,var(--ink-2));opacity:.75;pointer-events:none}
 .cselect-head:first-child{padding-top:6px}
 .cselect-panel .cselect-head + .cselect-opt{padding-top:6px}
-/* Поле вида денег стоит в одной строке с суммой и кнопкой — тянется, как select */
-.me-add .pm-kind{flex:1 1 190px;min-width:150px}
+/* ⚠ Отдельного правила для .pm-kind больше нет: оно задавало flex-basis 190px и
+   перебивало общее `.me-add .cselect` (та же сила, но ниже по файлу). В сумме
+   190 + 118 + кнопка не помещались в модалку 480px, и кнопка уезжала на
+   следующую строку. Ширину теперь задаёт одно место — правило .me-add выше. */
 
 
 /* «Обзор»: цвета значат то же, что везде — серое план, зелёное подтверждено,
@@ -1642,3 +1660,19 @@ tr.pw-total.pw-over{z-index:5}
    сео і мілєни також». */
 .dlockmark.dlockhint svg{opacity:.28}
 .gr-day.tapday:hover .dlockmark.dlockhint svg{opacity:.75}
+
+
+/* ── Подсказка «?» рядом с полем ─────────────────────────────────────────────
+   Пояснения в окне человека занимали больше места, чем сами поля: четыре строки
+   текста над каждым вводом. Важное оставляем на виду, остальное — под «?».
+   Не title: на телефоне всплывающих подсказок нет вовсе, а окно смотрят и с
+   телефона. Поэтому обычная кнопка, которая разворачивает текст на месте. */
+.hintbox{display:inline-block}
+.hintbtn{width:17px;height:17px;padding:0;margin-left:6px;border-radius:50%;
+  border:1px solid var(--glass-bd);background:var(--fill-1);color:var(--ink-3);
+  font:600 11px/15px var(--sans);cursor:pointer;vertical-align:1px;transition:.12s}
+.hintbtn:hover{background:var(--fill-hi);color:var(--ink)}
+.hintbtn[aria-expanded="true"]{background:var(--green);color:var(--on-green);border-color:transparent}
+.hinttext{margin:6px 0 0;padding:9px 12px;border-radius:11px;background:var(--fill-1);
+  color:var(--ink-2);font-size:12px;line-height:1.5}
+.hinttext[hidden]{display:none}

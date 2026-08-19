@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=229';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=230';
 
 const $ = id => document.getElementById(id);
 
@@ -939,6 +939,10 @@ const canSetFinalSum = () => ['owner', 'ceo'].includes(store.me()?.role);
    isStaff: у неё другой набор экранов, и складывать их в одну кучу — верный
    способ однажды открыть ей лишнее. */
 const isBuh = () => store.me()?.role === 'cashier1';
+/* Прикидку к авансу вносят те же, кого пускает база (me_ins, миграция 145):
+   Милена, директор и Алёна. Кассам нечего — они деньги выдают, а не оценивают.
+   Дарина 19.08: «дамо можливість вносити і альоні, і сео, і мілєні». */
+const canEditEstimate = () => ['owner', 'ceo', 'operator'].includes(store.me()?.role);
 /* Кто вообще работает с расчётом и графиком (смотрит или правит). */
 const worksWithPayroll = () => isStaff() || isBuh();
 async function enter() {
@@ -5953,6 +5957,26 @@ async function editSalary(empId, per, r, onDone) {
   };
 }
 
+/* Пояснение под «?»: на виду остаётся короткая суть, подробности — по клику.
+   Дарина 19.08: «може там щось почистити? якісь описи, їх там багато, або
+   перенести описи не дуже важливі в позначку ? біля поля, щоб звільнити місце».
+   Не title: на телефоне всплывающих подсказок нет, а окно смотрят и оттуда. */
+let hintSeq = 0;
+function hint(text) {
+  const id = 'hint' + (++hintSeq);
+  return `<span class="hintbox"><button type="button" class="hintbtn" data-hint="${id}"
+    aria-expanded="false" aria-label="Подробнее">?</button></span>
+    <div class="hinttext" id="${id}" hidden>${text}</div>`;
+}
+// Обработчики вешаем один раз на модалку — кнопок «?» в ней несколько.
+function wireHints(root) {
+  (root || document).querySelectorAll('.hintbtn').forEach(b => b.onclick = () => {
+    const box = document.getElementById(b.dataset.hint); if (!box) return;
+    const open = box.hidden;
+    box.hidden = !open;
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+}
 async function payrollDialog(empId) {
   const r = payrollRows.find(x => x.employee_id === empId); if (!r) return;
   // Месяц ФИКСИРУЕМ здесь и дальше пользуемся только `per`. Ниже два запроса к
@@ -5996,6 +6020,14 @@ async function payrollDialog(empId) {
   if (pctLine && canEdit) { try { curRev = await store.getDoctorRevenue(empId, per); } catch (e) {} }
   let curOverride = null;                                 // финальная сумма вручную (миграция 049)
   if (canEdit) { try { curOverride = await store.getSalaryOverride(empId, per); } catch (e) {} }
+  /* Прикидка к авансу (145). Тянем ВСЕГДА, когда роль может её вносить: она
+     нужна и чтобы показать уже внесённую, и чтобы понять, какой вид выбран.
+     Ошибку глотаем — окно человека должно открыться и без неё. */
+  let curEst = null;
+  if (canEditEstimate()) {
+    try { curEst = (await store.listEstimates(per)).find(x => x.employee_id === empId) || null; }
+    catch (e) { console.warn('listEstimates:', e); }
+  }
   // Пока ждали базу, месяц или экран могли смениться. Диалог тогда уже не про то,
   // что перед человеком: молча уходим, строку он откроет заново.
   if (payPeriod !== per || curScreen !== 'payroll') return;
@@ -6066,12 +6098,33 @@ async function payrollDialog(empId) {
       <div class="me-row me-sum"><span>Осталось выдать</span><b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
       <div class="me-row"><span class="muted small">${r.salary_marked_kop != null && +r.salary_marked_kop < (+r.salary_kop || 0) ? '<b>Подтверждено фактом</b>' : '<b>Заработано</b>'} − <b>на карту</b> − <b>дополнительные поступления</b> + перенос с прошлого месяца. Столько ещё раздать наличными.<br>Начисленные отпускные и больничные <b>входят</b> в заработок, а выплаченные — вычитаются: если начислили и выплатили поровну, на разницу они не влияют. Удержания (алименты и прочее) стоят в блоке «На карту» — они тоже уменьшают выдачу.</span></div>
       ${r.to_pay_kop ? `<div class="me-row"><span class="muted small">Записано в кассу наличными (Бух 1)</span><span class="small">${rub(r.to_pay_kop)} ₽</span></div>` : ''}</div>
+    ${/* ── ПРИКИДКА К АВАНСУ (миграция 145) ──────────────────────────────
+         Показываем только там, где картины нет вовсе: ни одного отмеченного дня
+         и ни ручной суммы. Кто отмечен или кому сумма задана — уже посчитан, и
+         лишнее поле только путало бы.
+
+         ⚠ Это НЕ начисление: в «Осталось выдать» прикидка не идёт, долга перед
+         человеком не создаёт, расчёт не подменяет. Отвечает на один вопрос к
+         20-му числу — «сколько человек примерно наработал, чтобы аванс не был
+         вслепую». В июле без неё двоим выдали авансом 69 % и 73 % того, что они
+         в итоге заработали. */
+      canEditEstimate() && !(+r.salary_marked_kop || 0) && !r.flag_manual_salary ? `
+      <label class="flbl">Прикидка к авансу${curEst ? ` · внесена ${esc(fmtDT(curEst.updated_at))}` : ''}</label>
+      <div class="me-add">
+        <div class="cselect pm-kind" id="pmEstKind"></div>
+        <input class="input" id="pmEst" placeholder="примерная сумма ₽" autocomplete="off" inputmode="numeric"
+               value="${curEst ? fmt(Math.round(curEst.amount_kop / 100)) : ''}">
+        <button class="btn btn-primary btn-sm" id="pmEstSave">${ICONS.check}${curEst ? 'Изменить' : 'Записать'}</button>
+        ${curEst ? `<button class="btn btn-ghost btn-sm" id="pmEstClear">Убрать</button>` : ''}
+      </div>
+      <div class="msub">Приблизительно, для решения по авансу.${hint('На расчёт и на «Осталось выдать» не влияет — заменится, как только появятся отметки в графике или выручка. Каждая правка видна владельцу в журнале.')}</div>` : ''}
+
     ${pctLine && canEdit ? `<label class="flbl">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё</label>
       <div class="me-add">
         <input class="input" id="pmRev" placeholder="выручка ₽" autocomplete="off" inputmode="numeric" value="${curRev ? fmt(Math.round(curRev / 100)) : ''}">
         <button class="btn btn-primary btn-sm" id="pmRevSave">${ICONS.check}Сохранить</button>
       </div>
-      <div class="msub">Для процентников считаем ЗП от введённой выручки (оплаты пациентов пока неполные). Изменение выручки видит владелец в журнале.</div>` : ''}
+      <div class="msub">ЗП считается от этой выручки.${hint('Оплаты пациентов пока вносятся неполно, поэтому сумму называют здесь. Изменение выручки видит владелец — в журнале.')}</div>` : ''}
     ${canSetFinalSum() ? `<label class="flbl">${piece ? 'Сумма за месяц · сдельно' : 'Финальная сумма вручную'}${r.flag_manual_salary ? ' · <span class="jact">задана</span>' : ''}</label>
       <div class="me-add">
         <input class="input" id="pmFinal" placeholder="итоговая зарплата ₽" autocomplete="off" inputmode="numeric" value="${curOverride ? fmt(Math.round(curOverride / 100)) : ''}">
@@ -6086,7 +6139,7 @@ async function payrollDialog(empId) {
         <input class="input" id="pmSum" placeholder="сумма ₽" autocomplete="off">
         <button class="btn btn-primary btn-sm" id="pmAdd">${ICONS.plus}Внести</button>
       </div>
-      <div class="msub">Записи не правятся: ошибку исправляют сторно — обе записи видны владельцу.${store.me()?.role === 'operator' ? ' Премию вносит владелец.' : ''}</div>` : ''}
+      <div class="msub">Записи не правятся — ошибку исправляют сторно.${hint('Обе записи, ошибочная и встречная, остаются видны владельцу: видно, что именно поправили.')}${store.me()?.role === 'operator' ? ' Премию вносит владелец.' : ''}</div>` : ''}
     ${canEdit && recorded(r) ? `<div class="me-row" style="margin-top:10px"><span class="muted small">Начислили лишнего всем скопом?</span><button class="btn btn-ghost btn-sm" id="pmUndoAll">Убрать все выплаты за месяц</button></div>` : ''}
     <div class="me-jump">
       <button class="btn btn-ghost btn-sm" id="pmToCard">${ICONS.user || ''}Карточка</button>
@@ -6108,6 +6161,39 @@ async function payrollDialog(empId) {
   { const kb = $('pmKind');
     if (kb) { const o = moneyKindOpts(store.me()?.role);
       makeDropdown(kb, o, (o.find(x => !x.head) || {}).v || '', () => {}); } }
+  /* ── Прикидка к авансу (145) ─────────────────────────────────────────────
+     Два вида по решению Дарины («нехай будуть обидва варіанти»): «выручка» —
+     для процентников, программа умножит на их процент; «заработок» — прямая
+     сумма для всех остальных. Вид по умолчанию берём из ставки человека, чтобы
+     не заставлять выбирать очевидное. */
+  { const kb = $('pmEstKind');
+    if (kb) {
+      const opts = [{ v: 'заработок', label: 'Заработок' }, { v: 'выручка', label: 'Выручка' }];
+      const def = curEst ? curEst.kind : (pctLine ? 'выручка' : 'заработок');
+      makeDropdown(kb, opts, def, () => {});
+    } }
+  if ($('pmEstSave')) $('pmEstSave').onclick = async () => {
+    const b = $('pmEstSave'); if (b.disabled) return;
+    let val;
+    try { val = parseNum($('pmEst').value, { thousands: true, field: 'сумму', max: RATE_ABSURD }); }
+    catch (e) { return toast(e.message || e, true); }
+    b.disabled = true;
+    try {
+      await store.saveEstimate(empId, per, $('pmEstKind').dataset.value, Math.round(val * 100));
+      toast(ICONS.check + 'Прикидка записана');
+      closeModal(); payrollDialog(empId);
+    } catch (e) { b.disabled = false; toast(e.message || e, true); }
+  };
+  if ($('pmEst')) $('pmEst').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('pmEstSave').click(); } };
+  if ($('pmEstClear')) $('pmEstClear').onclick = async () => {
+    const b = $('pmEstClear'); if (b.disabled) return;
+    b.disabled = true;
+    try {
+      await store.delEstimate(empId, per, curEst.kind);
+      toast(ICONS.check + 'Прикидка убрана');
+      closeModal(); payrollDialog(empId);
+    } catch (e) { b.disabled = false; toast(e.message || e, true); }
+  };
   if ($('pmUndoAll')) $('pmUndoAll').onclick = () => undoAllPayouts(empId, per, reopen);
   if ($('pmToCard')) $('pmToCard').onclick = () => focusOn('employees', empId) || openCard(empId);
   if ($('pmToSched')) $('pmToSched').onclick = () => focusOn('schedule', empId);
@@ -6161,7 +6247,7 @@ async function payrollDialog(empId) {
              value="${осталось >= 100 ? fmt(Math.floor(осталось / 100)) : ''}">
            <button class="btn btn-primary btn-sm" id="pmPayGive">${ICONS.check}Выдал</button>
          </div>
-         <div class="msub">Подтверждаете вы: сумма перед глазами, СМС-кода нет. Запись сразу уходит владельцу в журнал — кому, сколько и когда. Ошиблись — «Отменить», запись останется, рядом встанет минусовая.</div>
+         <div class="msub">Подтверждаете вы — СМС-кода нет.${hint('Сумма перед глазами; запись сразу уходит владельцу в журнал: кому, сколько и когда.')} Запись сразу уходит владельцу в журнал — кому, сколько и когда. Ошиблись — «Отменить», запись останется, рядом встанет минусовая.</div>
          ${строки || '<span class="muted small">Наличными на руки пока не выдавали</span>'}`;
 
       // Enter в поле суммы = «Выдал», как у соседнего «Внести деньги». Подтверждение
@@ -7432,7 +7518,7 @@ const MODAL_X = '<div class="modal-xwrap"><button class="modal-x" type="button" 
    в карточке под ним оставалась мёртвой. Теперь ответ даёт и крестик, и Escape,
    и клик по фону. Повторный resolve промис игнорирует — двойной вызов безопасен. */
 let modalOnClose = null, modalOnClose2 = null;
-function showModal(html, onClose) { modalOnClose = onClose || null; $('modalBox').innerHTML = MODAL_X + html; $('modalOv').classList.add('show'); applyIcons($('modalBox')); const f = $('modalBox').querySelector('input'); if (f) setTimeout(() => f.focus(), 60); }
+function showModal(html, onClose) { modalOnClose = onClose || null; $('modalBox').innerHTML = MODAL_X + html; $('modalOv').classList.add('show'); applyIcons($('modalBox')); wireHints($('modalBox')); const f = $('modalBox').querySelector('input'); if (f) setTimeout(() => f.focus(), 60); }
 // ⚠ Никакого syncHash здесь. Пробовали — closeModal зовётся и из applyHash (закрыть
 // неохраняемую форму и идти дальше), и syncHash успевал вернуть адрес на СТАРЫЙ
 // экран ДО того, как applyHash прочитает новый: переход просто исчезал, а запись
@@ -7452,7 +7538,7 @@ const modalOpen = () => $('modalOv').classList.contains('show') || $('modalOv2')
 const guardedModal = () => ($('modalOv').classList.contains('show') && !!$('modalBox').dataset.guard) || $('modalOv2').classList.contains('show');
 // Второй слой — диалог ПОВЕРХ уже открытой формы. Без него confirmBigAmounts
 // затирал бы карточку (оба писали в общий #modalBox), и «Исправить» терял ввод.
-function showModal2(html, onClose) { modalOnClose2 = onClose || null; $('modalBox2').innerHTML = MODAL_X + html; $('modalOv2').classList.add('show'); applyIcons($('modalBox2')); }
+function showModal2(html, onClose) { modalOnClose2 = onClose || null; $('modalBox2').innerHTML = MODAL_X + html; $('modalOv2').classList.add('show'); applyIcons($('modalBox2')); wireHints($('modalBox2')); }
 function closeModal2() { $('modalOv2').classList.remove('show');
   const f = modalOnClose2; modalOnClose2 = null; if (f) f(); }
 /* Ошибки выводим как текст (без innerHTML) — в них попадают сообщения БД/сети;
