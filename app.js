@@ -5,7 +5,7 @@
 // безопасно только пока сервер отдаёт по ETag-ревалидации; при immutable-кэше
 // новый app.js спарился бы с замороженным старым store.js → поломка у постоянных
 // пользователей. Правило записано в milena-safety: бампать при КАЖДОЙ правке store.js.
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=225';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=226';
 
 const $ = id => document.getElementById(id);
 
@@ -3532,7 +3532,7 @@ function drawSchedule() {
   const catF = $('schedCat')?.dataset.value || '';
 
   // режим: оператор правит, владелец смотрит
-  if ($('schedSub')) $('schedSub').textContent = editable ? 'Прошедший день: клик — вышел по плану, ещё клик — не вышел. Карандаш в углу клетки — изменить время смены. Клик по имени — шаблон на месяц.' : 'Просмотр: план (серым) и факт (цветом). Расхождения факта с планом — справа и в шапке.';
+  if ($('schedSub')) $('schedSub').textContent = editable ? 'Прошедший день: клик — вышел по плану, ещё клик — не вышел. Карандаш в углу клетки — изменить время смены. Клик по имени — шаблон на месяц. Клик по номеру дня сверху — закрыть день или весь период с начала месяца.' : 'Просмотр: план (серым) и факт (цветом). Расхождения факта с планом — справа и в шапке.';
   // Красного баннера «Правки после закрытия» здесь больше нет (Дарина 05.08:
   // «він тільки місце займає, а ніхто його не читає»). Ничего не потеряно: те же
   // записи лежат в Журнале под фильтром «Красные», и Обзор ведёт туда же кнопкой
@@ -3576,7 +3576,8 @@ function drawSchedule() {
     const mk = hol ? ' gr-hol' : (weekend ? ' gr-wknd' : '');
     const hint = isClosed(d) ? 'День закрыт — клик' : (anyEdit ? 'Закрыть день' : '');
     const title = hol ? (hint ? hol + ' · ' + hint : hol) : hint;   // название праздника — в подсказке
-    head += `<div class="gr-day${d === todayD ? ' today' : ''}${isClosed(d) ? ' dlock' : ''}${mk}${anyEdit ? ' tapday' : ''}" data-day="${d}" title="${esc(title)}">${d}${hol ? '<i class="holdot"></i>' : ''}${isClosed(d) ? `<i class="dlockmark">${ICONS.lock}</i>` : ''}</div>`;
+    head += `<div class="gr-day${d === todayD ? ' today' : ''}${isClosed(d) ? ' dlock' : ''}${mk}${anyEdit ? ' tapday' : ''}" data-day="${d}" title="${esc(title)}">${d}${hol ? '<i class="holdot"></i>' : ''}${isClosed(d) ? `<i class="dlockmark">${ICONS.lock}</i>`
+        : (anyEdit ? `<i class="dlockmark dlockhint">${ICONS.lock}</i>` : '')}</div>`;
   }
   // «Норма» вместо суммы плановых часов (migrations/056): у администраторов и
   // колл-центра норма — договорённость (180 ч), а не то, что успели расставить в
