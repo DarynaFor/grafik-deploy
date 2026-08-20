@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=260';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=261';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -2164,6 +2164,15 @@ function kindMismatch(c) {
   const best = RATE_NOMINALS.reduce((a, x) => Math.abs(h - x) < Math.abs(h - a) ? x : a);
   return Math.abs(h - nom) > Math.abs(h - best) + 0.05;
 }
+function kindByTime(st, en) {
+  const h = planHoursOf({ plan_kind: 'day', plan_start: st, plan_end: en });
+  const noch = String(en) <= String(st);
+  const est = c => shiftKinds.some(k => k.code === c);
+  if (h >= 20 && est('day24')) return 'day24';
+  if (h >= 11 && noch && est('night12')) return 'night12';
+  if (h >= 11 && est('day12')) return 'day12';
+  return kindByHours(h);
+}
 function kindLine(c) {
   if (!c || !c.plan_kind || isRest(c.plan_kind)) return '';
   if (!(c.plan_start && c.plan_end)) return '';
@@ -2798,6 +2807,18 @@ function scheduleCellPopup(empId, day, pos = 'main') {
     const btn = $('scSave'); if (btn.disabled) return; btn.disabled = true;
     let kind = $('scKind').value || null;
     if (!kind && $('scStart').value) kind = kindByHours(hoursBetween($('scStart').value, $('scEnd').value));
+    if (kind && $('scStart').value && $('scEnd').value) {
+      const proba = { plan_kind: kind, plan_start: $('scStart').value, plan_end: $('scEnd').value };
+      if (kindMismatch(proba)) {
+        const h = planHoursOf(proba);
+        const nado = shiftKinds.find(k => k.code === kindByTime($('scStart').value, $('scEnd').value));
+        const est = shiftKinds.find(k => k.code === kind);
+        btn.disabled = false;
+        return toast(`«${est ? est.label : kind}» — это ${est && est.hours != null ? fmtH(+est.hours) : '?'}, `
+          + `а с ${$('scStart').value} до ${$('scEnd').value} выходит ${fmtH(h)}. `
+          + (nado ? `Поставьте «${nado.label}» — или исправьте время.` : 'Исправьте вид смены или время.'), true);
+      }
+    }
     const cell = { plan_kind: kind, plan_start: kind ? ($('scStart').value || null) : null,
                    plan_end: kind ? ($('scEnd').value || null) : null, fact: null };
     if ($('scAmt')) {
