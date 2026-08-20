@@ -488,8 +488,19 @@ body.authed .login-stage{display:none}
    непроверенного он не отличал. Штриховка была 6%-й — на глаз неразличима. Даём
    заметную, но не кричащую: сетка читается, а закрытая область видна одним взглядом.
    Цвет нейтрально-серый намеренно: зелёный/красный здесь уже заняты фактом. */
-.gr-cell.dclosed::after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(45deg,transparent 0 5px,rgba(120,124,132,.16) 5px 7px)}
-.gr-cell.dclosed{background:rgba(120,124,132,.05)}
+/* ⚠ СЕРЫЙ ФОН ЖИВЁТ ЗДЕСЬ, В СЛОЕ ::after, А НЕ В `background` КЛЕТКИ.
+   Отдельной строкой `.gr-cell.dclosed{background:…}` он стоял НИЖЕ правил
+   `.f-ok` / `.f-dev` / `.f-miss` / `.f-rest` / `.k-vac` при ТОЙ ЖЕ силе (0,2,0)
+   — и побеждал их все. Закрытие дней включили 19.08, и весь проверенный август
+   стал ровно серым: 563 подтверждённых и красных клетки выглядели планом, то
+   есть «не тронуто». Ровно наоборот к тому, ради чего закрытие и делали (Гелиг
+   17.08: «сейчас я смотрю на зеленые графики… надо вариант блокировки»).
+   Добивало то, что `.gr-cell.ro.f-ok:hover` сильнее (0,3,1) — цвет возвращался
+   под курсором, по одной клетке за раз.
+   В слое ::after серый лежит ПОВЕРХ цвета факта и лишь притеняет его: закрытая
+   область видна одним взглядом, а зелёное остаётся зелёным. */
+.gr-cell.dclosed::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:rgba(120,124,132,.05) repeating-linear-gradient(45deg,transparent 0 5px,rgba(120,124,132,.16) 5px 7px)}
 /* Колонка закрытого дня: шапка темнее и с замком, чтобы взгляд ловил границу
    «докуда проверено» сверху, не разглядывая клетки. */
 .gr-day.dlock{background:var(--fill-hi);color:var(--ink-2);box-shadow:inset 0 -2px 0 rgba(120,124,132,.45)}
@@ -1014,8 +1025,16 @@ body.authed .login-stage{display:none}
 .gr-name.gr-second{font-weight:600;font-size:12px;color:var(--ink-2);padding-left:22px;gap:6px;
   background:var(--surf-1);box-shadow:inset 3px 0 0 var(--blue)}
 .gr-name.gr-second .sec-tag{display:inline-grid;place-items:center;color:var(--blue-d);flex-shrink:0}
-.gr-cell.sec{background:rgba(98,166,255,.05)}
-.gr-cell.sec:hover{background:rgba(98,166,255,.16)}
+/* ⚠ Синева дежурства — тоже ПОВЕРХ, отдельным слоем, а не `background` клетки.
+   Как `background` она стояла ниже всех `.f-*` при той же силе (0,2,0) и
+   перебивала их: строка дежурства не показывала факт ВООБЩЕ — ни зелёного, ни
+   красного, ни серого. Признак «человек вышел» пропадал ровно там, где он и
+   нужен: вторая работа — самое дорогое место для приписки.
+   ::before, а не ::after: ::after у клетки уже занят штриховкой закрытого дня,
+   и два признака должны уживаться на одной клетке. */
+.gr-cell.sec{position:relative}
+.gr-cell.sec::before{content:"";position:absolute;inset:0;pointer-events:none;background:rgba(98,166,255,.05)}
+.gr-cell.sec:hover::before{background:rgba(98,166,255,.16)}
 .gr-cell.sec .sec-l{font-weight:800;font-size:13px;color:var(--blue-d)}
 .gr-cell.sec .sec-l.miss{color:var(--red-d)}
 
