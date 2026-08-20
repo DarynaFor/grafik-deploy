@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=258';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=259';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -933,17 +933,24 @@ async function loadCardMoney(id) {
   try {
     const r = await store.getPayrollRow(id, per);
     if (!r || +$('cardBody').dataset.emp !== id) return;
+    const dolzhno = deltaFromBlocks(r);
     box.innerHTML = `<div class="cm-pay"><span class="caps">Осталось выдать · ${esc(periodLabel(per))}</span>
-        <b class="money">${rub(r.delta_kop)} ₽</b></div>
+        <b class="money${(r.delta_kop || 0) < 0 ? ' neg' : ''}">${rub(r.delta_kop)} ₽</b></div>
       <div class="cm-chips">
-        <span class="mini-chip">Начислено${r.flag_manual_salary ? ' (вручную)' : ''}: <b>${rub(r.salary_kop)} ₽</b></span>
-        ${cardDelta(r) ? `<span class="mini-chip">Карта: <b>${rub(cardDelta(r))} ₽</b></span>` : ''}
-        ${r.cash_kop + r.cash_avans_kop ? `<span class="mini-chip">Наличными: <b>${rub(r.cash_kop + r.cash_avans_kop)} ₽</b></span>` : ''}
+        <span class="mini-chip">Начислено${r.flag_manual_salary ? ' (вручную)' : ''}: <b>${rub(earned(r))} ₽</b></span>
+        ${waitingMark(r) ? `<span class="mini-chip warn" title="Дни в графике есть, но факт по ним не отмечен — в выдачу эти деньги пока не идут">− ждёт отметок: <b>${rub(waitingMark(r))} ₽</b></span>` : ''}
+        ${cardBlock(r) ? `<span class="mini-chip">− на карту: <b>${rub(cardBlock(r))} ₽</b></span>` : ''}
+        ${handBlock(r) ? `<span class="mini-chip">− наличными: <b>${rub(handBlock(r))} ₽</b></span>` : ''}
+        ${r.carry_kop ? `<span class="mini-chip">${(r.carry_kop || 0) < 0 ? '−' : '+'} с прошлого месяца: <b>${rub(Math.abs(r.carry_kop))} ₽</b></span>` : ''}
         ${
 ''}
-        ${r.to_pay_kop ? `<span class="mini-chip">К выдаче наличными: <b>${rub(r.to_pay_kop)} ₽</b></span>` : ''}
+        ${r.to_pay_kop ? `<span class="mini-chip cm-apart">записано в кассу: <b>${rub(r.to_pay_kop)} ₽</b></span>` : ''}
         ${r.flag_no_rate && !payNotByShift(id, per)
           ? '<span class="mini-chip warn">вид смены без ставки</span>' : ''}
+        ${
+''}
+        ${dolzhno !== (r.delta_kop || 0)
+          ? `<span class="mini-chip warn" title="Блоки дают ${rub(dolzhno)} ₽, а расчёт — ${rub(r.delta_kop)} ₽. Появился вид денег, которого нет в блоках карточки.">чипы не сходятся: ${rub(dolzhno - (r.delta_kop || 0))} ₽</span>` : ''}
       </div>`;
   } catch (err) { box.innerHTML = ''; }
 }
@@ -2041,8 +2048,8 @@ function paintAmountCell(empId, day, pos, kop) {
     (pos === 'second' ? '[data-pos="second"]' : ':not([data-pos="second"])');
   const el = document.querySelector(sel);
   if (!el) return;
-  const i = kop ? SAN_AMOUNTS.indexOf(kop) : -1;
-  el.innerHTML = kop ? `<span class="amt-v a${i < 0 ? 'x' : i}">${esc(rubShort(kop))}</span>` : '';
+  el.innerHTML = schedCellInner({ ...(cellOf(empId, day, pos) || {}), amount_kop: kop || null },
+                                pastDay(day), pos);
 }
 function cacheCell(empId, date, pos, row) {
   const i = (scheduleRows || []).findIndex(s => s.employee_id === empId
@@ -2166,8 +2173,11 @@ function kindLine(c) {
 function schedCellInner(c, past, pos = 'main') {
   const p = c && c.plan_kind, fx = c ? (c.fact ?? null) : null;
   if (c && c.amount_kop) {
-    const i = SAN_AMOUNTS.indexOf(c.amount_kop);
-    return `<span class="amt-v a${i < 0 ? 'x' : i}">${esc(rubShort(c.amount_kop))}</span>`;
+    const marked = past && fx !== null && fx !== '';
+    if (fx === 'x') return `<span class="amt-v amt-miss">${esc(rubShort(c.amount_kop))}</span>${
+      past ? '<span class="cell-pen" title="Изменить смену">✎</span>' : ''}`;
+    return `<span class="amt-v${marked ? ' amt-ok' : ' amt-plan'}">${esc(rubShort(c.amount_kop))}</span>${
+      past ? '<span class="cell-pen" title="Изменить смену">✎</span>' : ''}`;
   }
   if (!p && fx === null) {
     return past ? '<span class="cell-pen" title="Задать смену">\u270E</span>' : '';
@@ -3409,6 +3419,9 @@ function markedRow(r) {
 const earned = r => (r.salary_kop || 0) + (r.premia_kop || 0)
   + (r.otpusk_nach_kop || 0) + (r.bolnich_nach_kop || 0)
   + (r.nach_other_kop || 0);
+const waitingMark = r => (r.fact_required && r.salary_marked_kop != null)
+  ? Math.max(0, (+r.salary_kop || 0) - (+r.salary_marked_kop || 0)) : 0;
+const deltaFromBlocks = r => earned(r) - waitingMark(r) - cardBlock(r) - handBlock(r) + (+r.carry_kop || 0);
 const MONEY_KINDS = [
   ['cash', 'Наличные'], ['cash_avans', 'Аванс наличными'], ['otpusk_cash', 'Отпускные наличными'],
   ['premia', 'Премия'],
@@ -3447,7 +3460,6 @@ function moneyKindsFor(role) {
 }
 const rub = kop => fmt(Math.round((kop || 0) / 100));
 const recorded = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0) + (r.cash_kop || 0) + (r.cash_avans_kop || 0);
-const cardDelta = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0) + (r.card_uvol_kop || 0);
 let payrollRows = [], payrollLines = [], payrollSeq = 0, payrollShown = null;
 let archMoney = new Map();
 let payrollPrev = null, payrollCarryNotes = new Map();
@@ -3588,6 +3600,9 @@ function drawPayroll(filter = '') {
   const sum = k => rows.reduce((s, r) => s + (r[k] || 0), 0);
   const toGive   = rows.reduce((s, r) => s + Math.max(0, r.delta_kop || 0), 0);
   const overpaid = rows.reduce((s, r) => s + Math.min(0, r.delta_kop || 0), 0);
+  const sumToGive = f => rows.reduce((s, r) => s + Math.max(0, f(r) || 0), 0);
+  const colTotal = f => rows.some(r => f(r) !== (+r.delta_kop || 0))
+    ? `<b>${rub(sumToGive(f))}</b>` : '<span class="muted">—</span>';
   const overpaidCnt = rows.filter(r => (r.delta_kop || 0) < 0).length;
   const total = `<tfoot><tr class="pw-total"><td class="pw-name">ИТОГО</td><td></td>
     <td></td><td></td><td></td>
@@ -3596,9 +3611,9 @@ function drawPayroll(filter = '') {
     <td class="num fin">${rub(sum('card_avans_kop'))}</td><td class="num fin">${rub(sum('card_rasch_kop'))}</td>
     <td class="num fin pw-cardtot"><b>${rub(sum('card_rasch_kop') + sum('card_avans_kop') + sum('otpusk_kop') + sum('bolnich_kop'))}</b></td>
     <td class="num fin pw-carry"><b class="money${sum('carry_kop') < 0 ? ' neg' : ''}">${sum('carry_kop') ? rub(sum('carry_kop')) : '—'}</b></td>
-    <td class="num fin pw-byplan"><b>${rub(rows.reduce((a, r) => a + deltaAs(r, r.salary_kop), 0))}</b></td>
+    <td class="num fin pw-byplan">${colTotal(r => deltaAs(r, r.salary_kop))}</td>
     <td class="num pw-pay fin"><b class="money">${rub(toGive)}</b></td>
-    <td class="num fin pw-fcast"><b>${rub(rows.reduce((a, r) => a + deltaAs(r, r.salary_plan_kop), 0))}</b></td>
+    <td class="num fin pw-fcast">${colTotal(r => deltaAs(r, r.salary_plan_kop))}</td>
     <td class="num fin">${rub(sum('card_uvol_kop'))}</td>
     <td class="num fin">${rub(sum('cash_avans_kop'))}</td><td class="num fin">${rub(sum('cash_kop'))}</td>
     <td class="num fin">${rub(sum('otpusk_nach_kop'))}</td>
@@ -3654,7 +3669,7 @@ function drawPayroll(filter = '') {
         ? ` · по прошлому месяцу <b>${rub(fromPrev)}</b> — ${noSched.length} ${plural(noSched.length, 'человек', 'человека', 'человек')} без графика (${
             esc(noSched.slice(0, 3).map(r => shortFio(r.fio)).join(', '))}${noSched.length > 3 ? ' и другие' : ''}), сумма взята за ${periodLabel(payrollPrev.prev).toLowerCase()}`
         : '';
-      return `<tr class="pw-total pw-forecast"><td class="pw-name">К концу месяца</td>
+      return `<tr class="pw-total pw-forecast"><td class="pw-name">Заработают за месяц</td>
         <td colspan="10" class="muted small">если доработают: ${byPlan}${prevPart}.
           Это прогноз, а не долг — в «Осталось выдать» идёт только подтверждённое${
             fromPrev ? '; заведите таким людям график, и догадка сменится расчётом' : ''}</td>
@@ -4085,14 +4100,15 @@ function hint(text) {
     aria-expanded="false" aria-label="Подробнее">?</button></span>
     <div class="hinttext" id="${id}" hidden>${text}</div>`;
 }
-function wireHints(root) {
-  (root || document).querySelectorAll('.hintbtn').forEach(b => b.onclick = () => {
-    const box = document.getElementById(b.dataset.hint); if (!box) return;
-    const open = box.hidden;
-    box.hidden = !open;
-    b.setAttribute('aria-expanded', open ? 'true' : 'false');
-  });
-}
+document.addEventListener('click', ev => {
+  const b = ev.target.closest && ev.target.closest('.hintbtn');
+  if (!b) return;
+  const box = document.getElementById(b.dataset.hint); if (!box) return;
+  const open = box.hidden;
+  box.hidden = !open;
+  b.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+function wireHints() {}
 function compactHeads() {
   document.querySelectorAll('.page-head p').forEach(p => {
     if (p.dataset.compact) return;
@@ -4918,27 +4934,28 @@ function drawVacation() {
       : '<span class="muted">—</span>'}</td>
     <td class="num fin">${x.nach ? rub(x.nach) : '<span class="muted">—</span>'}</td>
     <td class="num fin">${x.card ? rub(x.card) : '<span class="muted">—</span>'}</td>
-    <td class="num fin">${x.cash ? rub(x.cash) : '<span class="muted">—</span>'}</td>
-    <td class="num fin"><b class="money${x.nach - x.paid < 0 ? ' neg' : ''}">${rub(x.nach - x.paid)}</b></td></tr>`;
+    <td class="num fin">${x.cash ? rub(x.cash) : '<span class="muted">—</span>'}</td></tr>`;
   let body = '';
   if (flat) body = list.map(row).join('');
   else {
     const cats = catsOrdered(list.map(x => x.cat));
     for (const cat of cats) {
       const my = list.filter(x => x.cat === cat);
-      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="7"><span>${esc(catLabel(cat))} · ${my.length}</span></td></tr>`
+      body += `<tr class="pw-group" style="--cat:${catColor(cat)}"><td colspan="6"><span>${esc(catLabel(cat))} · ${my.length}</span></td></tr>`
         + my.map(row).join('');
     }
   }
   $('vacBody').innerHTML = list.length
     ? `<div class="gridwrap"><table class="pw vac"><thead><tr>
         <th class="pw-name">Сотрудник</th><th>Даты отпуска</th><th class="num">Дней</th>
-        <th class="num">Начислено</th><th class="num">На карту</th><th class="num">Наличными</th>
-        <th class="num pw-pay">Осталось</th></tr></thead><tbody>${body}</tbody>
+        <th class="num">Начислено</th><th class="num">На карту</th><th class="num pw-pay">Наличными</th>
+        </tr></thead><tbody>${body}</tbody>
         <tfoot><tr class="pw-total"><td class="pw-name">ИТОГО</td><td></td>
           <td class="num">${tot.days}</td><td class="num fin">${rub(tot.nach)}</td>
-          <td class="num fin">${rub(sum('card'))}</td><td class="num fin">${rub(sum('cash'))}</td>
-          <td class="num pw-pay fin"><b class="money${tot.nach - tot.paid < 0 ? ' neg' : ''}">${rub(tot.nach - tot.paid)}</b></td></tr></tfoot></table></div>`
+          <td class="num fin">${rub(sum('card'))}</td>
+          <td class="num pw-pay fin">${rub(sum('cash'))}</td></tr></tfoot></table></div>
+        <div class="note ov-note">${ICONS.info}Колонки «Осталось» здесь нет намеренно${hint(
+          'Она считала «начислено минус выплачено» в пределах ОДНОГО месяца, а отпускные часто начисляют в одном месяце, а платят в другом. В августе начислено 0, выплачено 558 004 ₽ — и колонка показывала долг −558 004 ₽, которого нет. Ровно эту формулу раньше по той же причине убрали из окна человека. Долг по отпускным виден в «Расчёте», в строке «Осталось выдать»: начисленные отпускные входят в заработок, выплаченные вычитаются.')}</div>`
     : `<div class="empty">За ${esc(periodLabel(vacData.period))} отпусков нет — ни дней в графике, ни отпускных.</div>`;
   $('vacBody').querySelectorAll('.vac-row').forEach(tr => tr.onclick = () => openCard(+tr.dataset.id));
   { const b = $('vacAdd'); if (b) b.onclick = () => vacAddDialog(); }

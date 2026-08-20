@@ -744,11 +744,18 @@ body.authed .login-stage{display:none}
 
 /* санитарская смена: в клетке деньги, а не часы — читаются как сумма, не как время */
 .gr-cell.amt{cursor:pointer}
+/* ⚠ ПАЛИТРА ПО НОМИНАЛУ УБРАНА. Было: 3200 зелёным, 3700 синим, 5050
+   фиолетовым, своя сумма янтарём. Два изъяна сразу: цвет ничего не говорил о
+   том, вышел человек или нет (красились и будущие клетки — 56 штук на 294 825 ₽
+   в августе), и совпадал со словарём факта — «своя сумма» давала тот же янтарь,
+   каким табель говорит «факт разошёлся с планом». Все 77 клеток медсестёр
+   горели «отклонением» без отклонения.
+   Теперь правило то же, что во всём графике: серое — план, цветное —
+   подтверждено фактом, красное — не вышел. Номинал читается цифрой. */
 .amt-v{font-size:12.5px;font-weight:800;letter-spacing:-.2px;line-height:1.1}
-.amt-v.a0{color:var(--green-d)}                       /* 3200 */
-.amt-v.a1{color:var(--blue-d,#2b6cb0)}                /* 3700 */
-.amt-v.a2{color:var(--violet-d,#6b46c1)}              /* 5050 */
-.amt-v.ax{color:var(--amber-d,#b7791f)}               /* своя сумма */
+.amt-v.amt-plan{color:var(--ink-3);font-weight:700}   /* назначено, факт не отмечен */
+.amt-v.amt-ok{color:var(--green-d)}                   /* отмечено фактом — оплачено */
+.amt-v.amt-miss{color:var(--red-d);text-decoration:line-through;opacity:.75}
 .gr-cell.amt:hover{background:linear-gradient(var(--fill-hi),var(--fill-hi)),var(--surf-2)}
 @keyframes updIn{from{opacity:0;transform:translateX(-50%) translateY(12px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 /* Полоса дней: узкие клетки в ряд, перенос по ширине карточки. Это не табель на
@@ -938,6 +945,14 @@ body.authed .login-stage{display:none}
 .pw-flag.amber{background:rgba(242,193,78,.14);color:var(--amber-d)}
 .pw-flag.info{background:rgba(90,150,230,.15);color:var(--blue-d,#3d7ac2)}   /* сумма вручную — не тревога, а пометка */
 .mini-chip.warn{background:rgba(255,107,107,.12);color:var(--red-d)}
+/* Чип, который НЕ участвует в формуле над ним. Отделён чертой слева, потому что
+   стоящие в ряд числа читаются как слагаемые и вычитаются в уме — так и вышло с
+   карточкой, где «Карта» показывала три вида из семи. «Записано в кассу» — это
+   очередь на выдачу, а не слагаемое «Осталось выдать». */
+.mini-chip.cm-apart{color:var(--ink-2);background:var(--fill-1);border-color:var(--glass-bd);
+  margin-left:8px;position:relative}
+.mini-chip.cm-apart::before{content:"";position:absolute;left:-9px;top:3px;bottom:3px;
+  border-left:1px solid var(--hair)}
 .mini-chip.strong{background:rgba(31,165,101,.14);color:var(--green-d);border-color:rgba(31,165,101,.32);font-size:12.5px}
 /* модалка человека */
 /* строка выплаты кликабельна: правка суммы прямо там, где на неё смотрят.
