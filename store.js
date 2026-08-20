@@ -899,8 +899,12 @@ export class MockStore {
     }
     return out;
   }
-  async listJournal({ filter = 'all', beforeId = null, limit = 50, who = '', act = '', from = '', to = '' } = {}) {
+  async listJournal({ filter = 'all', beforeId = null, limit = 50, who = '', act = '', from = '', to = '', actor = '' } = {}) {
     let arr = (this.db.journal || []).filter(j => journalMatch(j, filter)).sort((a, b) => (b.id || 0) - (a.id || 0));
+    if (actor) {
+      const u = DEMO_USERS.find(x => String(x.id) === String(actor));
+      if (u) arr = arr.filter(j => j.actor === u.name);
+    }
     if (beforeId != null) arr = arr.filter(j => (j.id || 0) < beforeId);
     const BY_EMP = ['employee', 'employee_month_norm', 'month_carry', 'salary_override', 'doctor_month_revenue'];
     const SRC = { schedule: 'schedule', money_line: 'money', rate_line: null, payout: 'payouts' };
@@ -1440,7 +1444,7 @@ export class SupabaseStore {
     if (error) throw error;
     return data;
   }
-  async listJournal({ filter = 'all', beforeId = null, limit = 50, who = '', act = '', from = '', to = '' } = {}) {
+  async listJournal({ filter = 'all', beforeId = null, limit = 50, who = '', act = '', from = '', to = '', actor = '' } = {}) {
     let q = this.sb.from('v_journal_named').select('*')
       .order('id', { ascending: false }).limit(limit + 1);
     if (filter === 'red') q = q.eq('red', true);
@@ -1458,6 +1462,7 @@ export class SupabaseStore {
     if (ACT[act]) q = q.in('action', ACT[act]);
     if (from) q = q.gte('at', from + 'T00:00:00');
     if (to) q = q.lte('at', to + 'T23:59:59');
+    if (actor) q = q.eq('actor', actor);
     if (beforeId != null) q = q.lt('id', beforeId);
     const { data, error } = await q;
     if (error) throw error;

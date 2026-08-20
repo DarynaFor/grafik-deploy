@@ -1749,9 +1749,19 @@ tr.pw-total.pw-over{z-index:5}
   .sched-tools{flex-wrap:wrap;align-items:center}
   .sched-tools .search{flex:1 1 140px;min-width:0;order:1}
   .filt-btn{flex:0 0 auto;order:2}
-  .sched-tools.filt-open > *{display:flex}
+  /* ⚠ Столько же уточнений, сколько у правила выше, плюс класс filt-open —
+     иначе оно ПРОИГРЫВАЕТ по весу и раскрытие не работает вовсе: класс на
+     строке появляется, а поля остаются скрытыми. Так и было: на «Отпусках»
+     кнопка нажималась, строка росла, а фильтров не показывалось. */
+  .sched-tools.filt-open > *:not(.filt-btn):not(.search){display:flex}
   .sched-tools.filt-open > .search{flex:1 1 100%}
-  .sched-tools.filt-open > .cselect{display:inline-block}
+  .sched-tools.filt-open > .cselect:not(.filt-btn):not(.search){display:inline-block}
+  /* Журнал: быстрые кнопки сверху остаются (они в один тап), а подробный ряд —
+     поиск, действие, кто правил, даты — под ту же кнопку. Он занимал 247 точек
+     из 812, и списку оставалось 323. */
+  #journalTools .jf-row{display:none}
+  #journalTools.filt-open .jf-row{display:flex}
+  #journalTools .filt-btn{margin:2px 0 8px}
   .page-head{gap:8px;margin-bottom:10px}
   .month-nav{margin:0}
   /* Чипы-переключатели в один ряд с выпадающим списком отделений: по отдельности

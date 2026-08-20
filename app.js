@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=249';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=254';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -307,6 +307,7 @@ function go(screen, replace) {
   if (screen === 'payroll') stickFooterRows($('payrollTable'));
   if (screen === 'schedule') centerToday();
   compactHeads();
+  document.querySelectorAll('.screen.show .sched-tools').forEach(wireFilterToggle);
   renderNav();
   document.querySelector('.main').scrollTop = 0;
   syncHash(!firstNav && !replace);
@@ -890,7 +891,7 @@ function openCard(id, replace) {
       </div>` : ''}
     </div>`;
   { const h = $('cardHist');
-    if (h) h.onclick = () => { jWho = (String(e.fio || '').split(' ')[0] || '').trim(); jAct = jFrom = jTo = ''; journalFilter = 'all'; go('journal'); renderJournal(true); }; }
+    if (h) h.onclick = () => { jWho = (String(e.fio || '').split(' ')[0] || '').trim(); jAct = jFrom = jTo = jActor = ''; journalFilter = 'all'; go('journal'); renderJournal(true); }; }
   $('cardBody').dataset.emp = id;
   applyIcons($('cardBody'));
   const eb = $('editEmpBtn'); if (eb) eb.onclick = () => employeeForm(e);
@@ -3615,7 +3616,7 @@ function drawPayroll(filter = '') {
         <td colspan="10"></td></tr>`;
     })()}
     ${overpaid ? `<tr class="pw-total pw-over"><td class="pw-name">Переплата вперёд</td>
-      <td colspan="10" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующий месяц${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
+      <td colspan="10" class="muted small">выдано больше, чем начислено — эта сумма перейдёт на следующую оплату${overpaidCnt ? ` · ${overpaidCnt} чел` : ''}</td>
       <td class="num pw-byplan"></td><td class="num pw-pay fin"><b class="money neg">−${rub(Math.abs(overpaid))}</b></td><td class="num pw-fcast"></td>
       <td colspan="10"></td></tr>` : ''}</tfoot>`;
   $('payrollTable').innerHTML = buhNote + `<table class="pw">${head}<tbody>${body}</tbody>${total}</table>`;
@@ -4067,8 +4068,13 @@ function wireFilterToggle(tools) {
   b.onclick = () => {
     const open = tools.classList.toggle('filt-open');
     b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    tools.dataset.filtOpen = open ? '1' : '0';
   };
-  tools.insertBefore(b, tools.firstChild);
+  const chips = tools.querySelector('.jf-chips');
+  if (chips && chips.nextSibling) tools.insertBefore(b, chips.nextSibling);
+  else if (chips) tools.appendChild(b);
+  else tools.insertBefore(b, tools.firstChild);
+  if (tools.dataset.filtOpen === '1') tools.classList.add('filt-open');
 }
 async function payrollDialog(empId) {
   const r = payrollRows.find(x => x.employee_id === empId); if (!r) return;
@@ -4180,7 +4186,7 @@ async function payrollDialog(empId) {
           <div class="me-row me-sum"><span>С учётом этой суммы осталось</span>
           <b class="money${bud < 0 ? ' neg' : ''}">${rub(bud)} ₽</b></div>
           <div class="msub">${bud < 0
-            ? 'Аванса выдано больше — переплата перейдёт на следующий месяц.'
+            ? 'Аванса выдано больше — переплата перейдёт на следующую оплату.'
             : 'Переплаты нет: выдано меньше, чем наработано.'}</div>`;
       })() : ''}` : ''}
     ${pctLine && canEdit ? `<label class="flbl">Выручка за месяц · ЗП = ${esc(String(pctLine.percent))}% от неё${hint(
@@ -4480,7 +4486,7 @@ function drawOverview() {
   const hero = `<div class="ov-hero"><div class="l">Осталось выдать · ${esc(periodLabel(ovData.period))}</div>`
     + `<div class="v big">${rub(toGive)} <small>₽</small></div>`
     + (overpaid ? `<div class="ov-over">Переплата вперёд: <b>−${rub(Math.abs(overpaid))} ₽</b>`
-        + `<span class="muted small"> · ${overCnt} чел · выдано больше начисленного, перейдёт на следующий месяц</span></div>` : '')
+        + `<span class="muted small"> · ${overCnt} чел · выдано больше начисленного, перейдёт на следующую оплату</span></div>` : '')
     + `<div class="ov-break">`
       + line('Начислено сейчас', rub(accrued) + ' ₽', 'sum')
       + line('· зарплата по графику', rub(salary) + ' ₽', 'sub')
@@ -4693,7 +4699,7 @@ function drawArchive() {
   $('arcBody').querySelectorAll('.arc-row .pw-name').forEach((td, i) =>
     td.onclick = () => openCard(list[i].id));
   $('arcBody').querySelectorAll('.arc-hist').forEach(b => b.onclick = () => {
-    jWho = (b.dataset.fio.split(' ')[0] || '').trim(); jAct = jFrom = jTo = '';
+    jWho = (b.dataset.fio.split(' ')[0] || '').trim(); jAct = jFrom = jTo = jActor = '';
     go('journal'); renderJournal(true);
   });
   $('arcBody').querySelectorAll('.arc-back').forEach(b => b.onclick = async () => {
@@ -5056,7 +5062,16 @@ function drawPatients() {
 const J_FILTERS = [['all', 'Все'], ['red', 'Красные'], ['money', 'Деньги'],
   ['payout', 'Выдачи'], ['premia', 'Премии'], ['schedule', 'График'], ['rate', 'Ставки']];
 let journalFilter = 'all', journalRows = [], journalLastId = null, journalHasMore = false, journalBusy = false;
-let jWho = '', jAct = '', jFrom = '', jTo = '';
+let jWho = '', jAct = '', jFrom = '', jTo = '', jActor = '';
+let journalActors = null;
+function rolePodpis(u) {
+  const imya = String(u.display_name || '').trim();
+  const rol = ROLE_LABELS[u.role] || u.role || '';
+  if (!rol) return imya;
+  const slova = t => String(t).toLowerCase().split(/[^0-9a-zа-яё]+/i).filter(Boolean);
+  const vImeni = new Set(slova(imya));
+  return slova(rol).every(w => vImeni.has(w)) ? imya : imya + ' · ' + rol;
+}
 const J_ACTS = [['', 'Любое действие'], ['add', 'Добавление'], ['edit', 'Изменение'], ['del', 'Удаление и сторно']];
 function journalRowHtml(j) {
   let what;
@@ -5086,10 +5101,13 @@ function journalRowHtml(j) {
 }
 async function renderJournal(reset = true) {
   if (journalBusy) return; journalBusy = true;
+  if (journalActors === null) {
+    try { journalActors = await store.listAccounts(); } catch (e) { journalActors = []; }
+  }
   if (reset) { journalRows = []; journalLastId = null; journalHasMore = false; }
   try {
     const res = await store.listJournal({ filter: journalFilter, beforeId: reset ? null : journalLastId,
-      who: jWho, act: jAct, from: jFrom, to: jTo });
+      who: jWho, act: jAct, from: jFrom, to: jTo, actor: jActor });
     journalRows = reset ? res.rows : journalRows.concat(res.rows);
     journalLastId = res.lastId ?? journalLastId;
     journalHasMore = res.hasMore;
@@ -5100,11 +5118,15 @@ async function renderJournal(reset = true) {
 function drawJournal() {
   const chips = J_FILTERS.map(([k, l]) => `<button class="jf-chip${journalFilter === k ? ' on' : ''}" data-jf="${k}">${esc(l)}</button>`).join('');
   const acts = J_ACTS.map(([k, l]) => `<option value="${k}" ${jAct === k ? 'selected' : ''}>${esc(l)}</option>`).join('');
-  const on = jWho || jAct || jFrom || jTo;
+  const on = jWho || jAct || jFrom || jTo || jActor;
   $('journalTools').innerHTML = `<div class="jf-chips">${chips}</div>
     <div class="jf-row">
       <div class="search jf-who"><span data-ic="search"></span><input id="jWho" placeholder="Фамилия — чья правка или о ком" autocomplete="off" value="${esc(jWho)}"></div>
       <select class="input jf-sel" id="jAct">${acts}</select>
+      ${(journalActors && journalActors.length > 1) ? `<select class="input jf-sel" id="jActor" title="Чьи правки показывать">
+        <option value="">Кто угодно</option>
+        ${journalActors.map(u => `<option value="${esc(String(u.id))}" ${jActor === String(u.id) ? 'selected' : ''}>${esc(rolePodpis(u))}</option>`).join('')}
+      </select>` : ''}
       <label class="jf-date">с <input class="input" type="date" id="jFrom" value="${esc(jFrom)}"></label>
       <label class="jf-date">по <input class="input" type="date" id="jTo" value="${esc(jTo)}"></label>
       ${on ? '<button class="btn btn-ghost btn-sm" id="jClear">Сбросить</button>' : ''}
@@ -5123,9 +5145,11 @@ function drawJournal() {
       w.oninput = () => { clearTimeout(t); t = setTimeout(() => { jWho = w.value.trim(); renderJournal(true); }, 400); };
       w.onkeydown = ev => { if (ev.key === 'Enter') { clearTimeout(t); jWho = w.value.trim(); renderJournal(true); } }; } }
   { const a = $('jAct'); if (a) a.onchange = () => { jAct = a.value; renderJournal(true); }; }
+  { const u = $('jActor'); if (u) u.onchange = () => { jActor = u.value; renderJournal(true); }; }
   { const f = $('jFrom'); if (f) f.onchange = () => { jFrom = f.value; renderJournal(true); }; }
   { const t2 = $('jTo'); if (t2) t2.onchange = () => { jTo = t2.value; renderJournal(true); }; }
-  { const c = $('jClear'); if (c) c.onclick = () => { jWho = jAct = jFrom = jTo = ''; renderJournal(true); }; }
+  { const c = $('jClear'); if (c) c.onclick = () => { jWho = jAct = jFrom = jTo = jActor = ''; renderJournal(true); }; }
+  wireFilterToggle($('journalTools'));
 }
 const MODAL_X = '<div class="modal-xwrap"><button class="modal-x" type="button" aria-label="Закрыть">\u2715</button></div>';
 let modalOnClose = null, modalOnClose2 = null;
