@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=235';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=245';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -305,6 +305,7 @@ function go(screen, replace) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
   $('s-' + screen).classList.add('show');
   if (screen === 'payroll') stickFooterRows($('payrollTable'));
+  if (screen === 'schedule') centerToday();
   renderNav();
   document.querySelector('.main').scrollTop = 0;
   syncHash(!firstNav && !replace);
@@ -2376,18 +2377,9 @@ function drawSchedule() {
       : `План серым, факт цветом.${hint('Расхождения факта с планом видны справа и в шапке таблицы.')}`;
     wireHints($('schedSub'));
   }
+  wireFilterToggle($('s-schedule').querySelector('.sched-tools'));
   if ($('schedNote')) {
     $('schedNote').innerHTML = editable ? '' : `<div class="readonly-note">${ICONS.lock} График ведёт оператор (Алёна). У вас — просмотр.</div>`;
-  }
-  const worked = s => s.plan_kind && !isRest(s.plan_kind);
-  const withShift = new Set(scheduleRows.filter(worked).map(s => s.employee_id));
-  const shifts = scheduleRows.filter(worked).length;
-  const isDev = s => { const fx = s.fact ?? null; if (fx === null) return false; if (fx === 'x') return planHoursOf(s) > 0; const n = parseFloat(fx); return !isNaN(n) && Math.abs(n - planHoursOf(s)) > 0.05; };
-  const devs = scheduleRows.filter(isDev).length;
-  if ($('schedStat')) {
-    const pct = active.length ? Math.round(withShift.size / active.length * 100) : 0;
-    const zakrytoM = [...closedDays].filter(d => d.startsWith(curPeriod + '-')).length;
-    $('schedStat').innerHTML = `<span class="fs-count"><b>${withShift.size}</b> из <b>${active.length}</b> с графиком</span><span class="cov-bar" title="${pct}% заполнено"><span class="cov-fill" style="width:${pct}%"></span></span><span class="gap-chips"><span class="mini-chip">${shifts} смен</span>${devs ? `<span class="mini-chip chip-dev" title="факт отличается от плана">⚠ расхождений: ${devs}</span>` : ''}${zakrytoM ? `<span class="mini-chip chip-lock" title="закрытые дни правки не принимают">${ICONS.lock} закрыто ${zakrytoM} из ${nd}</span>` : ''}</span>`;
   }
   const byKey = new Map(scheduleRows.map(s => [s.employee_id + '|' + s.work_date + '|' + (s.position || 'main'), s]));
   const cget = (id, d, pos = 'main') => byKey.get(id + '|' + cellDate(d) + '|' + pos) || null;
@@ -2467,6 +2459,7 @@ function drawSchedule() {
   grid.style.gridTemplateColumns = `var(--gr-name-w, 190px) repeat(${nd}, minmax(44px, 1fr)) repeat(4, var(--gr-sum-w, 50px))`;
   grid.innerHTML = shown ? head + rows : `<div class="empty" style="padding:40px">${active.length ? 'Никого не найдено' : 'Нет сотрудников'}</div>`;
   if (wrap) { wrap.scrollLeft = keepL; wrap.scrollTop = keepT; }
+  centerToday();
   if (anyEdit) {
     grid.querySelectorAll('.gr-cell').forEach(cell => cell.onclick = () => {
       const emp = +cell.dataset.emp, d = +cell.dataset.day;
@@ -3421,6 +3414,7 @@ async function renderPayroll(filter = '') {
     $('paySub').innerHTML = `Деньги из графика.${hint('Зарплата, аванс, наличные и сколько осталось выдать — всё из проставленных смен.<br><b>Клик по строке</b> — разбивка по человеку и ввод сумм.')}`;
     wireHints($('paySub'));
   }
+  wireFilterToggle($('s-payroll').querySelector('.sched-tools'));
   const seq = ++payrollSeq;
   const wrap = document.querySelector('#s-payroll .gridwrap');
   const keepTop = wrap ? wrap.scrollTop : 0, keepLeft = wrap ? wrap.scrollLeft : 0;
@@ -4051,6 +4045,20 @@ function wireHints(root) {
     b.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
 }
+function wireFilterToggle(tools) {
+  if (!tools || tools.querySelector('.filt-btn')) return;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'filt-btn';
+  b.setAttribute('aria-expanded', 'false');
+  b.setAttribute('aria-label', 'Фильтры');
+  b.innerHTML = ICONS.tag + '<span>Фильтры</span>' + ICONS.chevD;
+  b.onclick = () => {
+    const open = tools.classList.toggle('filt-open');
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  tools.insertBefore(b, tools.firstChild);
+}
 async function payrollDialog(empId) {
   const r = payrollRows.find(x => x.employee_id === empId); if (!r) return;
   const per = payPeriod;
@@ -4527,6 +4535,15 @@ function drawOverview() {
     else if (b.dataset.go === 'journal-payout') { journalFilter = 'payout'; go('journal'); renderJournal(true); }
     else go(b.dataset.go);
   });
+}
+let schedCenteredFor = null;
+function centerToday() {
+  const wrap = $('scheduleGrid') && $('scheduleGrid').closest('.gridwrap');
+  if (!wrap || !wrap.clientWidth || schedCenteredFor === curPeriod) return;
+  const den = wrap.querySelector('.gr-day.today');
+  if (!den) return;
+  schedCenteredFor = curPeriod;
+  wrap.scrollLeft = Math.max(0, den.offsetLeft - (wrap.clientWidth - den.offsetWidth) / 2);
 }
 function stickFooterRows(host) {
   if (!host) return;

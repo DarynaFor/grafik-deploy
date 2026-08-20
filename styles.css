@@ -111,13 +111,23 @@ body.authed .login-stage{display:none}
 #mobileNav .nav-badge{margin-left:5px}
 .nav-item.active .ic{color:var(--green)}
 .main{grid-area:main;overflow-y:auto}
-.screen{display:none;padding:30px 34px 80px;max-width:1080px}
+.screen{display:none;padding:18px 34px 80px;max-width:1080px}
+/* ⚠ «График» и «Расчёт» — ВО ВСЮ ШИРИНУ. Дарина 20.08: «для графіку дуже мало
+   місця, а він головний, і щоб там було все зручно видно».
+   Ограничение 1080px придумано для текстовых экранов, чтобы строка не была
+   бесконечной. Но здесь не текст, а ТАБЛИЦА НА 31 КОЛОНКУ: на 1280px было видно
+   двенадцать дней из тридцати одного, остальные — горизонтальной прокруткой.
+   Каждая лишняя сотня точек ширины — это ещё два-три дня на виду. */
+#s-schedule, #s-payroll{max-width:none}
 .screen.show{display:block;animation:fade .28s ease-out}
 @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .btn-spin{display:inline-block;width:15px;height:15px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .6s linear infinite;margin-right:8px;vertical-align:-3px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.page-head{display:flex;align-items:flex-end;gap:16px;margin-bottom:24px;flex-wrap:wrap}
-.page-head h1{font-size:27px;font-weight:700;letter-spacing:-.025em}
+/* Отступы подрезаны 20.08 по той же просьбе. Замерено на окне 720px: над
+   таблицей было 277 точек, то есть 38% экрана уходило на заголовок и фильтры.
+   Режем не «на глаз»: 30→18 сверху, 24→14 под шапкой, заголовок 27→23. */
+.page-head{display:flex;align-items:flex-end;gap:16px;margin-bottom:14px;flex-wrap:wrap}
+.page-head h1{font-size:23px;font-weight:700;letter-spacing:-.025em}
 .page-head p{color:var(--ink-2);font-size:13.5px;margin-top:6px}
 .page-head .right{margin-left:auto;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 
@@ -312,6 +322,9 @@ body.authed .login-stage{display:none}
    каждое место отдельно. */
 .mini-chip{font-size:11.5px;font-weight:700;color:var(--amber-d);background:rgba(242,193,78,.13);border:1px solid rgba(242,193,78,.25);padding:3px 10px;border-radius:var(--r-pill);white-space:nowrap;display:inline-flex;align-items:center;gap:5px;line-height:1.45}
 .mini-chip svg{width:12px;height:12px;flex:none;display:block}
+/* Кнопка «Фильтры» существует только на телефоне — на широком экране фильтры
+   помещаются в строку, и прятать их значило бы добавить лишнее нажатие. */
+.filt-btn{display:none}
 .fill-stat .rt-toggle{margin-left:auto}
 .gap-dot{display:inline-block;font-size:11px;font-weight:700;color:var(--amber-d);margin-left:8px}
 .emp-row.incomplete{border-color:rgba(242,193,78,.26)}
@@ -386,10 +399,13 @@ body.authed .login-stage{display:none}
 .gr-group{grid-column:1/-1;background:var(--fill-1);border-bottom:1px solid var(--hair)}
 .gr-group span{position:sticky;left:0;display:inline-block;padding:7px 12px;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
 /* панель инструментов графика: поиск + отделение + счётчик покрытия */
-.sched-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+/* ⚠ gap 10, а не 12, и полоска покрытия уже (ниже). Строка фильтров со
+   статистикой не влезала в 1012px РОВНО НА 9 ТОЧЕК — и статистика падала
+   отдельной строкой, забирая ещё 39 точек по высоте. Экономия на пустом месте. */
+.sched-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
 .sched-stat{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 /* мини-полоска покрытия месяца: сколько сотрудников с графиком */
-.cov-bar{width:82px;height:7px;border-radius:var(--r-pill);background:var(--fill-2);overflow:hidden;flex-shrink:0}
+.cov-bar{width:60px;height:7px;border-radius:var(--r-pill);background:var(--fill-2);overflow:hidden;flex-shrink:0}
 .cov-fill{display:block;height:100%;border-radius:var(--r-pill);background:linear-gradient(90deg,var(--teal),var(--green));transition:width .35s ease}
 /* цветная точка отделения (у каждого свой оттенок, как аватарки) */
 .cat-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle;flex-shrink:0}
@@ -1146,7 +1162,7 @@ tr.pw-total.pw-over{z-index:5}
 /* Телефон: поиску — вся строка. Рядом с фильтром отделения он ужимался до ~104 px,
    и попасть в него пальцем было почти нечем — тапали в лупу. */
 @media (max-width:720px){
-  .sched-tools .search,.page-head .right .search{flex:1 1 100%;min-width:0}
+  .page-head .right .search{flex:1 1 100%;min-width:0}
 }
 
 /* Подпись человека в графике: фамилия и под ней специальность. Заголовок группы
@@ -1594,14 +1610,26 @@ tr.pw-total.pw-over{z-index:5}
      Здесь суммы семизначные, а пояснения длинные, поэтому не три колонки, а
      список «подпись — значение» во всю ширину. */
   .pw-host .pw tfoot{display:block;margin-top:14px}
+  /* ── Вид карточки итогов. Дарина 20.08: «дизайн цього можна було б покращити».
+     Что изменено и почему:
+     · пунктирные разделители → тонкие сплошные. Пунктир читается как «черновик»,
+       а это итоговые суммы месяца;
+     · заголовок был 13px жирным капсом — он спорил с числами за внимание.
+       Стал мелкой спокойной подписью: содержание карточки — цифры, а не её имя;
+     · у первой строки нет верхней линии: она шла сразу под заголовком и делила
+       карточку пополам;
+     · «Осталось выдать» — главное число экрана — крупнее остальных. */
   .pw-host .pw tr.pw-total{
-    display:block;padding:12px 13px;margin-bottom:8px;
-    background:var(--surf-2);border:1px solid var(--glass-bd);border-radius:14px}
+    display:block;padding:13px 14px 11px;margin-bottom:9px;
+    background:var(--surf-2);border:1px solid var(--glass-bd);border-radius:16px}
   .pw-host .pw tr.pw-total td.pw-name{
-    background:none;padding:0 0 8px;font-size:13px;font-weight:750;text-transform:uppercase;
-    letter-spacing:.03em;border:none}
+    background:none;padding:0 0 6px;font-size:10.5px;font-weight:600;text-transform:uppercase;
+    letter-spacing:.08em;color:var(--ink-3,var(--ink-2));border:none}
+  /* Расшифровка под заголовком («зарплата 0», «премия 0») — это пояснение, а не
+     итог. Приглушаем, чтобы не спорила с числами справа: раньше читалась как
+     ещё одна строка суммы. */
   .pw-host .pw tr.pw-total td[colspan]{display:block;padding:0 0 8px;
-    font-size:11.5px;line-height:1.45}
+    font-size:11.5px;line-height:1.45;color:var(--ink-3,var(--ink-2));font-weight:500}
   .pw-host .pw tr.pw-total td[colspan]:empty{display:none}
   /* Дарина 17.08: «не видно основних сум итого… суми всього зп, всього
      нараховано по факту, всього за планом, всього зараз+по плану». В карточках
@@ -1614,9 +1642,14 @@ tr.pw-total.pw-over{z-index:5}
   .pw-host .pw tr.pw-total td.pw-pay,
   .pw-host .pw tr.pw-total td.pw-fcast{
     display:flex;align-items:baseline;justify-content:space-between;gap:10px;
-    padding:5px 0;text-align:right;font-size:14px;
+    padding:7px 0;text-align:right;font-size:14px;
     font-variant-numeric:tabular-nums;background:none;
-    border:none;border-top:1px dashed var(--glass-bd)}
+    border:none;border-top:1px solid var(--hair)}
+  /* первая строка идёт сразу под заголовком — линия там лишняя */
+  .pw-host .pw tr.pw-total td.sep:first-of-type,
+  .pw-host .pw tr.pw-total td.pw-earned:first-of-type{border-top:none;padding-top:0}
+  /* главное число экрана — крупнее прочих */
+  .pw-host .pw tr.pw-total td.pw-pay{font-size:17px;font-weight:700}
   .pw-host .pw tr.pw-total td.sep::before,
   .pw-host .pw tr.pw-total td.pw-byplan::before,
   .pw-host .pw tr.pw-total td.pw-earned::before,
@@ -1661,6 +1694,44 @@ tr.pw-total.pw-over{z-index:5}
   /* Описание экрана — справочное, читают один раз. На телефоне держим в двух
      строках вместо четырёх: смысл остаётся, экран возвращается. */
   .page-head p{font-size:12.5px;line-height:1.35;margin-top:2px}
+  /* ⚠ МЕСЯЦ — В ОДНУ СТРОКУ С НАЗВАНИЕМ. Дарина 20.08: «можна перемикач місяці
+     перенести вище, біля назви расчет».
+     Раньше переключатель уезжал на свою строку и шапка занимала 103 точки из
+     812. Причина не в нехватке места (название 90 + месяц 190 = 280 при 335
+     доступных), а в разметке: h1 и подпись лежат в ОДНОЙ обёртке, и её ширину
+     задаёт длинная подпись — обёртка занимала строку целиком.
+     display:contents поднимает h1 и подпись в сетку как самостоятельные ячейки,
+     и тогда: название слева, месяц справа, подпись строкой ниже. */
+  .page-head{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 10px;margin-bottom:10px}
+  .page-head > div:first-child{display:contents}
+  .page-head h1{grid-column:1;grid-row:1}
+  .page-head p{grid-column:1/-1;grid-row:2}
+  .page-head .right{grid-column:2;grid-row:1;margin-left:0;justify-content:flex-end}
+  /* ФИЛЬТРЫ — ПОД ОДНИМ ЗНАЧКОМ (см. wireFilterToggle в app.js).
+     Свёрнуто по умолчанию: видна только кнопка. Развёрнуто — обычная строка
+     фильтров, как на компьютере. Кнопки нет нигде, кроме телефона: на широком
+     экране фильтры и так помещаются и прятать их незачем. */
+  .sched-tools{gap:8px;margin-bottom:8px}
+  .filt-btn{display:inline-flex;align-items:center;gap:7px;min-height:36px;padding:0 14px;
+    border-radius:var(--r-pill);background:var(--fill-2);border:1px solid var(--glass-bd);
+    color:var(--ink);font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer}
+  .filt-btn svg{width:15px;height:15px;flex:none}
+  .filt-btn svg:last-child{width:13px;height:13px;opacity:.7;transition:transform .15s}
+  .sched-tools.filt-open .filt-btn svg:last-child{transform:rotate(180deg)}
+  .sched-tools.filt-open .filt-btn{background:var(--fill-hi);border-color:var(--green)}
+  /* ⚠ ПОИСК ОСТАЁТСЯ СНАРУЖИ. Дарина 20.08: «можна пошук по імені залишити
+     окремо, бо ним часто користуєшся, майже кожного заходу, а інші кнопки — в
+     фільтр». Прятать то, чем пользуются каждый раз, значит добавить лишнее
+     нажатие на самое частое действие. Поиск и кнопка делят одну строку. */
+  .sched-tools > *:not(.filt-btn):not(.search){display:none}
+  /* Поиск тянется, кнопка держит свой размер — вдвоём в одну строку. Без
+     flex:0 0 auto у кнопки строка ломалась на две (83px вместо 40). */
+  .sched-tools{flex-wrap:wrap;align-items:center}
+  .sched-tools .search{flex:1 1 140px;min-width:0;order:1}
+  .filt-btn{flex:0 0 auto;order:2}
+  .sched-tools.filt-open > *{display:flex}
+  .sched-tools.filt-open > .search{flex:1 1 100%}
+  .sched-tools.filt-open > .cselect{display:inline-block}
   .page-head{gap:8px;margin-bottom:10px}
   .month-nav{margin:0}
   /* Чипы-переключатели в один ряд с выпадающим списком отделений: по отдельности
