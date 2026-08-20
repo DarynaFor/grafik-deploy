@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=262';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=263';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
