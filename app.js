@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=261';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=262';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -2176,6 +2176,8 @@ function kindByTime(st, en) {
 function kindLine(c) {
   if (!c || !c.plan_kind || isRest(c.plan_kind)) return '';
   if (!(c.plan_start && c.plan_end)) return '';
+  if (!['сутки', '12ч'].includes(KIND_TO_RATE[c.plan_kind])) return '';
+  if (c.plan_kind === kindByTime(c.plan_start, c.plan_end)) return '';
   const k = shiftKinds.find(x => x.code === c.plan_kind);
   return `<span class="kv${kindMismatch(c) ? ' bad' : ''}">${esc(k ? (k.label || c.plan_kind) : c.plan_kind)}</span>`;
 }
