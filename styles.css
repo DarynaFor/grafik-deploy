@@ -807,7 +807,10 @@ body.authed .login-stage{display:none}
   .emp-row .chev{grid-area:chev}
   .emp-pay{flex-wrap:wrap}
   .pill{white-space:normal}
-  .page-head .right .btn{width:100%;justify-content:center}
+  /* ⚠ width:auto, а не 100%. Из-за width:100% каждая кнопка занимала целую
+     строку: на «Отделениях» две кнопки давали два ряда, на «Сотрудниках» — три
+     ряда вместе с поиском. Пусть делят строку. */
+  .page-head .right .btn{width:auto;flex:1 1 auto;min-width:0;justify-content:center}
   .modal{padding:22px 18px}
   .modal-foot{margin:18px -18px 0;padding:13px 18px;bottom:0}   /* поля под мобильный padding .modal (22/18) */
   .frow{flex-wrap:wrap}
@@ -1778,6 +1781,15 @@ tr.pw-total.pw-over{z-index:5}
   #journalTools .jf-row{display:none}
   #journalTools.filt-open .jf-row{display:flex}
   #journalTools .filt-btn{margin:2px 0 8px}
+  /* ── Шапки с кнопками: «Сотрудники» 179 точек, «Отделения» 126 ────────────
+     Причина одна: поиск и каждая кнопка занимали ПО ЦЕЛОЙ СТРОКЕ. Теперь ряд
+     складывается как везде: поиск тянется, кнопки держат свой размер, а
+     выпадающий список отделения уходит под «Фильтры». */
+  .page-head .right > *:not(.filt-btn):not(.search):not(.btn){display:none}
+  .page-head .right.filt-open > *:not(.filt-btn):not(.search):not(.btn){display:flex}
+  .page-head .right.filt-open > .cselect{display:inline-block;flex:1 1 100%}
+  .page-head .right .search{flex:1 1 140px;min-width:0}
+  .page-head .right .filt-btn{flex:0 0 auto}
   .page-head{gap:8px;margin-bottom:10px}
   .month-nav{margin:0}
   /* Чипы-переключатели в один ряд с выпадающим списком отделений: по отдельности
@@ -1829,6 +1841,16 @@ tr.pw-total.pw-over{z-index:5}
   border:1px solid var(--glass-bd);background:var(--fill-1);color:var(--ink-3);
   font:600 11px/15px var(--sans);cursor:pointer;vertical-align:1px;transition:.12s}
 .hintbtn:hover{background:var(--fill-hi);color:var(--ink)}
+/* ⚠ НА ТЕЛЕФОНЕ «?» РАСТИМ ЗОНУ НАЖАТИЯ, А НЕ КРУЖОК. Проверка вёрстки нашла:
+   17 точек — пальцем не попасть (Apple и Google сходятся на 44 и 48, мы держим
+   хотя бы 32). Сам кружок оставляем маленьким: он стоит рядом с названием
+   экрана и, вырасти он, спорил бы с заголовком. Поэтому ::after — невидимая
+   площадка вокруг. То же для стрелок порядка отделений: они были 26. */
+@media(max-width:767px){
+  .hintbtn, .sp-mv{position:relative}
+  .hintbtn::after, .sp-mv::after{content:"";position:absolute;left:50%;top:50%;
+    width:38px;height:38px;transform:translate(-50%,-50%)}
+}
 .hintbtn[aria-expanded="true"]{background:var(--green);color:var(--on-green);border-color:transparent}
 .hinttext{margin:6px 0 0;padding:9px 12px;border-radius:11px;background:var(--fill-1);
   color:var(--ink-2);font-size:12px;line-height:1.5}

@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=257';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=258';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -308,6 +308,9 @@ function go(screen, replace) {
   if (screen === 'schedule') centerToday();
   compactHeads();
   document.querySelectorAll('.screen.show .sched-tools').forEach(wireFilterToggle);
+  document.querySelectorAll('.screen.show .page-head .right').forEach(r => {
+    if (r.querySelector('.cselect, .rt-toggle')) wireFilterToggle(r);
+  });
   renderNav();
   document.querySelector('.main').scrollTop = 0;
   syncHash(!firstNav && !replace);
