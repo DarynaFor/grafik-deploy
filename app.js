@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=234';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=235';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -2370,7 +2370,12 @@ function drawSchedule() {
   const cats = deptsFlat();
   const f = ($('schedSearch')?.value || '').toLowerCase().trim();
   const catF = $('schedCat')?.dataset.value || '';
-  if ($('schedSub')) $('schedSub').textContent = editable ? 'Прошедший день: клик — вышел по плану, ещё клик — не вышел. Карандаш в углу клетки — изменить время смены. Клик по имени — шаблон на месяц. Клик по номеру дня сверху — закрыть день или весь период с начала месяца.' : 'Просмотр: план (серым) и факт (цветом). Расхождения факта с планом — справа и в шапке.';
+  if ($('schedSub')) {
+    $('schedSub').innerHTML = editable
+      ? `Отмечайте выходы кликом по клетке.${hint('<b>Прошедший день:</b> клик — вышел по плану, ещё клик — не вышел.<br><b>Карандаш</b> в углу клетки — изменить время смены.<br><b>Клик по имени</b> — шаблон на месяц.<br><b>Клик по номеру дня</b> сверху — закрыть день или весь период с начала месяца.')}`
+      : `План серым, факт цветом.${hint('Расхождения факта с планом видны справа и в шапке таблицы.')}`;
+    wireHints($('schedSub'));
+  }
   if ($('schedNote')) {
     $('schedNote').innerHTML = editable ? '' : `<div class="readonly-note">${ICONS.lock} График ведёт оператор (Алёна). У вас — просмотр.</div>`;
   }
@@ -3411,6 +3416,11 @@ async function renderPayroll(filter = '') {
   if (!worksWithPayroll()) { $('payrollTable').innerHTML = ''; return; }
   if (!payPeriod) payPeriod = nowPeriod();
   $('pLabel').textContent = periodLabel(payPeriod);
+  if ($('paySub') && !$('paySub').dataset.done) {
+    $('paySub').dataset.done = '1';
+    $('paySub').innerHTML = `Деньги из графика.${hint('Зарплата, аванс, наличные и сколько осталось выдать — всё из проставленных смен.<br><b>Клик по строке</b> — разбивка по человеку и ввод сумм.')}`;
+    wireHints($('paySub'));
+  }
   const seq = ++payrollSeq;
   const wrap = document.querySelector('#s-payroll .gridwrap');
   const keepTop = wrap ? wrap.scrollTop : 0, keepLeft = wrap ? wrap.scrollLeft : 0;

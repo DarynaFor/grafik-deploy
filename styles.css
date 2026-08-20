@@ -302,7 +302,16 @@ body.authed .login-stage{display:none}
 .gap-chip:hover{background:rgba(242,193,78,.24)}
 .gap-chip.on{background:var(--amber);color:#3a2a08;border-color:var(--amber)}
 /* неклик. стат-чип (напр. «N смен» на графике) — та же гамма, но не интерактивный */
-.mini-chip{font-size:11.5px;font-weight:700;color:var(--amber-d);background:rgba(242,193,78,.13);border:1px solid rgba(242,193,78,.25);padding:3px 10px;border-radius:var(--r-pill);white-space:nowrap}
+/* ⚠ inline-flex, а не inline. Дарина 20.08 прислала ряд плашек над графиком:
+   «896 смен», «расхождений: 5» и «закрыто 19 из 31» стояли РАЗНОЙ ВЫСОТЫ, ряд
+   выглядел рваным. Причина: значок замка внутри плашки — <svg> с display:block,
+   и он вставал ОТДЕЛЬНОЙ СТРОКОЙ над текстом. Замерено: плашка с замком 41px
+   против 26px у остальных.
+   Плашка — это пилюля с содержимым в один ряд по центру; значок в ней такой же
+   гражданин, как буква. Поэтому выравнивание задаём здесь, а не подпираем
+   каждое место отдельно. */
+.mini-chip{font-size:11.5px;font-weight:700;color:var(--amber-d);background:rgba(242,193,78,.13);border:1px solid rgba(242,193,78,.25);padding:3px 10px;border-radius:var(--r-pill);white-space:nowrap;display:inline-flex;align-items:center;gap:5px;line-height:1.45}
+.mini-chip svg{width:12px;height:12px;flex:none;display:block}
 .fill-stat .rt-toggle{margin-left:auto}
 .gap-dot{display:inline-block;font-size:11px;font-weight:700;color:var(--amber-d);margin-left:8px}
 .emp-row.incomplete{border-color:rgba(242,193,78,.26)}
@@ -1487,6 +1496,18 @@ tr.pw-total.pw-over{z-index:5}
   .pw-host .pw td, .pw-host .pw th{position:static !important;
     width:auto !important;min-width:0 !important;max-width:none !important}
   .pw-host .pw tfoot tr.pw-total{position:static !important;bottom:auto !important}
+  /* ⚠ ИТОГИ НА ТЕЛЕФОНЕ ИДУТ ПЕРВЫМИ. Дарина 19.08: «перевір що в моб версії
+     так і не з'явились поля итого в расчетах, а це важливо бачити».
+     Они там БЫЛИ — но в самом конце списка, а под список на телефоне остаётся
+     350 точек из 812 (остальное занимают месяц, поиск и три фильтра). Чтобы
+     дойти до итогов, надо было прокрутить всех сто человек. На десктопе они
+     приморожены к низу и видны всегда — здесь примораживать нельзя (высота
+     подвала 331px против 350px всего списка), поэтому переставляем наверх.
+     Открыл «Расчёт» с телефона — сразу видно, сколько всего; список сразу под.
+     flex на таблице работает только потому, что выше все части таблицы уже
+     переведены в display:block — обычную таблицу так не переупорядочить. */
+  .pw-host table.pw{display:flex;flex-direction:column}
+  .pw-host .pw tfoot{order:-1}
 
   /* ── Карточка человека ─────────────────────────────────────────────── */
   .pw-host .pw tr.pw-row{
