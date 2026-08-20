@@ -438,6 +438,11 @@ body.authed .login-stage{display:none}
    показываем только карандаш, иначе два разных приглашения к действию рядом. */
 .gr-cell.addable:hover::after{opacity:0}
 .gr-cell.fut .iv{opacity:.75}
+/* Дежурство (вторая строка графика): лёгкая синева — «это не основная работа».
+   ⚠ ОБЪЯВЛЕНО ЗДЕСЬ, ДО `.f-*`, НАМЕРЕННО. Правила одной силы (0,2,0), решает
+   порядок: стоя ниже, эта строка перебивала весь цвет факта, и дежурство не
+   показывало ни выхода, ни невыхода. Остальное про дежурство — внизу файла. */
+.gr-cell.sec{background:rgba(98,166,255,.05)}
 .gr-cell.f-ok{background:rgba(52,201,124,.13)}
 /* Прошедший рабочий день, который НИКТО не отметил: рамка вместо заливки —
    «намечено, но не подтверждено». Раньше он красился той же зелёной заливкой,
@@ -449,6 +454,18 @@ body.authed .login-stage{display:none}
    чем правило выше (0,2,1), и клетка с рамкой переставала откликаться на мышь —
    выглядела бы неактивной ровно там, где по ней и надо кликать. */
 .gr-cell.f-plan:hover{background:var(--fill-hi)}
+/* ── Вид смены третьей строкой (см. kindLine в app.js) ────────────────────────
+   Мельче и тусклее часов намеренно: цену дня выбирает именно вид, но читают
+   клетку по часам, и вид не должен спорить с ними за внимание. Если вид не
+   сходится с часами — он же и краснеет янтарём, тем самым цветом, каким клетка
+   говорит «факт разошёлся с планом»: смысл один — «здесь не сходится». */
+.gr-cell .kv{font-size:9px;line-height:1.1;font-weight:700;letter-spacing:-.1px;color:var(--ink-3);opacity:.85;margin-top:1px}
+.gr-cell .kv.bad{color:var(--amber-d,#b7791f);opacity:1}
+/* Уголок, а не заливка: заливка заняла бы место цвета факта, который здесь
+   главный. Рамкой + уголком видно и на зелёной клетке, и на серой закрытой. */
+.gr-cell.kmix{box-shadow:inset 0 0 0 1px rgba(242,193,78,.55)}
+.gr-cell.kmix::before{content:"";position:absolute;top:0;right:0;pointer-events:none;
+  border:5px solid transparent;border-top-color:var(--amber,#f2c14e);border-right-color:var(--amber,#f2c14e)}
 .gr-cell.f-dev{background:rgba(242,193,78,.2)}
 .gr-cell.f-miss{background:rgba(255,107,107,.15)}
 .gr-cell.f-rest{background:var(--fill-2)}
@@ -1057,16 +1074,15 @@ body.authed .login-stage{display:none}
 .gr-name.gr-second{font-weight:600;font-size:12px;color:var(--ink-2);padding-left:22px;gap:6px;
   background:var(--surf-1);box-shadow:inset 3px 0 0 var(--blue)}
 .gr-name.gr-second .sec-tag{display:inline-grid;place-items:center;color:var(--blue-d);flex-shrink:0}
-/* ⚠ Синева дежурства — тоже ПОВЕРХ, отдельным слоем, а не `background` клетки.
-   Как `background` она стояла ниже всех `.f-*` при той же силе (0,2,0) и
-   перебивала их: строка дежурства не показывала факт ВООБЩЕ — ни зелёного, ни
-   красного, ни серого. Признак «человек вышел» пропадал ровно там, где он и
-   нужен: вторая работа — самое дорогое место для приписки.
-   ::before, а не ::after: ::after у клетки уже занят штриховкой закрытого дня,
-   и два признака должны уживаться на одной клетке. */
-.gr-cell.sec{position:relative}
-.gr-cell.sec::before{content:"";position:absolute;inset:0;pointer-events:none;background:rgba(98,166,255,.05)}
-.gr-cell.sec:hover::before{background:rgba(98,166,255,.16)}
+/* ⚠ Синева дежурства объявлена ВЫШЕ, до блока `.f-*` — не здесь. Причина в
+   порядке правил: как `background` она стояла тут, ниже всех `.f-*`, при той же
+   силе (0,2,0) — и перебивала их все. Строка дежурства не показывала факт
+   ВООБЩЕ: ни зелёного, ни красного, ни серого. Признак «человек вышел» пропадал
+   ровно там, где он нужнее всего — вторая работа самое дорогое место для
+   приписки. Слоем ::before это чинилось тоже, но ::before и ::after у клетки
+   уже заняты (штриховка закрытого дня и уголок несходящегося вида), а третьего
+   псевдоэлемента нет. Поэтому — порядком. */
+.gr-cell.sec:hover{background:rgba(98,166,255,.16)}
 .gr-cell.sec .sec-l{font-weight:800;font-size:13px;color:var(--blue-d)}
 .gr-cell.sec .sec-l.miss{color:var(--red-d)}
 

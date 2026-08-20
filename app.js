@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=254';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=257';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -1947,6 +1947,7 @@ function monthPicker(btn, pop, initial, onPick) {
 }
 const daysInMonth = p => { const [y, m] = p.split('-').map(Number); return new Date(y, m, 0).getDate(); };
 const nextPeriodStart = p => { let [y, m] = p.split('-').map(Number); if (++m > 12) { m = 1; y++; } return y + '-' + String(m).padStart(2, '0') + '-01'; };
+const prevPeriodOf = p => { let [y, m] = p.split('-').map(Number); if (--m < 1) { m = 12; y--; } return y + '-' + String(m).padStart(2, '0'); };
 const cellDate = day => curPeriod + '-' + String(day).padStart(2, '0');
 const kindByHours = h => {
   const has = c => shiftKinds.some(k => k.code === c);
@@ -2140,6 +2141,25 @@ function amountCellPopup(e, day, pos) {
   };
 }
 const SECOND_LETTER = { night12: 'Н', day24: 'С', absent: '—' };
+const KIND_TO_RATE = { day24: 'сутки', day12: '12ч', night12: '12ч', day: 'оклад', custom: 'почасово' };
+const RATE_NOMINALS = [12, 24];
+function kindMismatch(c) {
+  if (!c || !c.plan_kind || isRest(c.plan_kind)) return false;
+  if (!['сутки', '12ч'].includes(KIND_TO_RATE[c.plan_kind])) return false;
+  if (!(c.plan_start && c.plan_end)) return false;
+  const k = shiftKinds.find(x => x.code === c.plan_kind);
+  const nom = k && k.hours != null ? +k.hours : null;
+  const h = planHoursOf(c);
+  if (!nom || !h) return false;
+  const best = RATE_NOMINALS.reduce((a, x) => Math.abs(h - x) < Math.abs(h - a) ? x : a);
+  return Math.abs(h - nom) > Math.abs(h - best) + 0.05;
+}
+function kindLine(c) {
+  if (!c || !c.plan_kind || isRest(c.plan_kind)) return '';
+  if (!(c.plan_start && c.plan_end)) return '';
+  const k = shiftKinds.find(x => x.code === c.plan_kind);
+  return `<span class="kv${kindMismatch(c) ? ' bad' : ''}">${esc(k ? (k.label || c.plan_kind) : c.plan_kind)}</span>`;
+}
 function schedCellInner(c, past, pos = 'main') {
   const p = c && c.plan_kind, fx = c ? (c.fact ?? null) : null;
   if (c && c.amount_kop) {
@@ -2154,23 +2174,24 @@ function schedCellInner(c, past, pos = 'main') {
     return `<span class="iv mini sec-l${p === 'absent' ? ' miss' : ''}">${esc(L)}</span>`;
   }
   const planTxt = cellText(c);
-  if (!past) return `<span class="iv mini">${esc(planTxt)}</span>`;
+  const kv = kindLine(c);
+  if (!past) return `<span class="iv mini">${esc(planTxt)}</span>${kv}`;
   const isWork = p && !isRest(p);
   const noPlan = !p;
   const chip = esc(p ? planTxt : 'вне гр.');
   const pen = '<span class="cell-pen" title="Изменить смену">\u270E</span>';
-  if (fx === 'x') return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh miss">—</span>${pen}`;
+  if (fx === 'x') return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh miss">—</span>${kv}${pen}`;
   if (c && c.fact_start && c.fact_end) {
     const hh = t => String(t).slice(0, 5).replace(/:00$/, '').replace(/^0(\d)/, '$1');
     const fh = factHoursOf(c), dev = Math.abs(fh - planHoursOf(c)) > 0.05;
     return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span>`
-      + `<span class="fh ${dev ? 'dev' : 'ok'}">${esc(hh(c.fact_start))}–${esc(hh(c.fact_end))}</span>`;
+      + `<span class="fh ${dev ? 'dev' : 'ok'}">${esc(hh(c.fact_start))}–${esc(hh(c.fact_end))}</span>${kv}`;
   }
   if (fx !== null && fx !== '' && !isNaN(parseFloat(fx))) {
     const n = parseFloat(fx), dev = Math.abs(n - planHoursOf(c)) > 0.05;
-    return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh ${dev ? 'dev' : 'ok'}">${fmtH(n)}</span>${pen}`;
+    return `<span class="iv mini${noPlan ? ' nop' : ''}">${chip}</span><span class="fh ${dev ? 'dev' : 'ok'}">${fmtH(n)}</span>${kv}${pen}`;
   }
-  if (isWork) return `<span class="iv mini">${esc(planTxt)}</span><span class="fh ok">${fmtH(planHoursOf(c))}</span>${pen}`;
+  if (isWork) return `<span class="iv mini">${esc(planTxt)}</span><span class="fh ok">${fmtH(planHoursOf(c))}</span>${kv}${pen}`;
   return `<span class="iv mini faint">${esc(planTxt)}</span>`;
 }
 let closedDays = new Set();
@@ -2422,8 +2443,9 @@ function drawSchedule() {
         if (pst) { planPast += planHoursOf(c); const fh = factHoursOf(c); factPast += fh; if (fh > 0) cnt++; }
         const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
         const noKind = !!(c && !c.plan_kind && c.fact != null && c.fact !== '' && c.fact !== 'x');
+        const kmix = kindMismatch(c);
         const addable = empty && canEditDay(d) && (pst || d === todayD);
-        rows += `<div class="gr-cell sc2${bg}${amtRow ? ' amt' : ''}${c && c.plan_kind === 'отпуск' ? ' k-vac' : ''}${c && c.plan_kind === 'отпуск_бз' ? ' k-vacu' : ''}${addable ? ' addable' : ''}${noKind ? ' no-kind' : ''}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
+        rows += `<div class="gr-cell sc2${bg}${amtRow ? ' amt' : ''}${kmix ? ' kmix' : ''}${c && c.plan_kind === 'отпуск' ? ' k-vac' : ''}${c && c.plan_kind === 'отпуск_бз' ? ' k-vacu' : ''}${addable ? ' addable' : ''}${noKind ? ' no-kind' : ''}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}">${schedCellInner(c, pst)}</div>`;
       }
       const nrm = monthNorms.get(e.id), nh = nrm && nrm.hours != null ? parseFloat(nrm.hours) : null;
       const delta = nh != null ? factPast - nh : factPast - planPast;
@@ -2449,7 +2471,7 @@ function drawSchedule() {
           if (pst) { const fh = factHoursOf(c); dFact += fh; if (fh > 0) dCnt++; }
           const bg = pst ? (empty ? '' : factClass(c)) : (empty ? '' : ' fut');
           const noKind = !!(c && !c.plan_kind && c.fact != null && c.fact !== '' && c.fact !== 'x');
-          rows += `<div class="gr-cell sc2 sec${noKind ? ' no-kind' : ''}${amtRow2 ? ' amt' : ''}${bg}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}" data-pos="second">${schedCellInner(c, pst, 'second')}</div>`;
+          rows += `<div class="gr-cell sc2 sec${noKind ? ' no-kind' : ''}${kindMismatch(c) ? ' kmix' : ''}${amtRow2 ? ' amt' : ''}${bg}${isClosed(d) ? ' dclosed' : ''}${d === todayD ? ' today' : ''}${canEditDay(d) ? '' : ' ro'}" data-emp="${e.id}" data-day="${d}" data-pos="second">${schedCellInner(c, pst, 'second')}</div>`;
         }
         rows += amtRow2 ? amountTail(e.id, 'second')
           : `<div class="gr-sum s-cnt">${dCnt}</div><div class="gr-sum s-delta"></div><div class="gr-sum s-norm"><span class="muted">—</span></div><div class="gr-sum s-fact">${fmtH(dFact)}</div>`;
@@ -2557,12 +2579,17 @@ function normDialog(empId) {
     <label class="flbl">Рабочая неделя</label>
     <select class="input" id="nhWeek">${opts}</select>
     <div class="msub" style="margin-top:6px">Норму каждого месяца по этому типу недели берём из производственного календаря РФ — вручную проставлять не нужно.</div>
-    <label class="flbl">Норма на ${esc(periodLabel(curPeriod))}</label>
+    <label class="flbl">Норма только на ${esc(periodLabel(curPeriod))}${hint(
+      'Своё число действует ОДИН месяц. В следующем расчёт снова возьмёт календарную норму по типу недели, и цена часа изменится молча. Если договорённость постоянная — поставьте галочку ниже, тогда запишем её до конца года.')}</label>
     <input class="input" id="nhVal" inputmode="decimal" value="${man == null ? '' : esc(String(man))}" placeholder="${cal == null ? 'по календарю нормы нет' : 'по календарю ' + esc(String(cal))}" autocomplete="off">
+    ${
+''}
+    <label class="chk" style="margin-top:10px"><input type="checkbox" id="nhAll">
+      <span>и на все месяцы до конца года — это постоянная договорённость</span></label>
     <div class="msub" style="margin-top:6px">${cal == null
         ? 'Сменный график — календарь нормы не даёт. Впишите своё число (например 180 = 15 смен × 12 ч) или выберите неделю выше.'
         : `Пусто — берём календарные <b>${esc(fmtH(cal))}</b>. Своё число нужно для исключений: приняли или уволили в середине месяца, длинный больничный.`}
-      Пока на расчёт не влияет: зарплата считается по дням графика, переход на часы — отдельная задача. Изменение попадёт в журнал.</div>
+      <b>Норма делит оклад:</b> зарплата за месяц = оклад ÷ норма × отработанные часы. Меньше норма — дороже час. Изменение попадёт в журнал.</div>
     <div class="modal-foot">
       ${man != null ? `<button class="btn btn-ghost btn-sm" id="nhReset">Вернуть календарную</button>` : ''}
       <button class="btn btn-ghost btn-sm" id="nhCancel">Отмена</button>
@@ -2583,18 +2610,34 @@ function normDialog(empId) {
     if (v != null && (v <= 0 || v > 744)) { toast('Норма — больше 0 и не больше 744 часов в месяц', true); return; }
     const newWk = $('nhWeek').value === '' ? null : parseFloat($('nhWeek').value);
     const oldWk = e.week_hours == null ? null : parseFloat(e.week_hours);
+    const doAll = v != null && $('nhAll') && $('nhAll').checked;
+    const wrote = [];
     btn.disabled = true;
     try {
       if (newWk !== oldWk) await store.updateEmployee(empId, { week_hours: newWk });
-      if (v !== man) {
+      if (v !== man || doAll) {
         if (v == null) await store.clearMonthNorm(empId, curPeriod);
-        else await store.setMonthNorm(empId, curPeriod, v);
+        else {
+          const [y, m0] = curPeriod.split('-').map(Number);
+          const months = doAll
+            ? Array.from({ length: 12 - m0 + 1 }, (_, i) => y + '-' + String(m0 + i).padStart(2, '0'))
+            : [curPeriod];
+          for (const p of months) { await store.setMonthNorm(empId, p, v); wrote.push(p); }
+        }
       }
       closeModal();
       if (newWk !== oldWk) await refresh();
       else await redraw();
-      toast(ICONS.check + 'Норма сохранена');
-    } catch (err) { btn.disabled = false; toast(err.message || err, true); }
+      toast(ICONS.check + (wrote.length > 1
+        ? `Норма ${fmtH(v)} записана на ${wrote.length} мес. — по декабрь`
+        : 'Норма сохранена'));
+    } catch (err) {
+      btn.disabled = false;
+      const done = wrote.length && doAll
+        ? ` Успели записать ${wrote.length} мес. (по ${periodLabel(wrote[wrote.length - 1])}), остальные — нет.`
+        : '';
+      toast((err.message || err) + done, true);
+    }
   };
 }
 async function zakrytyeIz(dates) {
@@ -4926,7 +4969,13 @@ const GAP_CHECKS = [
   { g: 1, t: 'Начислено ноль', d: 'рабочие дни в графике есть, а зарплаты нет', go: 'payroll', test: (e, r) => !!r?.flag_no_data },
   { g: 1, t: 'Процент без ставки', d: 'оплаты пациентов есть, а процента нет', go: RATES_GO, test: (e, r) => !!r?.flag_pct_no_rate },
   { g: 1, t: 'Нет оплат пациентов', d: 'процент считать не от чего', go: 'patients', test: (e, r) => !!r?.flag_no_patient_data },
+  { g: 0, t: 'Нормы нет вовсе, а оклад есть', d: 'делить оклад не на что — сумма считается запасным способом, по дням', go: 'schedule',
+    test: (e, r, x) => !x.normFail && hasOklad(e) && x.norm.get(e.id) == null },
+  { g: 1, t: 'Норма изменилась с прошлого месяца', d: 'ручная норма была, теперь берётся календарная — проверьте, так ли задумано', go: 'schedule',
+    test: (e, r, x) => !x.normFail && x.normPrevManual.has(e.id) && !x.normManual.has(e.id) },
 ];
+const hasOklad = e => (e.lines || []).some(l => l.pay_kind === 'оклад'
+  && l.valid_from < nextPeriodStart(gapsPeriod) && (!l.valid_to || l.valid_to > gapsPeriod + '-01'));
 const CARD_CHECKS = [
   { t: 'Фамилия не уточнена', d: 'в карточке нет фамилии или стоит заглушка', test: e => cardGaps(e).fio },
   { t: 'Нет телефона', d: 'некуда отправить код подтверждения выдачи', test: e => cardGaps(e).phone },
@@ -4938,10 +4987,12 @@ async function renderGaps() {
   if (!gapsPeriod) gapsPeriod = nowPeriod();
   const want = gapsPeriod, seq = ++gapsSeq;
   $('gLabel').textContent = periodLabel(want);
-  let rows, emps, cells;
+  let rows, emps, cells, norms, normsPrev;
   try {
-    [rows, emps, cells] = await Promise.all([
+    [rows, emps, cells, norms, normsPrev] = await Promise.all([
       store.listPayroll(want), store.listEmployees(), store.listSchedule(want),
+      store.listMonthNorms(want).catch(e => { console.warn('listMonthNorms:', e); return null; }),
+      store.listMonthNorms(prevPeriodOf(want)).catch(() => null),
     ]);
   } catch (e) {
     if (seq === gapsSeq) { gapsData = null; $('gapsBody').innerHTML = ''; toast(e.message || e, true); }
@@ -4950,16 +5001,20 @@ async function renderGaps() {
   if (seq !== gapsSeq) return;
   const hasCell = new Set();
   for (const c of (cells || [])) if (c.plan_kind || c.fact) hasCell.add(c.employee_id);
-  gapsData = { rows, emps, period: want, hasCell };
+  const normFail = norms == null;
+  const norm = new Map((norms || []).map(n => [n.employee_id, n.hours == null ? null : +n.hours]));
+  const normManual = new Set((norms || []).filter(n => n.is_manual).map(n => n.employee_id));
+  const normPrevManual = new Set(normsPrev == null ? [] : normsPrev.filter(n => n.is_manual).map(n => n.employee_id));
+  gapsData = { rows, emps, period: want, hasCell, norm, normManual, normPrevManual, normFail };
   $('gLabel').textContent = periodLabel(want);
   drawGaps();
 }
 function drawGaps() {
   paintMonthNav();
   if (!gapsData) return;
-  const { rows, emps, hasCell } = gapsData;
+  const { rows, emps, hasCell, norm, normManual, normPrevManual, normFail } = gapsData;
   const active = (emps || []).filter(e => e.status === 'active');
-  const ctx = { hasCell };
+  const ctx = { hasCell, norm, normManual, normPrevManual, normFail };
   const byId = new Map(rows.map(r => [r.employee_id, r]));
   const found = GAP_CHECKS.map(c => ({ ...c, who: active.filter(e => c.test(e, byId.get(e.id), ctx)) })).filter(c => c.who.length);
   const cards = CARD_CHECKS.map(c => ({ ...c, who: active.filter(c.test) })).filter(c => c.who.length);
