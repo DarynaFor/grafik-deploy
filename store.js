@@ -623,6 +623,10 @@ export class MockStore {
     this._save(); return { ...row };
   }
   _dayClosed(wd) { return (this.db.closed || []).some(d => d.work_date === wd); }
+  async calendarInfo() {
+    const keys = Object.keys(PROD_NORM_2026 || {}).sort();
+    return { last: keys.length ? keys[keys.length - 1] : null, estimates: [] };
+  }
   async listMonthNorms(period) {
     const per = period + '-01';
     const cal = PROD_NORM_2026[period] || null;
@@ -1316,6 +1320,14 @@ export class SupabaseStore {
     const { data: ins, error: e2 } = await this.sb.from('schedule')
       .insert({ employee_id: employeeId, work_date, position, fact, source: 'manual', updated_by: this.user.id }).select().single();
     if (e2) throw this._perevestiOtkaz(e2, work_date); return ins;
+  }
+  async calendarInfo() {
+    const { data, error } = await this.sb.from('prod_norm')
+      .select('period, is_estimate').eq('week_hours', 40).order('period');
+    if (error) throw new Error(error.message);
+    const rows = data || [];
+    return { last: rows.length ? String(rows[rows.length - 1].period).slice(0, 7) : null,
+             estimates: rows.filter(r => r.is_estimate).map(r => String(r.period).slice(0, 7)) };
   }
   async listMonthNorms(period) {
     const { data, error } = await this.sb.from('v_month_norm')

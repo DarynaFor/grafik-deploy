@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=259';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=260';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -5007,12 +5007,13 @@ async function renderGaps() {
   if (!gapsPeriod) gapsPeriod = nowPeriod();
   const want = gapsPeriod, seq = ++gapsSeq;
   $('gLabel').textContent = periodLabel(want);
-  let rows, emps, cells, norms, normsPrev;
+  let rows, emps, cells, norms, normsPrev, cal;
   try {
-    [rows, emps, cells, norms, normsPrev] = await Promise.all([
+    [rows, emps, cells, norms, normsPrev, cal] = await Promise.all([
       store.listPayroll(want), store.listEmployees(), store.listSchedule(want),
       store.listMonthNorms(want).catch(e => { console.warn('listMonthNorms:', e); return null; }),
       store.listMonthNorms(prevPeriodOf(want)).catch(() => null),
+      store.calendarInfo().catch(() => null),
     ]);
   } catch (e) {
     if (seq === gapsSeq) { gapsData = null; $('gapsBody').innerHTML = ''; toast(e.message || e, true); }
@@ -5025,14 +5026,14 @@ async function renderGaps() {
   const norm = new Map((norms || []).map(n => [n.employee_id, n.hours == null ? null : +n.hours]));
   const normManual = new Set((norms || []).filter(n => n.is_manual).map(n => n.employee_id));
   const normPrevManual = new Set(normsPrev == null ? [] : normsPrev.filter(n => n.is_manual).map(n => n.employee_id));
-  gapsData = { rows, emps, period: want, hasCell, norm, normManual, normPrevManual, normFail };
+  gapsData = { rows, emps, period: want, hasCell, norm, normManual, normPrevManual, normFail, cal };
   $('gLabel').textContent = periodLabel(want);
   drawGaps();
 }
 function drawGaps() {
   paintMonthNav();
   if (!gapsData) return;
-  const { rows, emps, hasCell, norm, normManual, normPrevManual, normFail } = gapsData;
+  const { rows, emps, hasCell, norm, normManual, normPrevManual, normFail, cal } = gapsData;
   const active = (emps || []).filter(e => e.status === 'active');
   const ctx = { hasCell, norm, normManual, normPrevManual, normFail };
   const byId = new Map(rows.map(r => [r.employee_id, r]));
@@ -5041,9 +5042,26 @@ function drawGaps() {
   const people = new Set();
   for (const c of [...found, ...cards]) for (const e of c.who) people.add(e.id);
   const total = people.size;
+  const calWarn = (() => {
+    if (!cal || !cal.last) return '';
+    const cur = nowPeriod();
+    const mesDo = (a, b) => { const [y1, m1] = a.split('-').map(Number), [y2, m2] = b.split('-').map(Number);
+                              return (y2 - y1) * 12 + (m2 - m1); };
+    const zapas = mesDo(cur, cal.last);
+    const skoro = (cal.estimates || []).filter(p => mesDo(cur, p) >= 0 && mesDo(cur, p) < 3);
+    const box = (red, t, d) => `<div class="ov-alert${red ? ' red' : ''}"><span class="oa-ic">${red ? ICONS.alert : ICONS.info}</span>`
+      + `<div><div class="oa-t">${esc(t)}</div><div class="oa-d">${d}</div></div></div>`;
+    let out = '';
+    if (zapas < 3) out += box(true, `Производственный календарь кончается ${esc(cal.last)}`,
+      'Когда он кончится, у всех, кто живёт на типе недели, оклад посчитается запасным способом — по дням, а не по часам. Заводится он на год вперёд.');
+    if (skoro.length) out += box(false, `Календарь посчитан, но не сверен · ${skoro.length} мес`,
+      `${esc(skoro.join(', '))} — программа посчитала норму сама, по Трудовому кодексу. Переносы выходных устанавливает постановление на каждый год, поэтому эти месяцы стоит сверить с официальным календарём.`);
+    return out ? `<div class="ov-sec">Календарь</div><div class="ov-alerts">${out}</div>` : '';
+  })();
   if (!total) {
     $('gapsBody').innerHTML = `<div class="ov-alerts"><div class="ov-alert ok"><span class="oa-ic">${ICONS.check}</span>`
-      + `<div><div class="oa-t">Пробелов нет</div><div class="oa-d">за ${esc(periodLabel(gapsData.period))} всё заполнено</div></div></div></div>`;
+      + `<div><div class="oa-t">Пробелов нет</div><div class="oa-d">за ${esc(periodLabel(gapsData.period))} всё заполнено</div></div></div></div>`
+      + calWarn;
     return;
   }
   const block = (c, red) => {
@@ -5060,6 +5078,7 @@ function drawGaps() {
     `<div class="ov-hero"><div class="l">Людей с пробелами · ${esc(periodLabel(gapsData.period))}</div>`
     + `<div class="v">${fmt(total)}</div>`
     + `<div class="ov-sub">из <b>${fmt(active.length)}</b> активных в штате</div></div>`
+    + calWarn
     + sec('Мешает расчёту', found.filter(c => c.g === 0), true)
     + sec('Не хватает данных', found.filter(c => c.g === 1), false)
     + sec('Неполные карточки', cards, false)
