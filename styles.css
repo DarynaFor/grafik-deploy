@@ -126,9 +126,16 @@ body.authed .login-stage{display:none}
 /* Отступы подрезаны 20.08 по той же просьбе. Замерено на окне 720px: над
    таблицей было 277 точек, то есть 38% экрана уходило на заголовок и фильтры.
    Режем не «на глаз»: 30→18 сверху, 24→14 под шапкой, заголовок 27→23. */
-.page-head{display:flex;align-items:flex-end;gap:16px;margin-bottom:14px;flex-wrap:wrap}
+/* ⚠ align-items:center, а не flex-end. Раньше подпись шла ВТОРОЙ СТРОКОЙ под
+   названием, левый блок был высотой в две строки, и выравнивание по низу тянуло
+   переключатель месяца вниз за собой. Теперь у названия только «?» — блок в одну
+   строку, месяц встаёт вровень. */
+.page-head{display:flex;align-items:center;gap:16px;margin-bottom:14px;flex-wrap:wrap}
+/* название и «?» — рядом, а не друг под другом */
+.page-head > div:first-child{display:flex;align-items:center;gap:9px;min-width:0}
+.page-head p{margin-top:0}
 .page-head h1{font-size:23px;font-weight:700;letter-spacing:-.025em}
-.page-head p{color:var(--ink-2);font-size:13.5px;margin-top:6px}
+.page-head p{color:var(--ink-2);font-size:13.5px}
 .page-head .right{margin-left:auto;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 
 /* ── компоненты ── */
@@ -1702,11 +1709,24 @@ tr.pw-total.pw-over{z-index:5}
      задаёт длинная подпись — обёртка занимала строку целиком.
      display:contents поднимает h1 и подпись в сетку как самостоятельные ячейки,
      и тогда: название слева, месяц справа, подпись строкой ниже. */
-  .page-head{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 10px;margin-bottom:10px}
-  .page-head > div:first-child{display:contents}
-  .page-head h1{grid-column:1;grid-row:1}
-  .page-head p{grid-column:1/-1;grid-row:2}
-  .page-head .right{grid-column:2;grid-row:1;margin-left:0;justify-content:flex-end}
+  /* ⚠ Где в шапке ТОЛЬКО месяц — блок не растягиваем на всю ширину. Правило
+     `.page-head .right{width:100%}` выше поставлено ради экранов с кнопками
+     («Сотрудники», «Отделения», «Ставки»): там кнопка на всю ширину удобнее.
+     Но переключатель месяца из-за него ВСЕГДА падал отдельной строкой и съедал
+     ровно то место, ради которого сворачивали подпись. Перечисляем экраны
+     поимённо, а не через :has() — так видно, о чём речь, и не зависит от
+     поддержки браузером. */
+  #s-overview .page-head .right, #s-gaps .page-head .right,
+  #s-vacation .page-head .right, #s-schedule .page-head .right,
+  #s-payroll .page-head .right, #s-patients .page-head .right{width:auto;margin-left:auto}
+  /* ⚠ Сетка с display:contents здесь БОЛЬШЕ НЕ НУЖНА. Она понадобилась, пока
+     подпись была длинной строкой: обёртка h1+подпись занимала всю ширину и
+     сталкивала месяц вниз. Теперь у названия только «?», и обычной строки
+     хватает: «Расчёт» + «?» + месяц ≈ 310 точек при 335 доступных.
+     С сеткой же «?» вставал ОТДЕЛЬНОЙ СТРОКОЙ и съедал ровно то место, ради
+     которого подпись и сворачивали. */
+  .page-head{margin-bottom:10px;gap:10px}
+  .page-head .right{margin-left:auto}
   /* ФИЛЬТРЫ — ПОД ОДНИМ ЗНАЧКОМ (см. wireFilterToggle в app.js).
      Свёрнуто по умолчанию: видна только кнопка. Развёрнуто — обычная строка
      фильтров, как на компьютере. Кнопки нет нигде, кроме телефона: на широком

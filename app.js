@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=245';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=249';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -306,6 +306,7 @@ function go(screen, replace) {
   $('s-' + screen).classList.add('show');
   if (screen === 'payroll') stickFooterRows($('payrollTable'));
   if (screen === 'schedule') centerToday();
+  compactHeads();
   renderNav();
   document.querySelector('.main').scrollTop = 0;
   syncHash(!firstNav && !replace);
@@ -2373,8 +2374,8 @@ function drawSchedule() {
   const catF = $('schedCat')?.dataset.value || '';
   if ($('schedSub')) {
     $('schedSub').innerHTML = editable
-      ? `Отмечайте выходы кликом по клетке.${hint('<b>Прошедший день:</b> клик — вышел по плану, ещё клик — не вышел.<br><b>Карандаш</b> в углу клетки — изменить время смены.<br><b>Клик по имени</b> — шаблон на месяц.<br><b>Клик по номеру дня</b> сверху — закрыть день или весь период с начала месяца.')}`
-      : `План серым, факт цветом.${hint('Расхождения факта с планом видны справа и в шапке таблицы.')}`;
+      ? hint('<b>Отмечайте выходы кликом по клетке.</b><br><b>Прошедший день:</b> клик — вышел по плану, ещё клик — не вышел.<br><b>Карандаш</b> в углу клетки — изменить время смены.<br><b>Клик по имени</b> — шаблон на месяц.<br><b>Клик по номеру дня</b> сверху — закрыть день или весь период с начала месяца.')
+      : hint('План серым, факт цветом. Расхождения факта с планом видны справа и в шапке таблицы.');
     wireHints($('schedSub'));
   }
   wireFilterToggle($('s-schedule').querySelector('.sched-tools'));
@@ -3411,7 +3412,7 @@ async function renderPayroll(filter = '') {
   $('pLabel').textContent = periodLabel(payPeriod);
   if ($('paySub') && !$('paySub').dataset.done) {
     $('paySub').dataset.done = '1';
-    $('paySub').innerHTML = `Деньги из графика.${hint('Зарплата, аванс, наличные и сколько осталось выдать — всё из проставленных смен.<br><b>Клик по строке</b> — разбивка по человеку и ввод сумм.')}`;
+    $('paySub').innerHTML = hint('Зарплата, аванс, наличные и сколько осталось выдать — всё из проставленных смен.<br><b>Клик по строке</b> — разбивка по человеку и ввод сумм.');
     wireHints($('paySub'));
   }
   wireFilterToggle($('s-payroll').querySelector('.sched-tools'));
@@ -4045,6 +4046,16 @@ function wireHints(root) {
     b.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
 }
+function compactHeads() {
+  document.querySelectorAll('.page-head p').forEach(p => {
+    if (p.dataset.compact) return;
+    p.dataset.compact = '1';
+    const txt = p.innerHTML.trim();
+    if (!txt || p.querySelector('.hintbtn')) return;
+    p.innerHTML = hint(txt);
+    wireHints(p);
+  });
+}
 function wireFilterToggle(tools) {
   if (!tools || tools.querySelector('.filt-btn')) return;
   const b = document.createElement('button');
@@ -4543,7 +4554,10 @@ function centerToday() {
   const den = wrap.querySelector('.gr-day.today');
   if (!den) return;
   schedCenteredFor = curPeriod;
-  wrap.scrollLeft = Math.max(0, den.offsetLeft - (wrap.clientWidth - den.offsetWidth) / 2);
+  const imena = wrap.querySelector('.gr-corner');
+  const zanyato = imena ? imena.getBoundingClientRect().width : 0;
+  const vidno = wrap.clientWidth - zanyato;
+  wrap.scrollLeft = Math.max(0, den.offsetLeft - zanyato - (vidno - den.offsetWidth) / 2);
 }
 function stickFooterRows(host) {
   if (!host) return;
