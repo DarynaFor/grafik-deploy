@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=265';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=266';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -12,13 +12,22 @@ const $ = id => document.getElementById(id);
                             typeof curScreen === 'string' ? curScreen : null, версия(), мс); }
     catch (e) {   }
   };
+  let сказано = 0, сказаноКогда = 0;
+  const сказать = () => {
+    const t = Date.now();
+    if (сказано >= 3 || t - сказаноКогда < 4000) return;
+    сказано++; сказаноКогда = t;
+    try { toast('Не получилось. Повторите — если снова, скажите Дарине', true); } catch (e) {}
+  };
   window.addEventListener('error', e => {
     if (!e.message) return;
     записать('error', e.message, e.error?.stack || (e.filename + ':' + e.lineno));
+    сказать();
   });
   window.addEventListener('unhandledrejection', e => {
     const r = e.reason;
     записать('promise', r?.message || String(r), r?.stack);
+    сказать();
   });
   const ПОРОГ_МС = 5000;
   const виделиДолгим = new Set();
@@ -4186,8 +4195,11 @@ async function payrollDialog(empId) {
     try { oNotes = otherNotes(await store.listMoneyEvents(empId, per)); }
     catch (e) { console.warn('listMoneyEvents:', e); }
   }
-  let curRev = 0;
-  if (pctLine && canEdit) { try { curRev = await store.getDoctorRevenue(empId, per); } catch (e) {} }
+  let curRev = 0, sboyChteniya = [];
+  if (pctLine && canEdit) {
+    try { curRev = await store.getDoctorRevenue(empId, per); }
+    catch (e) { sboyChteniya.push('выручку'); console.warn('getDoctorRevenue:', e); }
+  }
   let curEst = null;
   if (canEditEstimate()) {
     try {
@@ -4196,7 +4208,11 @@ async function payrollDialog(empId) {
     } catch (e) { console.warn('listEstimates:', e); }
   }
   let curOverride = null;
-  if (canEdit) { try { curOverride = await store.getSalaryOverride(empId, per); } catch (e) {} }
+  let sboyOverride = false;
+  if (canEdit) {
+    try { curOverride = await store.getSalaryOverride(empId, per); }
+    catch (e) { sboyOverride = true; sboyChteniya.push('заданную вручную сумму'); console.warn('getSalaryOverride:', e); }
+  }
   if (payPeriod !== per || curScreen !== 'payroll') return;
   setEditing('payroll:' + empId + ':' + per);
   const _nrm = payrollNorms.get(empId);
@@ -4224,6 +4240,9 @@ async function payrollDialog(empId) {
         return nh != null ? `норма ${fmtH(nh)} · факт ${fmtH(fh)}`
                           : `норма ${r.norm_days} дн · факт ${r.fact_days} дн`;
       })()}`)}
+    ${sboyChteniya.length ? `<div class="mwarn">${ICONS.alert} Не удалось прочитать ${esc(sboyChteniya.join(' и '))} —
+      поле ниже может выглядеть пустым, хотя значение задано. Закройте окно и откройте заново;
+      если повторится, не вписывайте своё — скажите Дарине.</div>` : ''}
     <div class="rc-diff">
       <div class="me-cap">Заработано</div>
       ${breakdown}${pct}
@@ -4296,7 +4315,7 @@ async function payrollDialog(empId) {
       )}</label>
       <div class="me-add">
         <input class="input" id="pmFinal" placeholder="итоговая зарплата ₽" autocomplete="off" inputmode="numeric" value="${curOverride ? fmt(Math.round(curOverride / 100)) : ''}">
-        <button class="btn btn-primary btn-sm" id="pmFinalSave">${ICONS.check}${r.flag_manual_salary ? 'Изменить' : 'Задать'}</button>
+        <button class="btn btn-primary btn-sm" id="pmFinalSave"${sboyOverride ? ' disabled title="Сумма не прочиталась — сохранять вслепую нельзя"' : ''}>${ICONS.check}${r.flag_manual_salary ? 'Изменить' : 'Задать'}</button>
         ${r.flag_manual_salary ? `<button class="btn btn-ghost btn-sm" id="pmFinalClear">Убрать</button>` : ''}
       </div>
       <input class="input" id="pmFinalNote" placeholder="причина (необязательно): напр. «по ведомости, без графика»" autocomplete="off" style="margin-top:8px;width:100%">
