@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=266';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=267';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -2527,7 +2527,12 @@ function drawSchedule() {
       if (isAmountCell(who, pos)) {
         const ca = cellOf(emp, d, pos);
         if (!proshel || !ca || !ca.amount_kop) { cycleAmountCell(emp, d, pos); return; }
-        if (!ca.plan_kind) return scheduleCellPopup(emp, d, pos);
+        if (!ca.plan_kind) {
+          const pohozhaya = (scheduleRows || []).find(x => x.employee_id === emp
+            && (x.position || 'main') === pos && x.amount_kop === ca.amount_kop && x.plan_kind);
+          if (!pohozhaya) return scheduleCellPopup(emp, d, pos);
+          return dopisatVidIOtmetit(emp, d, pos, pohozhaya.plan_kind);
+        }
         return cycleFactCell(emp, d, pos);
       }
       if (pos === 'second') {
@@ -2573,6 +2578,15 @@ function drawSchedule() {
   }
   if (editable) grid.querySelectorAll('.gr-name.tap').forEach(n => n.onclick = () => scheduleTemplateDialog(+n.dataset.emp));
   if (canEditNorm) grid.querySelectorAll('.s-norm.tap').forEach(n => n.onclick = () => normDialog(+n.dataset.emp));
+}
+async function dopisatVidIOtmetit(empId, day, pos, kind) {
+  const date = cellDate(day);
+  try {
+    const saved = await store.setScheduleCell(empId, date,
+      { plan_kind: kind, plan_start: null, plan_end: null }, pos);
+    cacheCell(empId, date, pos, saved);
+  } catch (err) { return toast(err.message || err, true); }
+  return cycleFactCell(empId, day, pos);
 }
 async function cycleFactCell(empId, day, pos = 'main') {
   const c = cellOf(empId, day, pos);
