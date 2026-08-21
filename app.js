@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=263';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=264';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -2514,8 +2514,18 @@ function drawSchedule() {
       if (!canEditDay(d)) return;
       const pos = cell.dataset.pos || 'main';
       const who = employees.find(x => x.id === emp);
-      if (isAmountCell(who, pos)) { cycleAmountCell(emp, d, pos); return; }
-      if (pos === 'second') { cycleSecondCell(emp, d); return; }
+      const proshel = pastDay(d);
+      if (isAmountCell(who, pos)) {
+        const ca = cellOf(emp, d, pos);
+        if (!proshel || !ca || !ca.amount_kop) { cycleAmountCell(emp, d, pos); return; }
+        if (!ca.plan_kind) return scheduleCellPopup(emp, d, pos);
+        return cycleFactCell(emp, d, pos);
+      }
+      if (pos === 'second') {
+        const cs = cellOf(emp, d, 'second');
+        if (proshel && cs && cs.plan_kind && !isRest(cs.plan_kind)) return cycleFactCell(emp, d, 'second');
+        cycleSecondCell(emp, d); return;
+      }
       if (!pastDay(d)) return scheduleCellPopup(emp, d);
       const cc = cellOf(emp, d, pos);
       if (cc && cc.plan_kind && !isRest(cc.plan_kind)) return cycleFactCell(emp, d, pos);
