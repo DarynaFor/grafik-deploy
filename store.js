@@ -633,9 +633,12 @@ export class MockStore {
     return this.db.employees.filter(e => e.status !== 'archived').map(e => {
       const wk = e.week_hours == null ? null : parseFloat(e.week_hours);
       const calH = cal && wk != null ? cal[String(wk)] ?? null : null;
-      const man = (this.db.monthNorms || []).find(n => n.employee_id === e.id && n.period === per);
-      return { employee_id: e.id, period: per, hours: man ? man.hours : calH,
-        is_manual: !!man, week_hours: wk, calendar_hours: calH };
+      const man = (this.db.monthNorms || [])
+        .filter(n => n.employee_id === e.id && n.period <= per)
+        .sort((a, b) => String(b.period).localeCompare(String(a.period)))[0];
+      const lichnaya = man && man.hours != null ? man.hours : null;
+      return { employee_id: e.id, period: per, hours: lichnaya != null ? lichnaya : calH,
+        is_manual: lichnaya != null, week_hours: wk, calendar_hours: calH };
     });
   }
   async setMonthNorm(employee_id, period, hours) {
@@ -651,12 +654,12 @@ export class MockStore {
   async clearMonthNorm(employee_id, period) {
     this.db.monthNorms = this.db.monthNorms || [];
     const per = period + '-01';
-    const i = this.db.monthNorms.findIndex(n => n.employee_id === employee_id && n.period === per);
-    if (i < 0) return null;
-    const [row] = this.db.monthNorms.splice(i, 1);
+    const cur = this.db.monthNorms.find(n => n.employee_id === employee_id && n.period === per);
+    const bylo = cur && cur.hours != null ? String(cur.hours) : null;
+    if (cur) cur.hours = null; else this.db.monthNorms.push({ employee_id, period: per, hours: null });
     const e = this.db.employees.find(x => x.id === employee_id);
-    this._log('updated', 'employee_month_norm', employee_id, `${e ? e.fio : '?'} · ${period} · норма часов`, String(row.hours), 'по календарю');
-    this._save(); return row;
+    this._log('updated', 'employee_month_norm', employee_id, `${e ? e.fio : '?'} · ${period} · норма часов`, bylo, 'по календарю');
+    this._save(); return { employee_id, period: per, hours: null };
   }
   async listClosedDays(period) {
     const pre = period + '-';
@@ -1361,10 +1364,12 @@ export class SupabaseStore {
     return data;
   }
   async clearMonthNorm(employee_id, period) {
-    const { error } = await this.sb.from('employee_month_norm')
-      .delete().eq('employee_id', employee_id).eq('period', period + '-01');
+    const { data, error } = await this.sb.from('employee_month_norm')
+      .upsert({ employee_id, period: period + '-01', hours: null, set_by: this.user.id },
+              { onConflict: 'employee_id,period' })
+      .select().single();
     if (error) throw new Error(employeeError(error));
-    return true;
+    return data;
   }
   async listClosedDays(period) {
     const start = period + '-01';

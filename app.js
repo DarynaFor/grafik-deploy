@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=269';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=270';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -2621,13 +2621,11 @@ function normDialog(empId) {
     <label class="flbl">Рабочая неделя</label>
     <select class="input" id="nhWeek">${opts}</select>
     <div class="msub" style="margin-top:6px">Норму каждого месяца по этому типу недели берём из производственного календаря РФ — вручную проставлять не нужно.</div>
-    <label class="flbl">Норма только на ${esc(periodLabel(curPeriod))}${hint(
-      'Своё число действует ОДИН месяц. В следующем расчёт снова возьмёт календарную норму по типу недели, и цена часа изменится молча. Если договорённость постоянная — поставьте галочку ниже, тогда запишем её до конца года.')}</label>
+    <label class="flbl">Норма с ${esc(monthGenitive(curPeriod))} и дальше${hint(
+      'Число действует с этого месяца и ДАЛЬШЕ — пока его не изменят. Как ставка: завели один раз, и оно живёт. Чтобы вернуться к календарной норме, нажмите «Вернуть календарную» — это тоже запишется месяцем, с которого действует.')}</label>
     <input class="input" id="nhVal" inputmode="decimal" value="${man == null ? '' : esc(String(man))}" placeholder="${cal == null ? 'по календарю нормы нет' : 'по календарю ' + esc(String(cal))}" autocomplete="off">
     ${
 ''}
-    <label class="chk" style="margin-top:10px"><input type="checkbox" id="nhAll">
-      <span>и на все месяцы до конца года — это постоянная договорённость</span></label>
     <div class="msub" style="margin-top:6px">${cal == null
         ? 'Сменный график — календарь нормы не даёт. Впишите своё число (например 180 = 15 смен × 12 ч) или выберите неделю выше.'
         : `Пусто — берём календарные <b>${esc(fmtH(cal))}</b>. Своё число нужно для исключений: приняли или уволили в середине месяца, длинный больничный.`}
@@ -2652,33 +2650,22 @@ function normDialog(empId) {
     if (v != null && (v <= 0 || v > 744)) { toast('Норма — больше 0 и не больше 744 часов в месяц', true); return; }
     const newWk = $('nhWeek').value === '' ? null : parseFloat($('nhWeek').value);
     const oldWk = e.week_hours == null ? null : parseFloat(e.week_hours);
-    const doAll = v != null && $('nhAll') && $('nhAll').checked;
-    const wrote = [];
     btn.disabled = true;
     try {
       if (newWk !== oldWk) await store.updateEmployee(empId, { week_hours: newWk });
-      if (v !== man || doAll) {
+      if (v !== man) {
         if (v == null) await store.clearMonthNorm(empId, curPeriod);
-        else {
-          const [y, m0] = curPeriod.split('-').map(Number);
-          const months = doAll
-            ? Array.from({ length: 12 - m0 + 1 }, (_, i) => y + '-' + String(m0 + i).padStart(2, '0'))
-            : [curPeriod];
-          for (const p of months) { await store.setMonthNorm(empId, p, v); wrote.push(p); }
-        }
+        else await store.setMonthNorm(empId, curPeriod, v);
       }
       closeModal();
       if (newWk !== oldWk) await refresh();
       else await redraw();
-      toast(ICONS.check + (wrote.length > 1
-        ? `Норма ${fmtH(v)} записана на ${wrote.length} мес. — по декабрь`
-        : 'Норма сохранена'));
+      toast(ICONS.check + (v == null
+        ? `С ${monthGenitive(curPeriod)} — по календарю`
+        : `Норма ${fmtH(v)} с ${monthGenitive(curPeriod)} и дальше`));
     } catch (err) {
       btn.disabled = false;
-      const done = wrote.length && doAll
-        ? ` Успели записать ${wrote.length} мес. (по ${periodLabel(wrote[wrote.length - 1])}), остальные — нет.`
-        : '';
-      toast((err.message || err) + done, true);
+      toast(err.message || err, true);
     }
   };
 }
