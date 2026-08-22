@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=270';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=271';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -2630,10 +2630,42 @@ function normDialog(empId) {
         ? 'Сменный график — календарь нормы не даёт. Впишите своё число (например 180 = 15 смен × 12 ч) или выберите неделю выше.'
         : `Пусто — берём календарные <b>${esc(fmtH(cal))}</b>. Своё число нужно для исключений: приняли или уволили в середине месяца, длинный больничный.`}
       <b>Норма делит оклад:</b> зарплата за месяц = оклад ÷ норма × отработанные часы. Меньше норма — дороже час. Изменение попадёт в журнал.</div>
+    ${
+''}
+    <div id="nhPrev" class="mnote" style="margin-top:10px"></div>
     <div class="modal-foot">
       ${man != null ? `<button class="btn btn-ghost btn-sm" id="nhReset">Вернуть календарную</button>` : ''}
       <button class="btn btn-ghost btn-sm" id="nhCancel">Отмена</button>
       <button class="btn btn-primary btn-sm" id="nhSave">${ICONS.check}Сохранить</button></div>`);
+  const paintNorm = () => {
+    const box = $('nhPrev'); if (!box) return;
+    const okl = (e.lines || []).find(l => l.pay_kind === 'оклад'
+      && (!l.valid_to || l.valid_to > curPeriod + '-01'));
+    if (!okl || okl.amount == null) {
+      box.innerHTML = '<span class="muted small">У человека нет оклада — норма на его деньги не влияет.</span>';
+      return;
+    }
+    let v = null;
+    try { v = parseNum($('nhVal').value, { field: 'норму' }); } catch (err) { v = NaN; }
+    const nrm = v == null ? cal : v;
+    const ch = Math.round((scheduleRows || [])
+      .filter(x => x.employee_id === empId && (x.position || 'main') === 'main'
+        && x.fact != null && x.fact !== ''
+        && pastDay(+String(x.work_date).slice(8, 10)))
+      .reduce((sum, x) => sum + factHoursOf(x), 0) * 10) / 10;
+    if (nrm == null || isNaN(nrm) || nrm <= 0) {
+      box.innerHTML = '<span class="muted small">Впишите число — покажу, сколько выйдет.</span>';
+      return;
+    }
+    const summa = Math.round(Number(okl.amount) * ch / nrm);
+    const dikoe = cal != null && (nrm > cal * 2 || nrm < cal / 2);
+    box.innerHTML = `<b>${fmt(Math.round(Number(okl.amount)))} ₽ ÷ ${fmtH(nrm)} × ${fmtH(ch)} отработано = `
+      + `<span class="money${dikoe ? ' neg' : ''}">${fmt(summa)} ₽</span></b>`
+      + (dikoe ? `<br><span class="small">Это ${nrm > cal ? 'вдвое больше' : 'вдвое меньше'} календарной нормы (${fmtH(cal)}). Проверьте число.</span>`
+               : (v == null && cal != null ? '<br><span class="muted small">по календарю</span>' : ''));
+  };
+  paintNorm();
+  $('nhVal').oninput = paintNorm;
   $('nhCancel').onclick = closeModal;
   $('nhVal').onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); $('nhSave').click(); } };
   const redraw = async () => { await renderSchedule(); };

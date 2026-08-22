@@ -30,7 +30,7 @@
 
      ⚠ Версия store.js должна СОВПАДАТЬ с той, что в import внутри app.js, иначе
      браузер скачает файл дважды. Совпадение проверяет publish.sh. -->
-<link rel="modulepreload" href="store.js?v=270">
+<link rel="modulepreload" href="store.js?v=271">
 <link rel="preload" as="script" href="vendor/supabase.js">
 </head>
 <body>
@@ -311,7 +311,7 @@
 })();
 </script>
 <script src="config.js"></script>
-<script type="module" src="app.js?v=270"></script>
+<script type="module" src="app.js?v=271"></script>
 <!-- Свежесть без серверного no-cache: сервер (Caddy на Timeweb) отдаёт index.html
      без Cache-Control, и браузер держит старую страницу. Перезапрашиваем сам
      index.html no-store'ом и сравниваем его app.js?v=; если на сервере новее —
