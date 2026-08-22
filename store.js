@@ -1041,9 +1041,28 @@ export class SupabaseStore {
   }
   demoUsers() { return []; }
   async loginDemo() { throw new Error('Демо-вход недоступен: подключена настоящая база'); }
+  _metka() {
+    try {
+      let m = localStorage.getItem('brauzer_id');
+      if (!m) { m = Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem('brauzer_id', m); }
+      return m;
+    } catch (e) { return 'bez-hranilishcha'; }
+  }
+  async _zapisatVhod(email, ok, prichina) {
+    try {
+      await this.sb.rpc('login_zapisat', {
+        p_login: String(email || '').slice(0, 120),
+        p_ok: !!ok,
+        p_device: this._metka(),
+        p_ua: String(navigator.userAgent || '').slice(0, 200),
+        p_prichina: prichina ? String(prichina).slice(0, 200) : null,
+      });
+    } catch (e) {   }
+  }
   async login(email, password) {
     if (!this.sb) throw new Error('База не загрузилась — обновите страницу (Cmd/Ctrl+R)');
     const { data, error } = await this.sb.auth.signInWithPassword({ email, password });
+    await this._zapisatVhod(email, !error, error ? error.message : null);
     if (error) throw new Error(error.message);
     localStorage.setItem(LOGIN_DAY_KEY, mskDay());
     await this._loadProfile(data.user);
