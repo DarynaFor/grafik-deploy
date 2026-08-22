@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=272';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=273';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -752,7 +752,7 @@ async function loadCardPanel(id) {
            + `<i>${d}</i>${schedCellInner(c, past)}</div>`;
   }
   const breakdown = my.length
-    ? my.map(l => { const f = rateFormula(l, r, nh, emp0);
+    ? my.map(l => { const f = rateFormula(l, r, nh, emp0, mine);
         return `<div class="me-row me-calc"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}${
           f ? `<i class="me-f">${esc(f)}</i>` : ''}</span><b>${rub(l.money_kop)} ₽</b></div>`; }).join('')
     : `<div class="me-row"><span class="muted">${r.flag_manual_salary ? 'Сумма вписана вручную — расчёт по графику не применялся' : 'Начислений за месяц нет'}</span></div>`;
@@ -3440,21 +3440,32 @@ const handBlock = r => (r.cash_avans_kop || 0) + (r.cash_kop || 0) + (r.otpusk_c
 const cardBlock = r => (r.card_rasch_kop || 0) + (r.card_avans_kop || 0)
   + (r.card_uvol_kop || 0) + (r.otpusk_kop || 0) + (r.bolnich_kop || 0)
   + (r.uderz_other_kop || 0) + (r.pay_other_kop || 0);
-function rateFormula(l, r, nh, emp) {
+function rateFormula(l, r, nh, emp, cells) {
   const rate = (emp?.lines || []).find(x => !x.valid_to && x.pay_kind === l.kind);
   const amt  = rate && rate.amount != null ? Number(rate.amount) : null;
-  const fh   = Number(r.fact_hours) || 0;
+  const money = +l.money_kop || 0;
   if (l.kind === 'оклад') {
-    if (amt == null || !nh) return '';
-    return `${fmt(amt)} × ${fmtH(fh)} ÷ ${fmtH(nh)}`;
+    const oh = Number(r.oklad_hours);
+    if (amt == null || !nh || !Number.isFinite(oh)) return '';
+    if (Math.round(amt * 100 * oh / nh) !== money) return '';
+    const fh = Number(r.fact_hours) || 0;
+    const bez = Math.abs(fh - oh) > 0.05 ? ' без дежурств' : '';
+    return `${fmt(amt)} × ${fmtH(oh)}${bez} ÷ ${fmtH(nh)}`;
   }
   if (l.kind === 'процент') {
     const p = rate && rate.percent != null ? Number(rate.percent) : null;
     return p == null ? '' : `${p}% от выручки`;
   }
   if (l.kind === 'фикс') return 'фиксированная сумма за месяц';
-  if (amt != null && l.worked) return `${fmt(amt)} × ${l.worked} см`;
-  return '';
+  if ((cells || []).some(c => c.amount_kop != null)) return 'суммы стоят в клетках графика';
+  if (amt == null) return '';
+  const night = rate.amount_night != null ? Number(rate.amount_night) : amt;
+  const per = l.sub === 'ночь' ? night : amt;
+  const hrs = Number(l.hours) || 0;
+  const show = l.kind === 'почасово'
+    ? { t: `${fmt(per)} × ${fmtH(hrs)}`, v: Math.round(per * 100 * hrs) }
+    : { t: `${fmt(per)} × ${l.worked} см`, v: Math.round(per * 100 * (+l.worked || 0)) };
+  return show.v === money ? show.t : '';
 }
 function deltaAs(r, salaryKop) {
   const base = r.fact_required ? (+r.salary_marked_kop || 0) : (+r.salary_kop || 0);
@@ -4249,7 +4260,8 @@ async function payrollDialog(empId) {
   const _nrm = payrollNorms.get(empId);
   const nh = _nrm && _nrm.hours != null ? parseFloat(_nrm.hours) : null;
   const breakdown = my.length
-    ? my.map(l => { const f = rateFormula(l, r, nh, emp);
+    ? my.map(l => { const f = rateFormula(l, r, nh, emp,
+          curPeriod === per ? (scheduleRows || []).filter(c => c.employee_id === empId) : null);
         return `<div class="me-row me-calc"><span class="muted">${esc(payKindLabel(l.kind))}${l.sub ? ' · ' + esc(l.sub) : ''}${l.isPct ? '' : ` · ${l.worked} из ${l.planned}`}${
           f ? `<i class="me-f">${esc(f)}</i>` : ''}</span><b>${rub(l.money_kop)} ₽</b></div>`; }).join('')
     : `<div class="me-row"><span class="muted">${

@@ -408,6 +408,7 @@ export class MockStore {
           - (sum('card_rasch') + sum('card_avans') + cardUvol + cash + sum('cash_avans')
              + otpusk + otpuskCash + sum('bolnich')),
         norm_days: my.reduce((s, l) => s + l.planned, 0), fact_days: my.reduce((s, l) => s + l.worked, 0),
+        oklad_hours: my.filter(l => l.kind === 'оклад').reduce((s, l) => s + (l.hours || 0), 0),
         flag_no_rate: !(e.lines || []).some(l => !l.valid_to), flag_partial_month: false,
         flag_oklad_no_days: false, flag_no_data: false, flag_no_patient_data: false, flag_manual_salary: !!ovr,
       flag_archived: e.status === 'archived' };
