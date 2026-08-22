@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=273';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=274';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -1995,7 +1995,8 @@ let payPeriod = null;
 function shiftPayMonth(delta) { let [y, m] = payPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } payPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = payPeriod; syncHash(false); }
 function shiftMonth(delta) { let [y, m] = curPeriod.split('-').map(Number); m += delta; if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; } curPeriod = clampPeriod(y + '-' + String(m).padStart(2, '0')); workPeriod = curPeriod; syncHash(false); renderSchedule(); }
 const SHORT_KIND = { 'отпуск': 'Отп', 'отпуск_бз': 'Б/с', off: 'В', absent: '—' };
-const kindsFor = (e, cur) => shiftKinds.filter(k => !k.dept || k.dept === empCat(e) || k.code === cur);
+const kindsFor = (e, cur) => shiftKinds.filter(k =>
+  (k.code !== 'off' || cur === 'off') && (!k.dept || k.dept === empCat(e) || k.code === cur));
 const REST_KINDS = ['off', 'absent', 'отпуск', 'отпуск_бз'];
 const VAC_KINDS = ['отпуск', 'отпуск_бз'];
 const isVac = k => VAC_KINDS.includes(k);
@@ -3178,7 +3179,7 @@ function scheduleTemplateDialog(empId) {
       .filter(x => withPast || cellDate(x.day) >= mskTodayISO())
       .map(x => ({
         employee_id: empId, work_date: cellDate(x.day),
-        plan_kind: x.work ? kind : 'off',
+        plan_kind: x.work ? kind : null,
         plan_start: x.work ? start : null,
         plan_end: x.work ? end : null,
       }));
