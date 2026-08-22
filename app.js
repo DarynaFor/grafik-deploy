@@ -1,4 +1,4 @@
-import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=271';
+import { makeStore, lineLabel, sameRate, backdateNeedsOk } from './store.js?v=272';
 const $ = id => document.getElementById(id);
 {
   let послано = 0;
@@ -1700,7 +1700,10 @@ function employeeForm(e) {
       const ratesTouched = fresh.length > 0 || removed > 0;
       let vfrom = null;
       if (ratesTouched) {
-        vfrom = await rateStartDialog(fresh, removed);
+        const kept = new Set((lines || []).filter(l => l._keep).map(l => l.pay_kind));
+        const kinds = [...fresh.map(l => l.pay_kind),
+                       ...(e ? activeLines(e).map(l => l.pay_kind).filter(k => !kept.has(k)) : [])];
+        vfrom = await rateStartDialog(fresh, removed, kinds);
         if (!vfrom) { btn.disabled = false; return; }
       }
       if (e) { await store.updateEmployee(e.id, patch, ratesTouched ? lines : null, vfrom); toast(ICONS.check + 'Карточка обновлена — изменения в журнале'); }
@@ -3276,15 +3279,25 @@ function rateStartWarn(d) {
        <b>не начислится ничего</b> — она начинает действовать позже.</div>`
     : '';
 }
-function ratePreviewText(d) {
+const SPLIT_OK = ['сутки', '12ч', 'почасово', 'оклад', 'фикс'];
+function ratePreviewText(d, kinds = []) {
   const [y, m, day] = String(d).split('-').map(Number);
   if (!y || !m || !day) return '';
   const mn = `${RU_MONTHS[m - 1]} ${y}`;
-  return day === 1
-    ? `Весь <b>${mn}</b> — по новой ставке.`
-    : `<b>${mn}</b> поделится: 1–${day - 1} числа по старой ставке, ${day}-е и дальше — по новой.`;
+  if (day === 1) return `Весь <b>${mn}</b> — по новой ставке.`;
+  const ks = [...new Set((Array.isArray(kinds) ? kinds : [kinds]).filter(Boolean))];
+  let t = (!ks.length || ks.some(k => SPLIT_OK.includes(k)))
+    ? `<b>${mn}</b> поделится: 1–${day - 1} числа по старой ставке, ${day}-е и дальше — по новой.` : '';
+  if (ks.includes('процент'))
+    t += `<div class="rc-warn">${ICONS.lock} <b>Процент</b> поделится, только если выручка приходит
+       оплатами пациентов — у них есть даты. Если выручку вписывают <b>одним числом за месяц</b>,
+       дат в нём нет, и весь ${RU_MONTHS[m - 1]} посчитается по проценту <b>на 1-е число</b>.</div>`;
+  if (ks.includes('сдельно'))
+    t += `<div class="rc-warn">${ICONS.lock} У <b>сдельной</b> сумму за месяц вписывают вручную
+       на «Расчёте» — дата начала на неё не влияет.</div>`;
+  return t;
 }
-function rateStartDialog(fresh, removed = 0) {
+function rateStartDialog(fresh, removed = 0, kinds = []) {
   return new Promise(resolve => {
     const def = rateStartDefault();
     const list = fresh.length
@@ -3298,7 +3311,7 @@ function rateStartDialog(fresh, removed = 0) {
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="rsNo">Отмена</button>
         <button class="btn btn-primary btn-sm" id="rsYes">${ICONS.check}Сохранить</button></div>`);
     const inp = $('rsFrom');
-    const draw = () => { $('rsPrev').innerHTML = ratePreviewText(inp.value) + rateStartWarn(inp.value) + rateBackWarn(inp.value); };
+    const draw = () => { $('rsPrev').innerHTML = ratePreviewText(inp.value, kinds) + rateStartWarn(inp.value) + rateBackWarn(inp.value); };
     draw(); inp.oninput = draw;
     modalOnClose2 = () => resolve(null);
     $('rsNo').onclick = () => { resolve(null); closeModal2(); };
@@ -3331,12 +3344,12 @@ function rateChangeDialog(emp, oldLine, newLine) {
       ${warn}
       <label class="flbl">Действует с</label>
       <input class="input" type="date" id="rcFrom" value="${def}" min="${rateBounds().min}" max="${rateBounds().max}">
-      <div class="msub" id="rcPrev" style="margin-top:8px">${ratePreviewText(def)}</div>
+      <div class="msub" id="rcPrev" style="margin-top:8px">${ratePreviewText(def, [oldLine.pay_kind, newLine.pay_kind])}</div>
       <div class="modal-foot"><button class="btn btn-ghost btn-sm" id="rcNo">Отмена</button>
         <button class="btn btn-primary btn-sm" id="rcYes">${ICONS.check}Применить</button></div>`);
     $('modalBox').dataset.guard = '1';
     const inp = $('rcFrom');
-    const drawRc = () => { $('rcPrev').innerHTML = ratePreviewText(inp.value) + rateStartWarn(inp.value) + rateBackWarn(inp.value); };
+    const drawRc = () => { $('rcPrev').innerHTML = ratePreviewText(inp.value, [oldLine.pay_kind, newLine.pay_kind]) + rateStartWarn(inp.value) + rateBackWarn(inp.value); };
     inp.oninput = drawRc; drawRc();
     modalOnClose = () => resolve(null);
     $('rcNo').onclick = () => { resolve(null); closeModal(); };
